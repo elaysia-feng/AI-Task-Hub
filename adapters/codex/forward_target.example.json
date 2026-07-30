@@ -1,0 +1,4 @@
+{
+  "comment": "Codex config.toml 中被 AI Task Hub 接管前的原始 notify 命令。notify_chain.py 会把事件载荷继续转发给它，保证官方通知不丢失。复制本文件为 forward_target.json 并把 command 改为你机器上的原始 notify 命令；没有原始命令时保持 command 为空数组即可。",
+  "command": []
+}

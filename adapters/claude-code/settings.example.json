@@ -1,0 +1,35 @@
+{
+  "_comment": "合并到 ~/.claude/settings.json 的 hooks 字段。请使用 Python 解释器的绝对路径（无需第三方依赖），下例为本项目 venv 路径。",
+  "hooks": {
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "\"D:/develop/AI-Task-Hub/.venv/Scripts/python.exe\" \"D:/develop/AI-Task-Hub/adapters/claude-code/claude_adapter.py\""
+          }
+        ]
+      }
+    ],
+    "Notification": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "\"D:/develop/AI-Task-Hub/.venv/Scripts/python.exe\" \"D:/develop/AI-Task-Hub/adapters/claude-code/claude_adapter.py\""
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "\"D:/develop/AI-Task-Hub/.venv/Scripts/python.exe\" \"D:/develop/AI-Task-Hub/adapters/claude-code/claude_adapter.py\""
+          }
+        ]
+      }
+    ]
+  }
+}

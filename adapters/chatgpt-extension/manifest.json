@@ -1,0 +1,18 @@
+{
+  "manifest_version": 3,
+  "name": "AI Task Hub · ChatGPT Connector",
+  "version": "0.1.0",
+  "description": "ChatGPT 回答完成时通知本地 AI Task Hub（127.0.0.1:17891），并跟踪已读状态",
+  "permissions": ["storage", "alarms"],
+  "host_permissions": ["http://127.0.0.1:17891/*", "https://chatgpt.com/*"],
+  "background": {
+    "service_worker": "background.js"
+  },
+  "content_scripts": [
+    {
+      "matches": ["https://chatgpt.com/*"],
+      "js": ["content.js"],
+      "run_at": "document_idle"
+    }
+  ]
+}

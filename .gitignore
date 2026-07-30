@@ -1,0 +1,27 @@
+# 凭据与本地配置
+.env
+*.local.env
+
+# Python
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+
+# Node / Electron
+desktop/node_modules/
+desktop/out/
+
+# 构建产物（dist/ 与 build/ 任意层级生效：electron-builder、PyInstaller）
+dist/
+build/
+
+# 运行期日志（含对话摘要，不入库）
+logs/
+adapters/codex/notify_debug.log
+
+# 本机专属的 Codex 转发目标（由接入向导生成，仓库提供 example）
+adapters/codex/forward_target.json
+
+# 本地工具状态（计划/草稿）
+.omc/

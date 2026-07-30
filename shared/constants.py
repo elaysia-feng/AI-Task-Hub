@@ -1,0 +1,27 @@
+"""跨模块共享常量。
+
+桌面端、事件服务与 Adapter 之间的连线契约以本文件为准。
+Adapter 无法 import 本包时，以 shared/event_schema.json 为协议文档。
+"""
+
+APP_NAME = "AI Task Hub"
+APP_ID = "ai-task-hub"
+
+API_HOST = "127.0.0.1"
+API_PORT = 17891
+API_BASE_URL = f"http://{API_HOST}:{API_PORT}"
+WS_URL = f"ws://{API_HOST}:{API_PORT}/ws/tasks"
+
+# Queue 页面展示的状态（未读队列）
+QUEUE_STATUSES = ("NEEDS_INPUT", "COMPLETED_UNREAD", "FAILED_UNREAD")
+# History 页面展示的状态
+HISTORY_STATUSES = ("VIEWED", "IGNORED")
+# 一键已读的作用范围（NEEDS_INPUT 仍需用户处理，不在其列）
+UNREAD_STATUSES = ("COMPLETED_UNREAD", "FAILED_UNREAD")
+
+SOURCE_LABELS = {
+    "CHATGPT": "ChatGPT",
+    "CLAUDE_CODE": "Claude Code",
+    "CODEX": "Codex",
+    "OTHER": "其他",
+}

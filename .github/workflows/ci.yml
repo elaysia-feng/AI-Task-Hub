@@ -1,0 +1,53 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  backend:
+    runs-on: ubuntu-latest
+    services:
+      mysql:
+        image: mysql:8
+        env:
+          MYSQL_ROOT_PASSWORD: ci_ephemeral_pw
+        ports:
+          - 3306:3306
+        options: >-
+          --health-cmd "mysqladmin ping -h 127.0.0.1 -uroot -pci_ephemeral_pw"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    env:
+      AIHUB_MYSQL_HOST: 127.0.0.1
+      AIHUB_MYSQL_PORT: 3306
+      AIHUB_MYSQL_USER: root
+      AIHUB_MYSQL_PASSWORD: ci_ephemeral_pw
+      AIHUB_MYSQL_DB: test_mysql
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+      - name: Run backend tests
+        run: pytest -q
+
+  desktop:
+    runs-on: windows-latest
+    defaults:
+      run:
+        working-directory: desktop
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: desktop/package-lock.json
+      - run: npm ci
+      - run: npm run typecheck
+      - run: npm run build

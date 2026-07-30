@@ -1,0 +1,66 @@
+import { spawn } from 'node:child_process'
+import os from 'node:os'
+import { shell } from 'electron'
+import type { HubTask } from '../shared/types'
+
+/**
+ * 点击任务后的唤起逻辑：不同来源对应不同打开方式。
+ * 桌面端采用"点击即视为已读"，由调用方在成功后标记 VIEWED。
+ */
+export async function openTaskTarget(task: HubTask): Promise<void> {
+  if (task.source === 'CHATGPT') {
+    if (task.openUrl) {
+      await shell.openExternal(task.openUrl)
+      return
+    }
+    await shell.openExternal('https://chatgpt.com')
+    return
+  }
+
+  const cwd = task.projectPath ?? os.homedir()
+  const command = buildResumeCommand(task)
+  await openTerminal(cwd, command)
+}
+
+/** 恢复对应 AI 会话的命令；无会话 ID 时仅打开终端进入项目目录 */
+function buildResumeCommand(task: HubTask): string | null {
+  if (!task.externalTaskId) return null
+  switch (task.source) {
+    case 'CLAUDE_CODE':
+      return `claude --resume ${task.externalTaskId}`
+    case 'CODEX':
+      return `codex resume ${task.externalTaskId}`
+    default:
+      return null
+  }
+}
+
+/** 优先使用 Windows Terminal，缺失时回退到 conhost cmd */
+async function openTerminal(cwd: string, command: string | null): Promise<void> {
+  const args = command ? ['-d', cwd, 'cmd', '/k', command] : ['-d', cwd]
+  const launched = await trySpawn('wt.exe', args)
+  if (launched) return
+
+  const fallback = command
+    ? spawn('cmd', ['/c', 'start', '""', '/d', cwd, 'cmd', '/k', command], {
+        detached: true,
+        stdio: 'ignore',
+      })
+    : spawn('cmd', ['/c', 'start', '""', '/d', cwd, 'cmd'], { detached: true, stdio: 'ignore' })
+  fallback.unref()
+}
+
+function trySpawn(file: string, args: string[]): Promise<boolean> {
+  return new Promise((resolve) => {
+    try {
+      const child = spawn(file, args, { detached: true, stdio: 'ignore' })
+      child.on('error', () => resolve(false))
+      child.on('spawn', () => {
+        child.unref()
+        resolve(true)
+      })
+    } catch {
+      resolve(false)
+    }
+  })
+}
