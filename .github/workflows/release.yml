@@ -34,11 +34,18 @@ jobs:
           cache: npm
           cache-dependency-path: desktop/package-lock.json
 
-      - name: Build desktop and publish GitHub Release
+      - name: Install desktop dependencies
+        working-directory: desktop
+        run: npm ci
+
+      - name: Build desktop (electron-vite)
+        working-directory: desktop
+        run: npm run build
+
+      - name: Package and publish GitHub Release
         working-directory: desktop
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          npm ci
-          npm run build
-          npx electron-builder --publish always
+          # CI 无代码签名证书：禁止自动探测，否则 electron-builder 会在签名步骤失败
+          CSC_IDENTITY_AUTO_DISCOVERY: 'false'
+        run: npx electron-builder --publish always
