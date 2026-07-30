@@ -13,16 +13,28 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 import uvicorn
 
-from shared.constants import API_HOST, API_PORT
+from app.api.app import create_app
+from app.logging_config import setup_logging
+from shared.constants import API_HOST, API_PORT, APP_VERSION
 
 
 def main() -> None:
+    import logging
+
+    log_path = setup_logging()
+    logging.getLogger(__name__).info(
+        "AI Task Hub 事件服务启动 v%s，监听 %s:%s，日志：%s",
+        APP_VERSION, API_HOST, API_PORT, log_path,
+    )
+    # 直接传入工厂函数（静态可分析，PyInstaller 能跟随依赖）；
+    # log_config=None：uvicorn 复用 root logger（滚动文件 + 控制台）
     uvicorn.run(
-        "app.api.app:create_app",
+        create_app,
         host=API_HOST,
         port=API_PORT,
         log_level="info",
         factory=True,
+        log_config=None,
     )
 
 

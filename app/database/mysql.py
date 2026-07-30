@@ -1,4 +1,5 @@
 import os
+import sys
 import threading
 from dataclasses import dataclass
 from pathlib import Path
@@ -7,21 +8,44 @@ from typing import Any, Optional
 import pymysql
 from pymysql.cursors import DictCursor
 
-_SCHEMA_PATH = Path(__file__).parent / "schema.sql"
 _PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
 
 
+def _resource_path(relative: str) -> Path:
+    """PyInstaller onefile 解压目录优先，否则按源码仓库布局解析。"""
+    meipass = getattr(sys, "_MEIPASS", None)
+    if meipass:
+        return Path(meipass) / relative
+    return _PROJECT_ROOT / relative
+
+
+_SCHEMA_PATH = _resource_path("app/database/schema.sql")
+
+
+def _config_candidates() -> list[Path]:
+    """配置文件候选，按优先级排列：显式指定 > 用户级 > 仓库开发态。"""
+    candidates: list[Path] = []
+    if os.environ.get("AIHUB_CONFIG"):
+        candidates.append(Path(os.environ["AIHUB_CONFIG"]))
+    appdata = os.environ.get("APPDATA")
+    if appdata:
+        candidates.append(Path(appdata) / "AI Task Hub" / "config.env")
+    candidates.append(_PROJECT_ROOT / ".env")
+    return candidates
+
+
 def _load_dotenv() -> None:
-    """加载项目根目录 .env（不覆盖已有环境变量），避免额外依赖 python-dotenv。"""
-    env_path = _PROJECT_ROOT / ".env"
-    if not env_path.exists():
-        return
-    for line in env_path.read_text(encoding="utf-8").splitlines():
-        line = line.strip()
-        if not line or line.startswith("#") or "=" not in line:
+    """加载首个存在的候选配置（不覆盖已有环境变量），避免额外依赖 python-dotenv。"""
+    for env_path in _config_candidates():
+        if not env_path.exists():
             continue
-        key, _, value = line.partition("=")
-        os.environ.setdefault(key.strip(), value.strip())
+        for line in env_path.read_text(encoding="utf-8").splitlines():
+            line = line.strip()
+            if not line or line.startswith("#") or "=" not in line:
+                continue
+            key, _, value = line.partition("=")
+            os.environ.setdefault(key.strip(), value.strip())
+        return
 
 
 _load_dotenv()

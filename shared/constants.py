@@ -4,11 +4,15 @@
 Adapter 无法 import 本包时，以 shared/event_schema.json 为协议文档。
 """
 
+import os
+
 APP_NAME = "AI Task Hub"
 APP_ID = "ai-task-hub"
+APP_VERSION = "0.1.0"
 
 API_HOST = "127.0.0.1"
-API_PORT = 17891
+# 端口可被 AIHUB_PORT 覆盖（冒烟测试并行实例、端口冲突场景）
+API_PORT = int(os.environ.get("AIHUB_PORT", "17891"))
 API_BASE_URL = f"http://{API_HOST}:{API_PORT}"
 WS_URL = f"ws://{API_HOST}:{API_PORT}/ws/tasks"
 
