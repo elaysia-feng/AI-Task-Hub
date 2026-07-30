@@ -56,7 +56,8 @@
       {
         "provider": "github",
         "owner": "elaysia-feng",
-        "repo": "AI-Task-Hub"
+        "repo": "AI-Task-Hub",
+        "draft": false
       }
     ]
   }
