@@ -1,5 +1,6 @@
 import { Notification } from 'electron'
 import type { HubTask } from '../shared/types'
+import { displayTitle } from '../shared/labels'
 
 const SOURCE_LABELS: Record<string, string> = {
   CHATGPT: 'ChatGPT',
@@ -28,7 +29,7 @@ export function notifyTaskChanged(
   const sourceLabel = SOURCE_LABELS[task.source] ?? task.source
   const notification = new Notification({
     title: `[${sourceLabel}] ${eventLabel}`,
-    body: task.title ?? task.contentPreview ?? '',
+    body: displayTitle(task),
     silent: false,
   })
   notification.on('click', onClick)

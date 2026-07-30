@@ -6,12 +6,14 @@ Claude Code 在钩子触发时通过 stdin 传入 JSON 载荷，本脚本将其�
 配置方式见同目录 settings.example.json，合并到 ~/.claude/settings.json。
 钩子脚本必须永不阻塞 Claude Code：任何异常都静默退出 0。
 
-标题策略：UserPromptSubmit 携带 prompt 时直接作为标题并写入会话缓存；
-Notification/Stop 不带 prompt，依次回退到「会话缓存 → 通知消息 → 项目目录名」，
-保证队列中的任务始终有可读标题。
+标题策略（对齐 Codex 的「用户提问作主题」）：
+- UserPromptSubmit：把人类可读的 prompt 提炼为标题并写入会话缓存；
+  跳过 OMC `<task-notification>`、日志行、代码片段等噪声，不覆盖已有好标题。
+- Notification/Stop：优先用会话缓存；否则回退到「项目目录名 + 会话」。
 """
 
 import json
+import re
 import sys
 import urllib.request
 from pathlib import Path
@@ -30,10 +32,78 @@ HOOK_EVENT_MAP = {
     "Stop": "TASK_COMPLETED",
 }
 
+_NOISE_PREFIXES = (
+    "<task-notification",
+    "<task-",
+    "<teammate",
+    "<agent-",
+    "system:",
+)
+_LOG_LINE_RE = re.compile(r"^\d{1,2}:\d{2}:\d{2}\b")
+_CODE_START_RE = re.compile(
+    r"^(if\s*\(|function\s|const\s|let\s|var\s|import\s|from\s|def\s|class\s|export\s|#include)"
+)
+_XML_TAG_RE = re.compile(
+    r"<(summary|title|message|description|subject|task|content)[^>]*>(.*?)</\1>",
+    re.I | re.S,
+)
+_GENERIC_WAIT_RE = re.compile(
+    r"waiting for your input|needs your permission|claude code 等待",
+    re.I,
+)
+
 
 def _truncate(text: str) -> str:
     text = text.strip().replace("\n", " ")
     return text[:MAX_TITLE_LEN] + ("…" if len(text) > MAX_TITLE_LEN else "")
+
+
+def _is_noise(text: str) -> bool:
+    """判断文本是否不适合作为任务主题（系统注入 / 日志 / 代码）。"""
+    t = text.strip()
+    if not t:
+        return True
+    low = t.lower()
+    if any(low.startswith(p) for p in _NOISE_PREFIXES):
+        return True
+    if _LOG_LINE_RE.match(t) or "[vite]" in t[:80].lower():
+        return True
+    if _CODE_START_RE.match(t):
+        return True
+    if _GENERIC_WAIT_RE.search(t) and len(t) < 80:
+        return True
+    # 整段几乎都是 XML/标签
+    if t.count("<") >= 2 and t.count(">") >= 2 and len(re.sub(r"<[^>]+>", "", t).strip()) < 8:
+        return True
+    return False
+
+
+def _extract_from_markup(text: str) -> str | None:
+    """从 OMC task-notification 等 XML 里抠出可读摘要。"""
+    for match in _XML_TAG_RE.finditer(text):
+        inner = re.sub(r"<[^>]+>", " ", match.group(2))
+        inner = re.sub(r"\s+", " ", inner).strip()
+        if inner and not _is_noise(inner) and len(inner) >= 4:
+            return inner
+    return None
+
+
+def _project_title(cwd: str) -> str:
+    name = Path(cwd).name if cwd else "Claude"
+    return f"{name} 会话"
+
+
+def _human_title(prompt: str) -> str | None:
+    """把 prompt 提炼成人类可读主题；噪声则返回 None（不覆盖缓存）。"""
+    prompt = (prompt or "").strip()
+    if not prompt:
+        return None
+    extracted = _extract_from_markup(prompt)
+    if extracted:
+        return _truncate(extracted)
+    if _is_noise(prompt):
+        return None
+    return _truncate(prompt)
 
 
 def _load_cache() -> dict:
@@ -49,7 +119,6 @@ def _save_title(session_id: str, title: str) -> None:
     try:
         cache = _load_cache()
         cache[session_id] = title
-        # 只保留最近 CACHE_MAX 条，防止无限增长
         items = list(cache.items())[-CACHE_MAX:]
         CACHE_PATH.write_text(json.dumps(dict(items), ensure_ascii=False), encoding="utf-8")
     except Exception:
@@ -75,19 +144,24 @@ def build_event(payload: dict) -> dict | None:
     content_preview = None
     if hook_event == "UserPromptSubmit":
         prompt = (payload.get("prompt") or "").strip()
-        if prompt:
-            title = _truncate(prompt)
+        human = _human_title(prompt)
+        if human:
+            title = human
             _save_title(session_id, title)
+        else:
+            # 噪声 prompt：保留已有主题；没有则用项目名，不把噪声写入缓存
+            title = _cached_title(session_id) or _project_title(cwd)
+            if prompt:
+                content_preview = _truncate(prompt)
     elif hook_event == "Notification":
         message = (payload.get("message") or "").strip()
         content_preview = message or "Claude Code 等待确认"
         title = _cached_title(session_id)
-        if not title and message:
-            title = _truncate(message)
+        if not title:
+            # 绝不把「waiting for your input」这类通用句当主题
+            title = _project_title(cwd)
     elif hook_event == "Stop":
-        title = _cached_title(session_id)
-        if not title and cwd:
-            title = f"{Path(cwd).name} 会话"
+        title = _cached_title(session_id) or _project_title(cwd)
 
     return {
         "source": "CLAUDE_CODE",

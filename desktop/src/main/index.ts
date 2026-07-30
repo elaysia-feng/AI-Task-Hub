@@ -5,6 +5,18 @@ import { apiClient } from './api-client'
 import { BackendManager } from './backend'
 import { registerIpcHandlers } from './ipc'
 import { notifyTaskChanged } from './notification'
+import {
+  ORB_SIZE,
+  bindOrbWindow,
+  endOrbDrag,
+  enterOrbMode,
+  enterPanelMode,
+  isOrbMode,
+  moveOrbDrag,
+  setOrbPanelExpanded,
+  startOrbDrag,
+  toggleOrbVisibility,
+} from './orb'
 import { createTray, type TrayHandle } from './tray'
 import { UpdateManager } from './updater'
 import { TaskSocket } from './ws-client'
@@ -19,31 +31,52 @@ const backend = new BackendManager()
 const socket = new TaskSocket()
 const updater = new UpdateManager()
 
-// 单实例：重复启动时聚焦已有窗口
 const gotLock = app.requestSingleInstanceLock()
 if (!gotLock) {
+  // 已有实例在跑：把焦点交给旧进程后退出（看起来像「双击没反应」就是这个）
   app.quit()
 } else {
-  app.on('second-instance', () => showMainWindow())
+  app.on('second-instance', () => {
+    focusMainWindow()
+  })
+}
+
+function focusMainWindow(): void {
+  if (!mainWindow || mainWindow.isDestroyed()) {
+    mainWindow = createMainWindow()
+    bindOrbWindow(() => mainWindow)
+  }
+  enterPanelMode()
+  const win = mainWindow
+  if (!win || win.isDestroyed()) return
+  if (win.isMinimized()) win.restore()
+  win.show()
+  win.focus()
+  win.moveTop()
+  // 短暂置顶，避免藏在其他窗口后面让人以为没打开
+  win.setAlwaysOnTop(true)
+  setTimeout(() => {
+    if (!win.isDestroyed() && !isOrbMode()) win.setAlwaysOnTop(false)
+  }, 800)
 }
 
 function showMainWindow(): void {
-  if (!mainWindow) return
-  if (mainWindow.isMinimized()) mainWindow.restore()
-  mainWindow.show()
-  mainWindow.focus()
+  focusMainWindow()
 }
 
 function createMainWindow(): BrowserWindow {
   const win = new BrowserWindow({
     width: 1020,
     height: 660,
-    minWidth: 880,
-    minHeight: 560,
+    // 最小尺寸在 panel/orb 模式切换时动态设置，这里不能锁 880，否则收不成小球
+    minWidth: ORB_SIZE,
+    minHeight: ORB_SIZE,
     frame: false,
     show: false,
     resizable: true,
-    backgroundColor: '#0e0f13',
+    transparent: true,
+    backgroundColor: '#00000000',
+    hasShadow: true,
     icon: path.join(RESOURCES_DIR, 'icon.png'),
     webPreferences: {
       preload: path.join(__dirname, '../preload/index.js'),
@@ -53,18 +86,20 @@ function createMainWindow(): BrowserWindow {
     },
   })
 
-  win.once('ready-to-show', () => win.show())
-  // 关闭按钮 → 最小化到托盘，真正退出走托盘菜单
+  win.once('ready-to-show', () => {
+    win.show()
+    win.webContents.send('ui:mode', 'panel')
+  })
+
   win.on('close', (event) => {
     if (!isQuitting) {
       event.preventDefault()
-      win.hide()
+      enterOrbMode()
     }
   })
   win.on('closed', () => {
     mainWindow = null
   })
-  // 渲染进程内的外链一律交给系统浏览器
   win.webContents.setWindowOpenHandler(({ url }) => {
     void shell.openExternal(url)
     return { action: 'deny' }
@@ -82,7 +117,17 @@ app.whenReady().then(() => {
   app.setAppUserModelId('com.ai-task-hub.desktop')
 
   mainWindow = createMainWindow()
-  registerIpcHandlers(() => mainWindow, backend, updater)
+  bindOrbWindow(() => mainWindow)
+
+  registerIpcHandlers(() => mainWindow, backend, updater, {
+    enterOrb: enterOrbMode,
+    enterPanel: enterPanelMode,
+    setPanelExpanded: setOrbPanelExpanded,
+    dragStart: startOrbDrag,
+    dragMove: moveOrbDrag,
+    dragEnd: endOrbDrag,
+    isOrb: isOrbMode,
+  })
 
   backend.onStatusChange((status) => {
     mainWindow?.webContents.send('backend:status', status)
@@ -95,7 +140,7 @@ app.whenReady().then(() => {
       notifyTaskChanged(
         msg.task,
         msg.eventType,
-        () => Boolean(mainWindow?.isVisible() && mainWindow.isFocused()),
+        () => Boolean(mainWindow?.isVisible() && mainWindow.isFocused() && !isOrbMode()),
         showMainWindow,
       )
     }
@@ -110,9 +155,9 @@ app.whenReady().then(() => {
       app.quit()
     },
     onInstallUpdate: () => updater.quitAndInstall(),
+    onToggleOrb: toggleOrbVisibility,
   })
 
-  /** 托盘 tooltip 未读计数：WS 事件后 300ms 防抖刷新（本地 HTTP 开销可忽略） */
   let trayRefreshTimer: NodeJS.Timeout | null = null
   const refreshTrayUnread = (): void => {
     if (trayRefreshTimer) clearTimeout(trayRefreshTimer)
@@ -136,6 +181,7 @@ app.whenReady().then(() => {
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) {
       mainWindow = createMainWindow()
+      bindOrbWindow(() => mainWindow)
     } else {
       showMainWindow()
     }
@@ -149,21 +195,22 @@ app.on('before-quit', () => {
   updater.stop()
 })
 
-/** 托盘 tooltip：未读/待输入计数概览 */
 async function updateTrayTooltip(trayHandle: TrayHandle): Promise<void> {
   try {
     const queue = await apiClient.listTasks('queue')
+    const running = queue.filter((t) => t.status === 'RUNNING').length
     const unread = queue.filter((t) => t.status === 'COMPLETED_UNREAD' || t.status === 'FAILED_UNREAD').length
     const needsInput = queue.filter((t) => t.status === 'NEEDS_INPUT').length
-    trayHandle.tray.setToolTip(
-      unread + needsInput > 0 ? `AI Task Hub — ${unread} 未读 · ${needsInput} 待输入` : 'AI Task Hub',
-    )
+    const parts: string[] = []
+    if (running) parts.push(`${running} 执行中`)
+    if (unread) parts.push(`${unread} 未读`)
+    if (needsInput) parts.push(`${needsInput} 待输入`)
+    trayHandle.tray.setToolTip(parts.length ? `AI Task Hub — ${parts.join(' · ')}` : 'AI Task Hub')
   } catch {
-    // 后端离线时保持默认 tooltip
+    // offline
   }
 }
 
 app.on('window-all-closed', () => {
-  // 托盘常驻：所有窗口关闭时不退出（macOS 除外也不退，靠托盘菜单退出）
   if (process.platform === 'darwin') return
 })

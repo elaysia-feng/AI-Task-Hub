@@ -50,8 +50,8 @@ def test_notification_maps_to_needs_input(adapter):
 
     assert event["eventType"] == "TASK_NEEDS_INPUT"
     assert event["contentPreview"] == "Claude needs your permission to use Bash"
-    # 无会话缓存时以通知消息作为标题，杜绝“无标题任务”
-    assert event["title"] == "Claude needs your permission to use Bash"
+    # 无会话缓存时用项目名作主题，不用通用 waiting 句
+    assert event["title"] == "demo 会话"
 
 
 def test_stop_maps_to_completed(adapter):
@@ -62,7 +62,6 @@ def test_stop_maps_to_completed(adapter):
     })
 
     assert event["eventType"] == "TASK_COMPLETED"
-    # 无缓存时回退到项目目录名
     assert event["title"] == "demo 会话"
 
 
@@ -94,6 +93,43 @@ def test_notification_prefers_cached_prompt_title(adapter):
     })
     assert notification["title"] == "重构数据库层"
     assert notification["contentPreview"] == "Claude needs your permission to use Bash"
+
+
+def test_noise_prompt_does_not_overwrite_good_title(adapter):
+    adapter.build_event({
+        "hook_event_name": "UserPromptSubmit",
+        "session_id": "sess-noise",
+        "cwd": "D:/projects/demo",
+        "prompt": "帮我写交接文档",
+    })
+    noise = adapter.build_event({
+        "hook_event_name": "UserPromptSubmit",
+        "session_id": "sess-noise",
+        "cwd": "D:/projects/demo",
+        "prompt": "<task-notification> <task-id>abc</task-id> <to>lead</to>",
+    })
+    assert noise["title"] == "帮我写交接文档"
+    assert noise["contentPreview"].startswith("<task-notification>")
+
+
+def test_vite_log_prompt_uses_project_fallback(adapter):
+    event = adapter.build_event({
+        "hook_event_name": "UserPromptSubmit",
+        "session_id": "sess-vite",
+        "cwd": "C:/Users/wlzx/Desktop/python-report-dev",
+        "prompt": "12:08:19 [vite] Internal server error: Unable to parse HTML",
+    })
+    assert event["title"] == "python-report-dev 会话"
+
+
+def test_task_notification_summary_extracted(adapter):
+    event = adapter.build_event({
+        "hook_event_name": "UserPromptSubmit",
+        "session_id": "sess-xml",
+        "cwd": "D:/projects/demo",
+        "prompt": "<task-notification><summary>修复登录鉴权</summary></task-notification>",
+    })
+    assert event["title"] == "修复登录鉴权"
 
 
 def test_long_prompt_truncated(adapter):

@@ -37,6 +37,13 @@ class TestHandleEvent:
         assert completed.title == "修复登录接口"  # 后续事件补全标题
         assert len(task_service.get_queue()) == 1
 
+    def test_started_appears_in_queue_as_running(self, task_service):
+        task = task_service.handle_event(make_event(eventType="TASK_STARTED", title="写 README"))
+        assert task.status == "RUNNING"
+        queue = task_service.get_queue()
+        assert [t.id for t in queue] == [task.id]
+        assert queue[0].status == "RUNNING"
+
     def test_needs_input_status(self, task_service):
         task_service.handle_event(make_event(eventType="TASK_STARTED"))
         task = task_service.handle_event(

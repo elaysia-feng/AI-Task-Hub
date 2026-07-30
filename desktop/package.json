@@ -42,9 +42,12 @@
       }
     ],
     "win": {
-      "target": "nsis",
-      "icon": "resources/icon.png",
-      "signAndEditExecutable": false
+      "target": [
+        "nsis",
+        "portable"
+      ],
+      "icon": "resources/icon.ico",
+      "signExecutable": false
     },
     "nsis": {
       "oneClick": false,
@@ -52,7 +55,13 @@
       "allowToChangeInstallationDirectory": true,
       "shortcutName": "AI Task Hub",
       "createDesktopShortcut": true,
-      "createStartMenuShortcut": true
+      "createStartMenuShortcut": true,
+      "installerIcon": "resources/icon.ico",
+      "uninstallerIcon": "resources/icon.ico",
+      "installerHeaderIcon": "resources/icon.ico"
+    },
+    "portable": {
+      "artifactName": "AI-Task-Hub-Portable-${version}.exe"
     },
     "publish": {
       "provider": "github",

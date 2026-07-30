@@ -1,3 +1,4 @@
+import { resolve } from 'node:path'
 import { defineConfig } from 'electron-vite'
 
 export default defineConfig({
@@ -8,6 +9,13 @@ export default defineConfig({
     build: { outDir: 'out/preload' },
   },
   renderer: {
-    build: { outDir: 'out/renderer' },
+    build: {
+      outDir: 'out/renderer',
+      rollupOptions: {
+        input: {
+          index: resolve('src/renderer/index.html'),
+        },
+      },
+    },
   },
 })

@@ -1,28 +1,47 @@
-# 凭据与本地配置
+# ========== 凭据与本地配置 ==========
 .env
 *.local.env
+**/config.env
 
-# Python
+# ========== Python ==========
 .venv/
+venv/
 __pycache__/
-*.pyc
+*.py[cod]
+*$py.class
 .pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+*.egg-info/
+.eggs/
 
-# Node / Electron
-desktop/node_modules/
-desktop/out/
-
-# 构建产物（dist/ 与 build/ 任意层级生效：electron-builder、PyInstaller）
+# ========== 构建产物（任意层级） ==========
 dist/
 build/
 
-# 运行期日志（含对话摘要，不入库）
+# ========== Node / Electron ==========
+desktop/node_modules/
+desktop/out/
+*.tsbuildinfo
+.npm/
+.eslintcache
+
+# ========== 运行期 / 适配器本地状态 ==========
 logs/
+*.log
 adapters/codex/notify_debug.log
 adapters/claude-code/session_titles.json
-
-# 本机专属的 Codex 转发目标（由接入向导生成，仓库提供 example）
 adapters/codex/forward_target.json
 
-# 本地工具状态（计划/草稿）
+# ========== 编辑器 / 系统 ==========
+.DS_Store
+Thumbs.db
+Desktop.ini
+.idea/
+*.swp
+*~
+
+# ========== 本地工具状态 ==========
 .omc/

@@ -6,6 +6,7 @@ export interface TrayCallbacks {
   onShow: () => void
   onQuit: () => void
   onInstallUpdate: () => void
+  onToggleOrb?: () => void
 }
 
 export interface TrayHandle {
@@ -21,9 +22,13 @@ export function createTray(callbacks: TrayCallbacks): TrayHandle {
 
   tray.setToolTip('AI Task Hub')
   tray.on('click', callbacks.onShow)
+  tray.on('double-click', callbacks.onShow)
 
   const buildMenu = (updateVersion: string | null): void => {
-    const items: MenuItemConstructorOptions[] = [{ label: '打开主面板', click: callbacks.onShow }]
+    const items: MenuItemConstructorOptions[] = [
+      { label: '打开主面板', click: callbacks.onShow },
+      { label: '切换悬浮球 / 主面板', click: () => callbacks.onToggleOrb?.() },
+    ]
     if (updateVersion) {
       items.push(
         { type: 'separator' },

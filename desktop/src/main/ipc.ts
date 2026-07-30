@@ -1,14 +1,33 @@
-import { BrowserWindow, ipcMain, shell } from 'electron'
+import { BrowserWindow, dialog, ipcMain, shell } from 'electron'
 import { apiClient } from './api-client'
 import { openTaskTarget } from './launcher'
+import { buildExeWithConfirm } from './packaging'
+import {
+  clearWallpaper,
+  getWallpaperState,
+  pickWallpaper,
+  setWallpaperPrefs,
+} from './wallpaper'
 import type { BackendManager } from './backend'
 import type { UpdateManager } from './updater'
+import type { WallpaperPrefs } from '../shared/types'
+
+export interface OrbIpc {
+  enterOrb: () => void
+  enterPanel: () => void
+  setPanelExpanded: (expanded: boolean) => void
+  dragStart: (screenX: number, screenY: number) => void
+  dragMove: (screenX: number, screenY: number) => void
+  dragEnd: () => void
+  isOrb: () => boolean
+}
 
 /** 注册渲染进程可调用的全部 IPC 通道 */
 export function registerIpcHandlers(
   getWindow: () => BrowserWindow | null,
   backend: BackendManager,
   updater: UpdateManager,
+  orb?: OrbIpc,
 ): void {
   ipcMain.handle('tasks:queue', () => apiClient.listTasks('queue'))
   ipcMain.handle('tasks:history', () => apiClient.listTasks('history'))
@@ -17,7 +36,6 @@ export function registerIpcHandlers(
     const queue = await apiClient.listTasks('queue')
     const task = queue.find((t) => t.id === id)
     if (task) await openTaskTarget(task)
-    // 点击即视为已读：无论唤起成功与否都移出未读队列
     await apiClient.markViewed(id)
   })
 
@@ -37,6 +55,37 @@ export function registerIpcHandlers(
   ipcMain.handle('tasks:events', (_event, taskId: number) => apiClient.getTaskEvents(taskId))
   ipcMain.handle('shell:open-path', (_event, target: string) => shell.openPath(target))
 
+  ipcMain.handle('wallpaper:get', () => getWallpaperState())
+  ipcMain.handle('wallpaper:pick', () => pickWallpaper(getWindow()))
+  ipcMain.handle('wallpaper:clear', () => clearWallpaper())
+  ipcMain.handle('wallpaper:set-prefs', (_event, prefs: Partial<WallpaperPrefs>) =>
+    setWallpaperPrefs(prefs),
+  )
+
   ipcMain.on('window:minimize', () => getWindow()?.minimize())
-  ipcMain.on('window:close', () => getWindow()?.hide())
+  ipcMain.on('window:close', () => {
+    // 关闭 = 收起为小球（同一窗口）
+    orb?.enterOrb()
+  })
+  ipcMain.on('window:show-main', () => {
+    orb?.enterPanel()
+  })
+  ipcMain.on('window:collapse-orb', () => {
+    orb?.enterOrb()
+  })
+
+  ipcMain.handle('orb:set-panel', (_event, expanded: boolean) => {
+    orb?.setPanelExpanded(Boolean(expanded))
+  })
+  ipcMain.on('orb:drag-start', (_event, screenX: number, screenY: number) => {
+    orb?.dragStart(Number(screenX), Number(screenY))
+  })
+  ipcMain.on('orb:drag-move', (_event, screenX: number, screenY: number) => {
+    orb?.dragMove(Number(screenX), Number(screenY))
+  })
+  ipcMain.on('orb:drag-end', () => {
+    orb?.dragEnd()
+  })
+
+  ipcMain.handle('packaging:build-exe', () => buildExeWithConfirm(getWindow()))
 }

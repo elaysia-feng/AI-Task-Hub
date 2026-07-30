@@ -6,8 +6,10 @@
 
 ## 它能做什么
 
-- **统一队列**：三个平台的「任务完成 / 等待输入 / 失败」事件实时进入同一个桌面队列（WebSocket 秒级推送）
+- **统一队列**：三个平台的「执行中 / 等待输入 / 完成 / 失败」事件实时进入同一个桌面队列（WebSocket 秒级推送）
 - **原生通知**：Windows 原生通知 + 系统托盘未读计数，点击直达对话现场（浏览器标签 / 终端 / 会话链接）
+- **悬浮球**：关闭主窗口后收起为右下角小球，悬停看任务状态，拖动可移动；单击打开面板
+- **本地壁纸**：设置页可选本机图片作背景，调节模糊 / 暗角 / 面板透明度（不上传云端）
 - **接入向导**：设置页一键接入 Claude Code（hooks）与 Codex（notify 链式转发，保留你原有 notify 命令），ChatGPT 扩展在线体检
 - **事件时间线**：每个任务可展开完整生命周期事件与原始载荷，排障有据
 - **自动更新**：打包版每 4 小时检查 GitHub Releases，下载后一键重启安装
@@ -23,64 +25,144 @@ Codex CLI ──── notify 适配器 ┘      （统一事件协议）       
                           Electron 桌面端（队列/历史/详情/设置）
 ```
 
-- **事件协议**：[`shared/event_schema.json`](shared/event_schema.json)（source / eventType / externalTaskId / title / projectPath / conversationUrl / contentPreview…）
+- **事件协议**：[`shared/event_schema.json`](shared/event_schema.json)（source / eventType / externalTaskId / title / projectPath / openUrl / contentPreview…）
 - **幂等**：`(source, externalTaskId)` 唯一约束，重复事件合并到同一任务
 - **状态机**：RUNNING → NEEDS_INPUT / COMPLETED_UNREAD / FAILED_UNREAD → VIEWED / IGNORED
 - **离线补偿**：Chrome 扩展在后端不可达时本地排队，恢复后自动补发
 - **适配器零依赖**：仅用 Python 标准库，且绕过系统代理访问 127.0.0.1
 
-## 快速开始（用户）
+---
 
-1. 从 [Releases](https://github.com/elaysia-feng/AI-Task-Hub/releases) 下载 `AI Task Hub Setup x.y.z.exe` 安装
-2. 准备 MySQL 8：创建数据库 `ai_task_hub`，在 `%APPDATA%\AI Task Hub\config.env` 写入：
-   ```env
-   AIHUB_MYSQL_HOST=127.0.0.1
-   AIHUB_MYSQL_PORT=3306
-   AIHUB_MYSQL_USER=root
-   AIHUB_MYSQL_PASSWORD=你的密码
-   AIHUB_MYSQL_DB=ai_task_hub
-   ```
-3. 启动应用，首次运行自动进入**设置页 → 接入集成**：
-   - **Claude Code**：点「一键接入」（写入 `~/.claude/settings.json` 的 PostToolUse hook）
-   - **Codex**：点「一键接入」（改写 `~/.codex/config.toml` 的 notify；原命令保留转发）。**已运行的 Codex 进程需重启**才会加载新配置，设置页会检测并提示
-   - **ChatGPT**：点「打开扩展目录」，在 `chrome://extensions` 开启开发者模式 →「加载已解压的扩展程序」→ 选择该目录；扩展每 5 分钟心跳，设置页显示在线状态
+## 怎么启动（必读）
 
-## 快速开始（开发）
+### 方式 A：开发模式（改代码时用这个）
 
-```bash
-# 后端（Python 3.12+，uv 或 pip）
-uv venv && uv pip install -r requirements.txt
-copy .env.example .env   # 填入 MySQL 凭据
-python -m app.main       # http://127.0.0.1:17891
+环境要求：Windows、Node 22+、Python 3.12+、MySQL 8。
 
-# 桌面端（Node 22+）
+**1. 准备数据库与后端依赖（首次）**
+
+```powershell
+cd d:\develop\AI-Task-Hub
+uv venv
+uv pip install -r requirements.txt
+copy .env.example .env
+# 编辑 .env，填入 MySQL 账号密码，库名建议 ai_task_hub
+```
+
+**2. 启动桌面端（推荐：一条命令）**
+
+```powershell
+cd d:\develop\AI-Task-Hub\desktop
+npm install          # 首次需要
+npm run dev          # 打开 Electron 窗口；会自动探测并拉起本地后端
+```
+
+正常时会弹出 **AI Task Hub** 窗口。关闭窗口会收成右下角**悬浮球**（不是退出）；彻底退出请：托盘图标右键 → **退出**。
+
+**3. 如果只想单独跑后端（可选）**
+
+```powershell
+cd d:\develop\AI-Task-Hub
+.\.venv\Scripts\python.exe -m app.main
+# 健康检查：浏览器打开 http://127.0.0.1:17891/api/health
+```
+
+开发模式下桌面端一般会自己拉起 `.venv` 里的后端，多数情况不用手动开。
+
+---
+
+### 方式 B：安装包 / 本地打包的 exe
+
+**从 GitHub 安装**
+
+1. 打开 [Releases](https://github.com/elaysia-feng/AI-Task-Hub/releases)
+2. 下载 `AI Task Hub Setup x.y.z.exe`，双击安装
+3. 准备 MySQL，并在 `%APPDATA%\AI Task Hub\config.env` 写入连接信息（见下方「数据库配置」）
+4. 开始菜单或桌面快捷方式启动 **AI Task Hub**
+
+**本机自己打包后再启动**
+
+```powershell
+# ① 后端 exe（Hub 图标，不要用默认 Python 图标）
+cd d:\develop\AI-Task-Hub
+pwsh desktop\scripts\make-icon.ps1
+.\.venv\Scripts\python.exe -m PyInstaller packaging\backend.spec --distpath packaging\dist --workpath packaging\build --noconfirm
+
+# ② 桌面安装包
 cd desktop
-npm install
-npm run dev              # electron-vite 热更新，自动拉起后端
+npm run dist:local
 ```
 
-### 测试与冒烟
+产物在 `desktop\dist\`：
 
-```bash
-pytest                          # 后端 38 项（test_mysql 库，缺 MySQL 自动 skip）
-cd desktop && npm test          # 渲染层 vitest 12 项
-python scripts/e2e_smoke.py     # 端到端 8 步冒烟（隔离端口 17899 + test_mysql）
+| 文件 | 怎么用 |
+|------|--------|
+| `AI Task Hub Setup x.y.z.exe` | 双击安装 |
+| `AI-Task-Hub-Portable-x.y.z.exe` | 免安装，双击即跑 |
+| `win-unpacked\AI Task Hub.exe` | 解压目录里直接运行 |
+
+也可在开发版窗口里打开 **设置 → 应用更新 / 打包 → 生成 exe 安装包**（会先弹确认框）。
+
+**重要：双击 exe「没反应」时**
+
+应用是**单实例**的。如果已经在跑（托盘里有图标，或另一个 `npm run dev` 窗口还在）：
+
+1. 托盘右键 → **退出**，或结束所有 `AI Task Hub` / `electron` 进程  
+2. 再双击 exe  
+
+否则新进程会立刻退出，并把焦点交给旧实例（旧实例若是角落悬浮球，容易误以为没打开）。
+
+若 Windows 提示「已保护你的电脑」：点 **更多信息 → 仍要运行**。
+
+---
+
+### 数据库配置
+
+用户安装版写到：`%APPDATA%\AI Task Hub\config.env`
+
+```env
+AIHUB_MYSQL_HOST=127.0.0.1
+AIHUB_MYSQL_PORT=3306
+AIHUB_MYSQL_USER=root
+AIHUB_MYSQL_PASSWORD=你的密码
+AIHUB_MYSQL_DB=ai_task_hub
 ```
 
-### 构建与发布
+开发版写到仓库根目录 `.env`（从 `.env.example` 复制）。
 
-```bash
-# 后端单文件 exe（PyInstaller）
-pyinstaller packaging/backend.spec --distpath packaging/dist --workpath packaging/build
+---
 
-# 桌面安装包（NSIS，内嵌后端 exe）
-cd desktop && npm run dist
-# 本机网络无法下载 Electron 发行包时改用本地已装的 Electron：
-cd desktop && npm run dist:local
+### 首次进入后的设置
 
-# 发布：打 tag 触发 GitHub Actions 构建并发布 Release（latest.yml 供自动更新）
-git tag v0.1.1 && git push origin v0.1.1
+启动后第一次会进**设置页**：
+
+- **外观**：本机壁纸、模糊 / 暗角 / 面板透明度  
+- **Claude Code**：一键接入（写入 `~/.claude/settings.json` 钩子）  
+- **Codex**：一键接入（改 `~/.codex/config.toml` 的 notify）。**已运行的 Codex 需重启**才生效  
+- **ChatGPT**：打开扩展目录 → Chrome 开发者模式加载该目录  
+
+---
+
+## 测试与冒烟
+
+```powershell
+cd d:\develop\AI-Task-Hub
+pytest
+cd desktop
+npm test
+cd ..
+.\.venv\Scripts\python.exe scripts\e2e_smoke.py
 ```
+
+## 发布
+
+```powershell
+# 打 tag 触发 GitHub Actions 构建并发布 Release（latest.yml 供自动更新）
+git tag v0.1.8
+git push origin v0.1.8
+```
+
+本地发版前请先按「方式 B」打出后端 exe + 桌面安装包验证。
 
 ## 目录结构
 
@@ -88,7 +170,7 @@ git tag v0.1.1 && git push origin v0.1.1
 app/            # FastAPI 事件服务（api/service/repository/database 分层）
 adapters/       # 平台适配器：claude-code hooks / codex notify / chatgpt 扩展
 desktop/        # Electron + TypeScript 桌面端（main/preload/renderer）
-packaging/      # PyInstaller spec
+packaging/      # PyInstaller spec + app.ico
 scripts/        # e2e 冒烟、DB 诊断、Codex 模拟器
 shared/         # 事件协议 schema 与共享常量
 tests/          # pytest（状态机 / API / 集成接入 / 编码防回归）
@@ -96,10 +178,13 @@ tests/          # pytest（状态机 / API / 集成接入 / 编码防回归）
 
 ## 常见问题
 
-- **Codex 事件不上报**：Codex 只在启动时读配置。接入后需重启所有 Codex 进程（设置页会检测旧进程并警告）
-- **ChatGPT 无通知**：确认扩展已安装且浏览器在运行；设置页看「扩展在线 vX」
-- **系统代理导致事件丢失**：所有适配器已内置 127.0.0.1 代理绕过；若仍异常看 `%APPDATA%\AI Task Hub\logs\backend.log`
-- **更新检查失败**：更新走 GitHub Releases，需要能访问 github.com（设置页可手动重试）
+- **开发怎么启动？** → `cd desktop` 后 `npm run dev`（见上文「方式 A」）
+- **打包 exe 双击没反应？** → 先退出托盘里已有实例 / 关掉 `npm run dev`，再双击
+- **Codex 事件不上报**：Codex 只在启动时读配置；接入后需重启所有 Codex 进程
+- **ChatGPT 无通知**：确认扩展已安装且浏览器在运行；设置页看「扩展在线」
+- **系统代理导致事件丢失**：适配器已绕过 127.0.0.1 代理；仍异常看 `%APPDATA%\AI Task Hub\logs\backend.log`
+- **更新检查失败**：需能访问 github.com；设置页可手动「检查更新」
+- **图标仍是 Python**：重新执行 `pwsh desktop\scripts\make-icon.ps1` 并按「方式 B」重打后端 exe 与安装包
 
 ## License
 

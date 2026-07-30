@@ -1,12 +1,14 @@
-/* 设置视图：接入集成向导（一键接入 + 体检）、应用更新、诊断信息 */
+/* 设置视图：外观（壁纸）/ 接入集成 / 应用更新 / 诊断 */
 
-import type { IntegrationsStatus, ServerStatus } from '../../../shared/types'
+import type { IntegrationsStatus, ServerStatus, WallpaperPrefs, WallpaperState } from '../../../shared/types'
 import { state } from '../state'
 import { h, showToast, svgIcon } from './dom'
+import { applyWallpaper } from './wallpaper'
 
 export function renderSettingsView(container: HTMLElement): void {
   container.append(h('div', 'content-header', [h('h1', '', ['设置'])]))
 
+  const appearanceSection = makeAppearanceSection()
   const integrationsSection = h('section', 'settings-section', [
     h('h2', '', ['接入集成']),
     h('div', 'settings-loading', ['正在检测三平台接入状态…']),
@@ -16,10 +18,112 @@ export function renderSettingsView(container: HTMLElement): void {
     h('h2', '', ['诊断']),
     h('div', 'settings-loading', ['正在读取后端状态…']),
   ])
-  container.append(integrationsSection, updateSection, diagSection)
+  container.append(appearanceSection, integrationsSection, updateSection, diagSection)
 
   void fillIntegrations(integrationsSection)
   void fillDiagnostics(diagSection)
+}
+
+/* ---------- 外观 / 壁纸 ---------- */
+
+function makeAppearanceSection(): HTMLElement {
+  const status = h('div', 'wallpaper-status', ['读取中…'])
+  const pickBtn = h('button', 'btn primary', ['选择壁纸'])
+  const clearBtn = h('button', 'btn', ['清除壁纸'])
+
+  const blurVal = h('span', 'val', ['—'])
+  const dimVal = h('span', 'val', ['—'])
+  const opacityVal = h('span', 'val', ['—'])
+
+  const blurInput = rangeInput(0, 40, 1)
+  const dimInput = rangeInput(0, 80, 1)
+  const opacityInput = rangeInput(8, 100, 1)
+
+  let applying = false
+
+  const applyState = (ws: WallpaperState): void => {
+    applying = true
+    applyWallpaper(ws)
+    status.textContent = ws.hasImage ? '已设置本地壁纸（保存在应用数据目录）' : '未设置壁纸（使用纯色背景）'
+    clearBtn.disabled = !ws.hasImage
+    blurInput.value = String(ws.prefs.blur)
+    dimInput.value = String(ws.prefs.dim)
+    opacityInput.value = String(ws.prefs.opacity)
+    blurVal.textContent = `${ws.prefs.blur}px`
+    dimVal.textContent = `${ws.prefs.dim}%`
+    opacityVal.textContent = `${ws.prefs.opacity}%`
+    applying = false
+  }
+
+  const pushPrefs = async (partial: Partial<WallpaperPrefs>): Promise<void> => {
+    if (applying) return
+    try {
+      const ws = await window.aihub.setWallpaperPrefs(partial)
+      applyState(ws)
+    } catch (err) {
+      showToast(err instanceof Error ? err.message : '保存外观失败', 'var(--st-fail)')
+    }
+  }
+
+  blurInput.oninput = () => {
+    blurVal.textContent = `${blurInput.value}px`
+    void pushPrefs({ blur: Number(blurInput.value) })
+  }
+  dimInput.oninput = () => {
+    dimVal.textContent = `${dimInput.value}%`
+    void pushPrefs({ dim: Number(dimInput.value) })
+  }
+  opacityInput.oninput = () => {
+    opacityVal.textContent = `${opacityInput.value}%`
+    void pushPrefs({ opacity: Number(opacityInput.value) })
+  }
+
+  pickBtn.onclick = async () => {
+    pickBtn.disabled = true
+    try {
+      const ws = await window.aihub.pickWallpaper()
+      applyState(ws)
+      showToast(ws.hasImage ? '壁纸已更新' : '未选择图片', 'var(--st-done)')
+    } catch (err) {
+      showToast(err instanceof Error ? err.message : '选择壁纸失败', 'var(--st-fail)')
+    } finally {
+      pickBtn.disabled = false
+    }
+  }
+
+  clearBtn.onclick = async () => {
+    const ws = await window.aihub.clearWallpaper()
+    applyState(ws)
+    showToast('已恢复默认背景', 'var(--st-done)')
+  }
+
+  void window.aihub.getWallpaper().then(applyState).catch(() => {
+    status.textContent = '无法读取壁纸配置'
+  })
+
+  return h('section', 'settings-section', [
+    h('h2', '', ['外观']),
+    h('div', 'wallpaper-panel', [
+      h('div', 'wallpaper-actions', [pickBtn, clearBtn, status]),
+      h('div', 'wallpaper-sliders', [
+        h('div', 'wallpaper-slider-row', [h('span', '', ['模糊']), blurInput, blurVal]),
+        h('div', 'wallpaper-slider-row', [h('span', '', ['暗角']), dimInput, dimVal]),
+        h('div', 'wallpaper-slider-row', [h('span', '', ['面板']), opacityInput, opacityVal]),
+      ]),
+      h('div', 'wallpaper-status', [
+        '效果对齐编辑器壁纸：图要透得出来。面板越低越透；暗角只做轻压暗保证可读；模糊建议保持 0。',
+      ]),
+    ]),
+  ])
+}
+
+function rangeInput(min: number, max: number, step: number): HTMLInputElement {
+  const input = document.createElement('input')
+  input.type = 'range'
+  input.min = String(min)
+  input.max = String(max)
+  input.step = String(step)
+  return input
 }
 
 /* ---------- 接入集成 ---------- */
@@ -68,7 +172,7 @@ function claudeCard(info: IntegrationsStatus): HTMLElement {
 
   return h('div', 'int-card', [
     h('div', 'int-card-head', [statusDot(installed), h('span', 'int-name', ['Claude Code'])]),
-    h('div', 'int-desc', ['通过 PostToolUse hook 上报 Bash/Edit 等工具事件']),
+    h('div', 'int-desc', ['通过 UserPromptSubmit / Notification / Stop 钩子上报会话事件']),
     h('div', 'int-path', [info.claudeCode.settingsPath]),
     h('div', 'int-status', [installed ? '已接入' : '未接入']),
     h('div', 'int-actions', [installBtn]),
@@ -155,10 +259,44 @@ function makeUpdateSection(): HTMLElement {
     }, 4000)
   }
 
+  const buildBtn = h('button', 'btn primary', [svgIcon('gear'), '生成 exe 安装包'])
+  const buildStatus = h('div', 'wallpaper-status', [
+    '开发用：点按钮会先弹出确认框，再本地打包到 desktop/dist',
+  ])
+  buildBtn.onclick = async () => {
+    buildBtn.disabled = true
+    buildStatus.textContent = '等待确认…'
+    try {
+      const result = await window.aihub.buildExe()
+      if (result.cancelled) {
+        buildStatus.textContent = '已取消生成'
+      } else if (result.ok) {
+        buildStatus.textContent = result.message
+        showToast(result.message, 'var(--st-done)')
+      } else {
+        buildStatus.textContent = result.message
+        showToast('生成失败，详见状态说明', 'var(--st-fail)')
+      }
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : '生成失败'
+      buildStatus.textContent = msg
+      showToast(msg, 'var(--st-fail)')
+    } finally {
+      buildBtn.disabled = false
+    }
+  }
+
   const statusLine = h('div', 'int-status', [updateText()])
   const section = h('section', 'settings-section', [
-    h('h2', '', ['应用更新']),
+    h('h2', '', ['应用更新 / 打包']),
     h('div', 'update-row', [statusLine, h('div', 'int-actions', [checkBtn])]),
+    h('div', 'update-row', [
+      h('div', '', [
+        h('div', 'int-status', ['生成本地安装包（Setup.exe）']),
+        buildStatus,
+      ]),
+      h('div', 'int-actions', [buildBtn]),
+    ]),
   ])
 
   const us = state.updateState

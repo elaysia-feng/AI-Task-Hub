@@ -9,6 +9,8 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parent.parent
 SCAN_DIRS = ["app", "tests", "adapters", "shared", "scripts"]
 SCAN_SUFFIXES = {".py", ".ts", ".js", ".json", ".md"}
+# 运行时缓存/日志（已在 .gitignore），不计入源码污染
+SKIP_NAMES = {"session_titles.json", "forward_target.json", "notify_debug.log"}
 MOJIBAKE_MARK = chr(63) * 3  # 连续三个问号：GBK 破坏中文后的典型残留
 SELF = Path(__file__).resolve()
 
@@ -22,7 +24,7 @@ def test_no_mojibake_in_sources():
         for path in base.rglob("*"):
             if path.suffix not in SCAN_SUFFIXES or not path.is_file():
                 continue
-            if path.resolve() == SELF:
+            if path.name in SKIP_NAMES or path.resolve() == SELF:
                 continue
             text = path.read_text(encoding="utf-8")
             if MOJIBAKE_MARK in text:

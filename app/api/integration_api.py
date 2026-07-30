@@ -1,6 +1,6 @@
 """接入集成 API：桌面端向导/体检读取三平台适配器状态，并执行一键接入。
 
-- Claude Code：向 ~/.claude/settings.json 合并 PostToolUse hook（幂等）
+- Claude Code：向 ~/.claude/settings.json 合并 UserPromptSubmit/Notification/Stop 钩子（幂等）
 - Codex：改写 ~/.codex/config.toml 的 notify 为链式转发（原命令存入 forward_target.json）
 - ChatGPT：接收 Chrome 扩展心跳（5min），判断扩展在线状态
 """
@@ -62,7 +62,7 @@ def _codex_processes() -> list[dict[str, Any]]:
 
 # ---------- Claude Code ----------
 
-# 适配器 HOOK_EVENT_MAP 支持的三类钩子（PostToolUse 无映射，注册了也是空转）
+# 适配器 HOOK_EVENT_MAP 支持的三类钩子（勿再注册 PostToolUse：无映射，注册了也是空转）
 _CLAUDE_HOOK_EVENTS = ("UserPromptSubmit", "Notification", "Stop")
 
 

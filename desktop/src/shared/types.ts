@@ -104,6 +104,19 @@ export interface InstallResult {
   forwardTarget?: boolean
 }
 
+/** 本地壁纸外观偏好（blur/dim 为强度，opacity 为面板不透明度百分比） */
+export interface WallpaperPrefs {
+  blur: number
+  dim: number
+  opacity: number
+}
+
+export interface WallpaperState {
+  hasImage: boolean
+  dataUrl: string | null
+  prefs: WallpaperPrefs
+}
+
 /** preload 通过 contextBridge 暴露给渲染进程的 API（window.aihub） */
 export interface AihubApi {
   getQueue(): Promise<HubTask[]>
@@ -125,6 +138,25 @@ export interface AihubApi {
   installCodex(): Promise<InstallResult>
   getTaskEvents(taskId: number): Promise<TaskEventRecord[]>
   openPath(target: string): Promise<void>
+  getWallpaper(): Promise<WallpaperState>
+  pickWallpaper(): Promise<WallpaperState>
+  clearWallpaper(): Promise<WallpaperState>
+  setWallpaperPrefs(prefs: Partial<WallpaperPrefs>): Promise<WallpaperState>
   minimizeWindow(): void
   closeWindow(): void
+  /** 显示主面板 */
+  showMainWindow(): void
+  /** 收起为悬浮球（同一窗口） */
+  collapseToOrb(): void
+  /** 小球模式：展开/收起悬停面板（改窗口尺寸） */
+  setOrbPanelExpanded(expanded: boolean): Promise<void>
+  /** 悬浮球拖动 */
+  startOrbDrag(screenX: number, screenY: number): void
+  moveOrbDrag(screenX: number, screenY: number): void
+  endOrbDrag(): void
+  /** 主进程切换 panel / orb 模式 */
+  onUiMode(cb: (mode: 'panel' | 'orb') => void): () => void
+  /** 设置页：确认后生成本地 exe 安装包 */
+  buildExe(): Promise<{ ok: boolean; cancelled?: boolean; message: string; distDir?: string }>
+  onPackagingStatus(cb: (s: { state: string; message: string }) => void): () => void
 }

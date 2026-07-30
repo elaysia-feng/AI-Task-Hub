@@ -1,10 +1,12 @@
 import './styles.css'
 import type { BackendStatus } from '../../shared/types'
-import { SOURCE_LABELS, STATUS_LABELS } from '../../shared/labels'
+import { SOURCE_LABELS, STATUS_LABELS, displayTitle } from '../../shared/labels'
 import { emit, state, subscribe } from './state'
 import { h, showToast, svgIcon, type IconName } from './ui/dom'
 import { renderTasksView } from './ui/tasks'
 import { renderSettingsView } from './ui/settings'
+import { applyWallpaper } from './ui/wallpaper'
+import { applyUiMode } from './orb'
 
 /* ---------- 主题 ---------- */
 
@@ -62,8 +64,12 @@ function renderShell(): void {
   minimizeBtn.title = '最小化'
   minimizeBtn.onclick = () => window.aihub.minimizeWindow()
 
+  const orbBtn = h('button', 'win-btn orb-toggle', [svgIcon('orb')])
+  orbBtn.title = '收起为悬浮球'
+  orbBtn.onclick = () => window.aihub.collapseToOrb()
+
   const closeBtn = h('button', 'win-btn close', [svgIcon('close')])
-  closeBtn.title = '隐藏到托盘'
+  closeBtn.title = '收起为悬浮球'
   closeBtn.onclick = () => window.aihub.closeWindow()
 
   backendPill = h('div', 'backend-pill connecting', [h('span', 'dot'), h('span', 'label')])
@@ -78,6 +84,7 @@ function renderShell(): void {
     h('div', 'drag-fill'),
     backendPill,
     themeToggleBtn,
+    orbBtn,
     minimizeBtn,
     closeBtn,
   ])
@@ -146,6 +153,7 @@ async function reload(): Promise<void> {
 const WIZARD_SEEN_KEY = 'aihub-wizard-seen'
 
 async function bootstrap(): Promise<void> {
+  document.documentElement.dataset.mode = 'panel'
   applyTheme(currentTheme()) // 先落主题再渲染，避免闪烁
   // 首次运行落到设置页（接入向导），之后记住
   if (!localStorage.getItem(WIZARD_SEEN_KEY)) {
@@ -154,6 +162,11 @@ async function bootstrap(): Promise<void> {
   }
   renderShell()
   applyTheme(currentTheme()) // 补齐按钮图标
+  try {
+    applyWallpaper(await window.aihub.getWallpaper())
+  } catch {
+    // 主进程未就绪时忽略，设置页可重试
+  }
   updateBackendPill()
   subscribe(renderContent)
   renderContent()
@@ -161,6 +174,10 @@ async function bootstrap(): Promise<void> {
   state.backend = await window.aihub.getBackendStatus()
   updateBackendPill()
   await reload()
+
+  window.aihub.onUiMode((mode) => {
+    applyUiMode(mode)
+  })
 
   window.aihub.onBackendStatus((status) => {
     const recovered = status === 'online' && state.backend !== 'online'
@@ -175,7 +192,7 @@ async function bootstrap(): Promise<void> {
       const label = STATUS_LABELS[msg.task.status] ?? ''
       const accent = TOAST_ACCENTS[msg.eventType]
       if (accent) {
-        showToast(`${SOURCE_LABELS[msg.task.source]} · ${label}：${msg.task.title ?? ''}`, accent)
+        showToast(`${SOURCE_LABELS[msg.task.source]} · ${label}：${displayTitle(msg.task)}`, accent)
       }
     }
     void reload()
@@ -187,6 +204,12 @@ async function bootstrap(): Promise<void> {
     if (s.state === 'downloaded') showToast(`v${s.version} 已就绪，托盘菜单或设置页可重启安装`, 'var(--st-done)')
     if (s.state === 'error') showToast('更新检查失败，稍后自动重试', 'var(--st-fail)')
     if (state.view === 'settings') emit()
+  })
+
+  window.aihub.onPackagingStatus((s) => {
+    if (s.state === 'running') showToast(s.message, 'var(--brand)')
+    if (s.state === 'done') showToast(s.message, 'var(--st-done)')
+    if (s.state === 'error') showToast(s.message, 'var(--st-fail)')
   })
 }
 

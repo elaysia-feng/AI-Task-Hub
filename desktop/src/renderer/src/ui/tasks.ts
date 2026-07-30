@@ -1,12 +1,13 @@
 /* 任务视图：待处理 / 历史 + 搜索筛选 + 右侧详情面板（事件时间线 + 原始载荷） */
 
 import type { HubTask, TaskSource, TaskStatus } from '../../../shared/types'
-import { EVENT_LABELS, SOURCE_LABELS, STATUS_LABELS } from '../../../shared/labels'
+import { EVENT_LABELS, SOURCE_LABELS, STATUS_LABELS, displayTitle } from '../../../shared/labels'
 import { emit, filteredTasks, findTask, state } from '../state'
 import { h, showToast, svgIcon, type IconName } from './dom'
 import { formatRelativeTime } from '../time'
 
 const QUEUE_SECTIONS: Array<{ status: TaskStatus; title: string; color: string }> = [
+  { status: 'RUNNING', title: '执行中', color: 'var(--st-run)' },
   { status: 'NEEDS_INPUT', title: '等待输入', color: 'var(--st-input)' },
   { status: 'COMPLETED_UNREAD', title: '已完成', color: 'var(--st-done)' },
   { status: 'FAILED_UNREAD', title: '失败', color: 'var(--st-fail)' },
@@ -28,13 +29,16 @@ export function renderTasksView(container: HTMLElement): void {
   const readAllBtn = makeReadAllButton()
   readAllBtn.disabled = unreadCount() === 0
 
+  const summary = summaryText()
+  const headerKids: Array<string | HTMLElement> = [h('h1', '', [title])]
+  if (summary) headerKids.push(h('span', 'summary', [summary]))
+  headerKids.push(h('div', 'header-actions', [readAllBtn, clearBtn]))
+
   container.append(
-    h('div', 'content-header', [
-      h('h1', '', [title]),
-      h('span', 'summary', [summaryText()]),
-      h('div', 'header-actions', [readAllBtn, clearBtn]),
+    h('div', 'view-chrome', [
+      h('div', 'content-header', headerKids),
+      makeFilterBar(),
     ]),
-    makeFilterBar(),
   )
 
   if (state.backend === 'offline') {
@@ -237,7 +241,7 @@ function buildCard(task: HubTask, actions: HTMLElement[]): HTMLElement {
     h('span', 'card-time', [formatRelativeTime(task.completedAt ?? task.createdAt)]),
   ])
 
-  const title = h('div', 'card-title', [task.title ?? '(无标题任务)'])
+  const title = h('div', 'card-title', [displayTitle(task)])
   const children: HTMLElement[] = [top, title]
 
   if (task.contentPreview) {
@@ -299,7 +303,7 @@ function makeDetailPane(task: HubTask): HTMLElement {
       h('span', 'status-chip', [STATUS_LABELS[task.status] ?? task.status]),
       closeBtn,
     ]),
-    h('div', 'detail-title', [task.title ?? '(无标题任务)']),
+    h('div', 'detail-title', [displayTitle(task)]),
     h('div', 'detail-kv', [
       h('span', 'k', ['项目路径']),
       h('span', 'v path', [task.projectPath ?? '—']),
