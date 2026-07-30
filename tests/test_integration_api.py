@@ -29,7 +29,9 @@ def test_claude_install_creates_and_idempotent(client, claude_settings):
     assert res.status_code == 200
     assert res.json() == {"success": True, "changed": True}
     data = json.loads(claude_settings.read_text(encoding="utf-8"))
-    assert "claude_adapter.py" in json.dumps(data["hooks"]["PostToolUse"])
+    # 适配器支持的三类钩子事件全部注册
+    for event_name in ("UserPromptSubmit", "Notification", "Stop"):
+        assert "claude_adapter.py" in json.dumps(data["hooks"][event_name])
 
     again = client.post("/api/integrations/claude-code/install").json()
     assert again == {"success": True, "changed": False}
@@ -41,7 +43,7 @@ def test_claude_install_preserves_existing_settings(client, claude_settings):
     client.post("/api/integrations/claude-code/install")
     data = json.loads(claude_settings.read_text(encoding="utf-8"))
     assert data["model"] == "opus"
-    assert data["hooks"]["PostToolUse"]
+    assert data["hooks"]["Stop"]
 
 
 def test_codex_install_chains_existing_notify(client, codex_paths):

@@ -19,6 +19,7 @@ build/
 # 运行期日志（含对话摘要，不入库）
 logs/
 adapters/codex/notify_debug.log
+adapters/claude-code/session_titles.json
 
 # 本机专属的 Codex 转发目标（由接入向导生成，仓库提供 example）
 adapters/codex/forward_target.json

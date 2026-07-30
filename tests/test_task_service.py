@@ -86,3 +86,21 @@ class TestStatusFlow:
     def test_mark_missing_task_returns_none(self, task_service):
         assert task_service.mark_viewed(999999) is None
         assert task_service.mark_ignored(999999) is None
+
+    def test_title_fallback_from_content_preview(self, task_service):
+        task = task_service.handle_event(
+            make_event(title=None, contentPreview="最新对话：助手回复已完成。")
+        )
+        assert task.title == "最新对话：助手回复已完成。"
+
+    def test_title_fallback_truncates_long_preview(self, task_service):
+        task = task_service.handle_event(make_event(title=None, contentPreview="长" * 100))
+        assert len(task.title) == 51  # 50 字 + 省略号
+        assert task.title.endswith("…")
+
+    def test_title_fallback_on_later_event(self, task_service):
+        task_service.handle_event(make_event(title=None, contentPreview=None))
+        healed = task_service.handle_event(
+            make_event(title=None, contentPreview="等待确认：是否执行 rm")
+        )
+        assert healed.title == "等待确认：是否执行 rm"

@@ -62,11 +62,12 @@ def _codex_processes() -> list[dict[str, Any]]:
 
 # ---------- Claude Code ----------
 
-def _claude_hook_entry() -> dict[str, Any]:
-    return {
-        "matcher": "Bash|Edit|Write|NotebookEdit",
-        "hooks": [{"type": "command", "command": f'"{_venv_python()}" "{CLAUDE_ADAPTER}"'}],
-    }
+# 适配器 HOOK_EVENT_MAP 支持的三类钩子（PostToolUse 无映射，注册了也是空转）
+_CLAUDE_HOOK_EVENTS = ("UserPromptSubmit", "Notification", "Stop")
+
+
+def _claude_hook_command() -> str:
+    return f'"{_venv_python()}" "{CLAUDE_ADAPTER}"'
 
 
 def _claude_installed() -> bool:
@@ -81,7 +82,7 @@ def _claude_installed() -> bool:
 
 @router.post("/claude-code/install")
 def install_claude_code() -> dict[str, Any]:
-    """向 settings.json 的 hooks.PostToolUse 追加适配器 hook，其余配置原样保留。"""
+    """向 settings.json 的 hooks 追加三类钩子事件，其余配置原样保留。"""
     data: dict[str, Any] = {}
     if CLAUDE_SETTINGS.exists():
         try:
@@ -92,8 +93,9 @@ def install_claude_code() -> dict[str, Any]:
         return {"success": True, "changed": False}
 
     hooks = data.setdefault("hooks", {})
-    post_tool_use = hooks.setdefault("PostToolUse", [])
-    post_tool_use.append(_claude_hook_entry())
+    for event_name in _CLAUDE_HOOK_EVENTS:
+        entries = hooks.setdefault(event_name, [])
+        entries.append({"hooks": [{"type": "command", "command": _claude_hook_command()}]})
 
     CLAUDE_SETTINGS.parent.mkdir(parents=True, exist_ok=True)
     CLAUDE_SETTINGS.write_text(json.dumps(data, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")

@@ -18,6 +18,16 @@ _EVENT_TO_STATUS = {
 
 _COMPLETED_EVENTS = (EventType.TASK_COMPLETED.value, EventType.TASK_FAILED.value)
 
+_FALLBACK_TITLE_LEN = 50
+
+
+def _derive_title(event: AgentEvent) -> Optional[str]:
+    """事件未携带标题时从内容摘要派生（如旧版扩展/钩子的无标题事件）。"""
+    preview = (event.content_preview or "").strip().replace("\n", " ")
+    if not preview:
+        return None
+    return preview[:_FALLBACK_TITLE_LEN] + ("…" if len(preview) > _FALLBACK_TITLE_LEN else "")
+
 
 class TaskService:
     """统一任务模型服务：所有平台差异在 Adapter 层抹平后，这里只处理状态机。"""
@@ -40,7 +50,7 @@ class TaskService:
                 source=event.source,
                 external_task_id=event.external_task_id,
                 event_type=event.event_type,
-                title=event.title,
+                title=event.title or _derive_title(event),
                 content_preview=event.content_preview,
                 project_path=event.project_path,
                 open_target=event.open_target,
@@ -72,6 +82,8 @@ class TaskService:
             value = getattr(event, field)
             if value:
                 setattr(task, field, value)
+        if not task.title:
+            task.title = _derive_title(event)
 
         if event.event_type in _COMPLETED_EVENTS:
             task.completed_at = event_time

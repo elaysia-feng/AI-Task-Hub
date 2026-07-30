@@ -18,6 +18,12 @@ def adapter():
     return module
 
 
+@pytest.fixture(autouse=True)
+def isolated_cache(adapter, monkeypatch, tmp_path):
+    """标题缓存写到适配器目录，测试一律重定向到临时目录。"""
+    monkeypatch.setattr(adapter, "CACHE_PATH", tmp_path / "session_titles.json")
+
+
 def test_prompt_submit_maps_to_started(adapter):
     event = adapter.build_event({
         "hook_event_name": "UserPromptSubmit",
@@ -44,6 +50,8 @@ def test_notification_maps_to_needs_input(adapter):
 
     assert event["eventType"] == "TASK_NEEDS_INPUT"
     assert event["contentPreview"] == "Claude needs your permission to use Bash"
+    # 无会话缓存时以通知消息作为标题，杜绝“无标题任务”
+    assert event["title"] == "Claude needs your permission to use Bash"
 
 
 def test_stop_maps_to_completed(adapter):
@@ -54,6 +62,38 @@ def test_stop_maps_to_completed(adapter):
     })
 
     assert event["eventType"] == "TASK_COMPLETED"
+    # 无缓存时回退到项目目录名
+    assert event["title"] == "demo 会话"
+
+
+def test_prompt_title_carries_to_stop_via_cache(adapter):
+    adapter.build_event({
+        "hook_event_name": "UserPromptSubmit",
+        "session_id": "sess-cache",
+        "cwd": "D:/projects/demo",
+        "prompt": "帮我修复登录接口的鉴权问题",
+    })
+    stop = adapter.build_event({
+        "hook_event_name": "Stop",
+        "session_id": "sess-cache",
+        "cwd": "D:/projects/demo",
+    })
+    assert stop["title"] == "帮我修复登录接口的鉴权问题"
+
+
+def test_notification_prefers_cached_prompt_title(adapter):
+    adapter.build_event({
+        "hook_event_name": "UserPromptSubmit",
+        "session_id": "sess-cache-2",
+        "prompt": "重构数据库层",
+    })
+    notification = adapter.build_event({
+        "hook_event_name": "Notification",
+        "session_id": "sess-cache-2",
+        "message": "Claude needs your permission to use Bash",
+    })
+    assert notification["title"] == "重构数据库层"
+    assert notification["contentPreview"] == "Claude needs your permission to use Bash"
 
 
 def test_long_prompt_truncated(adapter):
