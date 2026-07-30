@@ -38,20 +38,43 @@ jobs:
         working-directory: desktop
         run: npm ci
 
+      - name: Verify local Electron dist
+        working-directory: desktop
+        run: |
+          if (-not (Test-Path node_modules/electron/dist/electron.exe)) { throw 'electron.exe missing after npm ci' }
+          Get-Item node_modules/electron/dist/electron.exe | Select-Object FullName, Length
+
       - name: Build desktop (electron-vite)
         working-directory: desktop
         run: npm run build
 
-      # 不走 electron-builder 的 GitHub publish（此前多次在此失败）；只产出安装包 + latest.yml
       - name: Package Windows installer
         working-directory: desktop
         env:
           CSC_IDENTITY_AUTO_DISCOVERY: 'false'
-        run: npx electron-builder --publish never
-
+          DEBUG: electron-builder
+        # 复用 npm ci 已下载的 Electron，避免 builder 二次拉取失败
+        run: |
+          npx electron-builder --publish never -c.electronDist=node_modules/electron/dist > electron-builder.log 2>&1
+          $code = $LASTEXITCODE
+          Get-Content electron-builder.log
+          if ($code -ne 0) { exit $code }
       - name: List dist artifacts
+        if: always()
         working-directory: desktop
-        run: Get-ChildItem dist -Recurse | Select-Object FullName, Length
+        run: |
+          if (Test-Path dist) { Get-ChildItem dist -Recurse | Select-Object FullName, Length }
+          else { Write-Host 'dist/ missing' }
+
+      - name: Upload builder logs on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: electron-builder-logs
+          path: |
+            desktop/electron-builder.log
+            desktop/dist/**
+          if-no-files-found: warn
 
       - name: Publish GitHub Release
         uses: softprops/action-gh-release@v2
