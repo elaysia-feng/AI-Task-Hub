@@ -5,15 +5,35 @@
  */
 
 const API_URL = 'http://127.0.0.1:17891/api/events'
+const HEARTBEAT_URL = 'http://127.0.0.1:17891/api/integrations/chatgpt/heartbeat'
 const QUEUE_KEY = 'aihub_pending_events'
 const RETRY_ALARM = 'aihub-retry'
 const RETRY_PERIOD_MIN = 1
+const HEARTBEAT_ALARM = 'aihub-heartbeat'
+const HEARTBEAT_PERIOD_MIN = 5
 
 chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
   if (message?.type !== 'AIHUB_EVENT') return false
   postOrQueue(message.event).then(sendResponse)
   return true // 异步响应
 })
+
+// 心跳：让 Hub 体检页知道扩展在线（后端不可达时静默失败，不影响事件队列）
+function heartbeat() {
+  fetch(HEARTBEAT_URL, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ version: chrome.runtime.getManifest().version }),
+  }).catch(() => {})
+}
+
+function ensureHeartbeatAlarm() {
+  chrome.alarms.create(HEARTBEAT_ALARM, { periodInMinutes: HEARTBEAT_PERIOD_MIN })
+  heartbeat()
+}
+
+chrome.runtime.onInstalled.addListener(ensureHeartbeatAlarm)
+chrome.runtime.onStartup.addListener(ensureHeartbeatAlarm)
 
 async function postOrQueue(event) {
   const ok = await postEvent(event)
@@ -56,6 +76,10 @@ async function ensureAlarm() {
 }
 
 chrome.alarms.onAlarm.addListener(async (alarm) => {
+  if (alarm.name === HEARTBEAT_ALARM) {
+    heartbeat()
+    return
+  }
   if (alarm.name !== RETRY_ALARM) return
   const queue = await getQueue()
   if (queue.length === 0) {

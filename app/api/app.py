@@ -4,7 +4,7 @@ from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 
-from app.api import event_api, task_api, websocket_api
+from app.api import event_api, integration_api, task_api, websocket_api
 from app.database.mysql import Database
 from app.logging_config import log_file
 from app.repository.event_repository import EventRepository
@@ -36,6 +36,7 @@ def create_app(db: Database | None = None) -> FastAPI:
     app.include_router(event_api.router)
     app.include_router(task_api.router)
     app.include_router(websocket_api.router)
+    app.include_router(integration_api.router)
 
     @app.get("/api/health")
     async def health() -> dict:
