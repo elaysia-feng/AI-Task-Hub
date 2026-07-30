@@ -1,27 +1,41 @@
 import path from 'node:path'
-import { app, Menu, nativeImage, Tray } from 'electron'
+import { app, Menu, nativeImage, Tray, type MenuItemConstructorOptions } from 'electron'
 import { RESOURCES_DIR } from './config'
 
 export interface TrayCallbacks {
   onShow: () => void
   onQuit: () => void
+  onInstallUpdate: () => void
 }
 
-export function createTray(callbacks: TrayCallbacks): Tray {
+export interface TrayHandle {
+  tray: Tray
+  /** 有已下载更新时注入「重启安装」菜单项，无则恢复基础菜单 */
+  setUpdateReady(version: string | null): void
+}
+
+export function createTray(callbacks: TrayCallbacks): TrayHandle {
   const iconPath = path.join(RESOURCES_DIR, 'tray.png')
   const icon = nativeImage.createFromPath(iconPath)
   const tray = new Tray(icon.isEmpty() ? nativeImage.createEmpty() : icon)
 
   tray.setToolTip('AI Task Hub')
-  tray.setContextMenu(
-    Menu.buildFromTemplate([
-      { label: '打开主面板', click: callbacks.onShow },
-      { type: 'separator' },
-      { label: '退出', click: callbacks.onQuit },
-    ]),
-  )
   tray.on('click', callbacks.onShow)
-  return tray
+
+  const buildMenu = (updateVersion: string | null): void => {
+    const items: MenuItemConstructorOptions[] = [{ label: '打开主面板', click: callbacks.onShow }]
+    if (updateVersion) {
+      items.push(
+        { type: 'separator' },
+        { label: `重启安装更新 (v${updateVersion})`, click: callbacks.onInstallUpdate },
+      )
+    }
+    items.push({ type: 'separator' }, { label: '退出', click: callbacks.onQuit })
+    tray.setContextMenu(Menu.buildFromTemplate(items))
+  }
+  buildMenu(null)
+
+  return { tray, setUpdateReady: buildMenu }
 }
 
 /** macOS 上退出前清理（Windows 由系统回收） */

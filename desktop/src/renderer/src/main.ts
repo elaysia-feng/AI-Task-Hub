@@ -447,6 +447,12 @@ async function bootstrap(): Promise<void> {
     }
     void reload()
   })
+
+  window.aihub.onUpdateStatus((s) => {
+    if (s.state === 'available') showToast(`发现新版本 v${s.version}，后台下载中…`, 'var(--brand)')
+    if (s.state === 'downloaded') showToast(`v${s.version} 已就绪，托盘菜单可重启安装`, 'var(--st-done)')
+    if (s.state === 'error') showToast('更新检查失败，稍后自动重试', 'var(--st-fail)')
+  })
 }
 
 void bootstrap()

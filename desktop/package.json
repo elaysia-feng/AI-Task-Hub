@@ -8,13 +8,54 @@
     "dev": "electron-vite dev",
     "build": "electron-vite build",
     "start": "electron-vite preview",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "dist": "npm run build && electron-builder",
+    "dist:publish": "npm run build && electron-builder --publish always"
   },
   "devDependencies": {
     "@types/node": "^26.1.2",
     "electron": "^43.2.0",
+    "electron-builder": "^26.15.3",
+    "electron-updater": "^6.8.9",
     "electron-vite": "^5.0.0",
     "typescript": "^5.9.3",
     "vite": "^7.3.6"
+  },
+  "build": {
+    "appId": "com.ai-task-hub.desktop",
+    "productName": "AI Task Hub",
+    "electronDist": "node_modules/electron/dist",
+    "directories": {
+      "output": "dist"
+    },
+    "files": [
+      "out/**",
+      "resources/**"
+    ],
+    "extraResources": [
+      {
+        "from": "../packaging/dist/aihub-backend.exe",
+        "to": "backend/aihub-backend.exe"
+      }
+    ],
+    "win": {
+      "target": "nsis",
+      "icon": "resources/icon.png"
+    },
+    "nsis": {
+      "oneClick": false,
+      "perMachine": false,
+      "allowToChangeInstallationDirectory": true,
+      "shortcutName": "AI Task Hub",
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true
+    },
+    "publish": [
+      {
+        "provider": "github",
+        "owner": "elaysia-feng",
+        "repo": "AI-Task-Hub"
+      }
+    ]
   }
 }

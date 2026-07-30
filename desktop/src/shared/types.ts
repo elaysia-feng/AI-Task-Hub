@@ -53,6 +53,13 @@ export type BackendStatus = 'connecting' | 'online' | 'offline'
 
 export type TaskView = 'queue' | 'history'
 
+export interface UpdateState {
+  state: 'checking' | 'available' | 'not-available' | 'downloading' | 'downloaded' | 'error'
+  version?: string
+  percent?: number
+  message?: string
+}
+
 /** preload 通过 contextBridge 暴露给渲染进程的 API（window.aihub） */
 export interface AihubApi {
   getQueue(): Promise<HubTask[]>
@@ -65,6 +72,9 @@ export interface AihubApi {
   getBackendStatus(): Promise<BackendStatus>
   onTaskChanged(cb: (msg: ServerMessage) => void): () => void
   onBackendStatus(cb: (status: BackendStatus) => void): () => void
+  checkUpdates(): Promise<void>
+  installUpdate(): void
+  onUpdateStatus(cb: (state: UpdateState) => void): () => void
   minimizeWindow(): void
   closeWindow(): void
 }

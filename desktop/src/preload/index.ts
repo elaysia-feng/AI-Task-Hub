@@ -1,5 +1,5 @@
 import { contextBridge, ipcRenderer } from 'electron'
-import type { AihubApi, BackendStatus, ServerMessage } from '../shared/types'
+import type { AihubApi, BackendStatus, ServerMessage, UpdateState } from '../shared/types'
 
 const api: AihubApi = {
   getQueue: () => ipcRenderer.invoke('tasks:queue'),
@@ -21,6 +21,14 @@ const api: AihubApi = {
     const listener = (_event: Electron.IpcRendererEvent, status: BackendStatus): void => cb(status)
     ipcRenderer.on('backend:status', listener)
     return () => ipcRenderer.removeListener('backend:status', listener)
+  },
+
+  checkUpdates: () => ipcRenderer.invoke('update:check'),
+  installUpdate: () => ipcRenderer.send('update:install'),
+  onUpdateStatus: (cb) => {
+    const listener = (_event: Electron.IpcRendererEvent, state: UpdateState): void => cb(state)
+    ipcRenderer.on('update:status', listener)
+    return () => ipcRenderer.removeListener('update:status', listener)
   },
 
   minimizeWindow: () => ipcRenderer.send('window:minimize'),

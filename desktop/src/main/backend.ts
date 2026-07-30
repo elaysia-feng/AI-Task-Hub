@@ -1,6 +1,6 @@
 import { spawn, type ChildProcess } from 'node:child_process'
 import fs from 'node:fs'
-import { BACKEND_PYTHON, HEALTH_URL, REPO_ROOT } from './config'
+import { BACKEND_CMD, BACKEND_CWD, HEALTH_URL } from './config'
 import type { BackendStatus } from '../shared/types'
 
 const POLL_INTERVAL_MS = 2000
@@ -67,15 +67,15 @@ export class BackendManager {
     }
   }
 
-  /** 开发模式下用仓库内 .venv 自动拉起事件服务 */
+  /** 自动拉起事件服务（开发态 venv python / 打包态内嵌 exe，由 BACKEND_CMD 决定） */
   private trySpawnBackend(): void {
-    if (!fs.existsSync(BACKEND_PYTHON)) {
-      console.warn(`[backend] 未找到 Python: ${BACKEND_PYTHON}，请手动启动事件服务`)
+    if (!fs.existsSync(BACKEND_CMD.exe)) {
+      console.warn(`[backend] 未找到后端可执行文件: ${BACKEND_CMD.exe}，请手动启动事件服务`)
       return
     }
     try {
-      this.child = spawn(BACKEND_PYTHON, ['-m', 'app.main'], {
-        cwd: REPO_ROOT,
+      this.child = spawn(BACKEND_CMD.exe, BACKEND_CMD.args, {
+        cwd: BACKEND_CWD,
         stdio: 'ignore',
         windowsHide: true,
       })

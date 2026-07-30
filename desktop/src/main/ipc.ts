@@ -2,9 +2,14 @@ import { BrowserWindow, ipcMain } from 'electron'
 import { apiClient } from './api-client'
 import { openTaskTarget } from './launcher'
 import type { BackendManager } from './backend'
+import type { UpdateManager } from './updater'
 
 /** 注册渲染进程可调用的全部 IPC 通道 */
-export function registerIpcHandlers(getWindow: () => BrowserWindow | null, backend: BackendManager): void {
+export function registerIpcHandlers(
+  getWindow: () => BrowserWindow | null,
+  backend: BackendManager,
+  updater: UpdateManager,
+): void {
   ipcMain.handle('tasks:queue', () => apiClient.listTasks('queue'))
   ipcMain.handle('tasks:history', () => apiClient.listTasks('history'))
 
@@ -21,6 +26,9 @@ export function registerIpcHandlers(getWindow: () => BrowserWindow | null, backe
   ipcMain.handle('tasks:clear', () => apiClient.clearTasks())
   ipcMain.handle('tasks:read-all', () => apiClient.readAllTasks())
   ipcMain.handle('backend:status', () => backend.current)
+
+  ipcMain.handle('update:check', () => updater.check())
+  ipcMain.on('update:install', () => updater.quitAndInstall())
 
   ipcMain.on('window:minimize', () => getWindow()?.minimize())
   ipcMain.on('window:close', () => getWindow()?.hide())

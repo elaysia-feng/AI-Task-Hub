@@ -1,10 +1,11 @@
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { app, BrowserWindow, shell } from 'electron'
+import { app, BrowserWindow, Notification, shell } from 'electron'
 import { BackendManager } from './backend'
 import { registerIpcHandlers } from './ipc'
 import { notifyTaskChanged } from './notification'
 import { createTray } from './tray'
+import { UpdateManager } from './updater'
 import { TaskSocket } from './ws-client'
 import { RESOURCES_DIR } from './config'
 
@@ -15,6 +16,7 @@ let isQuitting = false
 
 const backend = new BackendManager()
 const socket = new TaskSocket()
+const updater = new UpdateManager()
 
 // 单实例：重复启动时聚焦已有窗口
 const gotLock = app.requestSingleInstanceLock()
@@ -79,7 +81,7 @@ app.whenReady().then(() => {
   app.setAppUserModelId('com.ai-task-hub.desktop')
 
   mainWindow = createMainWindow()
-  registerIpcHandlers(() => mainWindow, backend)
+  registerIpcHandlers(() => mainWindow, backend, updater)
 
   backend.onStatusChange((status) => {
     mainWindow?.webContents.send('backend:status', status)
@@ -99,13 +101,26 @@ app.whenReady().then(() => {
   })
   socket.connect()
 
-  createTray({
+  const trayHandle = createTray({
     onShow: showMainWindow,
     onQuit: () => {
       isQuitting = true
       app.quit()
     },
+    onInstallUpdate: () => updater.quitAndInstall(),
   })
+
+  updater.onStateChange((state) => {
+    mainWindow?.webContents.send('update:status', state)
+    if (state.state === 'downloaded' && state.version) {
+      trayHandle.setUpdateReady(state.version)
+      new Notification({
+        title: 'AI Task Hub 更新就绪',
+        body: `v${state.version} 已下载完成，托盘菜单可重启安装`,
+      }).show()
+    }
+  })
+  updater.start()
 
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) {
@@ -120,6 +135,7 @@ app.on('before-quit', () => {
   isQuitting = true
   backend.stop()
   socket.close()
+  updater.stop()
 })
 
 app.on('window-all-closed', () => {
