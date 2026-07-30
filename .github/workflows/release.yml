@@ -23,6 +23,11 @@ jobs:
           pip install -r requirements.txt pyinstaller
           pyinstaller packaging/backend.spec --distpath packaging/dist --workpath packaging/build --noconfirm
 
+      - name: Verify backend executable
+        run: |
+          if (-not (Test-Path packaging/dist/aihub-backend.exe)) { throw 'aihub-backend.exe missing' }
+          Get-Item packaging/dist/aihub-backend.exe | Select-Object Name, Length
+
       - uses: actions/setup-node@v4
         with:
           node-version: '22'

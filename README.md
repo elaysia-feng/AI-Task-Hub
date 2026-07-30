@@ -75,6 +75,8 @@ pyinstaller packaging/backend.spec --distpath packaging/dist --workpath packagin
 
 # 桌面安装包（NSIS，内嵌后端 exe）
 cd desktop && npm run dist
+# 本机网络无法下载 Electron 发行包时改用本地已装的 Electron：
+cd desktop && npm run dist:local
 
 # 发布：打 tag 触发 GitHub Actions 构建并发布 Release（latest.yml 供自动更新）
 git tag v0.1.1 && git push origin v0.1.1

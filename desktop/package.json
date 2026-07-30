@@ -11,7 +11,8 @@
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
     "dist": "npm run build && electron-builder",
-    "dist:publish": "npm run build && electron-builder --publish always"
+    "dist:publish": "npm run build && electron-builder --publish always",
+    "dist:local": "npm run build && electron-builder -c.electronDist=node_modules/electron/dist"
   },
   "devDependencies": {
     "@types/node": "^26.1.2",
@@ -26,7 +27,6 @@
   "build": {
     "appId": "com.ai-task-hub.desktop",
     "productName": "AI Task Hub",
-    "electronDist": "node_modules/electron/dist",
     "directories": {
       "output": "dist"
     },
