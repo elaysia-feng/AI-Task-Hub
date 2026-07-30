@@ -106,14 +106,17 @@ export function enterOrbMode(): void {
   if (!win || win.isDestroyed()) return
 
   if (mode === 'panel') {
-    panelBounds = win.getBounds()
+    const b = win.getBounds()
+    // 只保存像样的主面板尺寸，避免把残缺尺寸当恢复目标
+    if (b.width >= PANEL_MIN.width && b.height >= PANEL_MIN.height) {
+      panelBounds = b
+    }
   }
 
   mode = 'orb'
   orbExpanded = false
   dragState = null
 
-  // 先放开最小尺寸，再缩到小球（构造时若锁了大 minWidth，这里必须先降下来）
   win.setResizable(true)
   win.setMinimumSize(ORB_SIZE, ORB_SIZE)
   win.setMaximumSize(ORB_PANEL_W, ORB_PANEL_H)
@@ -121,7 +124,6 @@ export function enterOrbMode(): void {
   const saved = loadOrbPos()
   const fallback = defaultOrbPos()
   const candidate = saved ?? fallback
-  // 若存档位置会导致球跑出工作区，回退到右下角
   let bounds = clampBounds(candidate.x, candidate.y, ORB_SIZE, ORB_SIZE)
   const { workArea } = screen.getDisplayNearestPoint({
     x: bounds.x + ORB_SIZE / 2,
@@ -138,15 +140,14 @@ export function enterOrbMode(): void {
 
   win.setAlwaysOnTop(true, 'screen-saver')
   win.setSkipTaskbar(true)
-  win.setResizable(false)
+  // 必须在仍可 resize 时改尺寸，否则 Windows 上 setBounds 常被忽略
   win.setBounds(bounds)
+  win.setResizable(false)
   win.setOpacity(1)
-  // 必须显示：托盘「隐藏」或其它路径可能把窗隐掉
   if (!win.isVisible()) win.show()
   else win.showInactive()
   win.moveTop()
   notifyMode(win)
-  // 渲染进程偶发错过首帧事件，再补发一次
   setTimeout(() => {
     if (!win.isDestroyed() && mode === 'orb') notifyMode(win)
   }, 50)
@@ -156,38 +157,53 @@ export function enterPanelMode(): void {
   const win = getWindow()
   if (!win || win.isDestroyed()) return
 
-  // 从球模式离开前记下球位置
   if (mode === 'orb') {
     const b = win.getBounds()
-    saveOrbPos(b.x, b.y)
+    // 存球的位置用窗口左上角（收起尺寸）
+    saveOrbPos(
+      orbExpanded ? b.x + b.width - ORB_SIZE : b.x,
+      orbExpanded ? b.y + b.height - ORB_SIZE : b.y,
+    )
   }
 
   mode = 'panel'
   orbExpanded = false
   dragState = null
 
+  // 先允许缩放，再改 max/min/bounds（顺序很重要）
+  win.setResizable(true)
   win.setAlwaysOnTop(false)
   win.setSkipTaskbar(false)
-  // Windows 上 (0,0) 偶发被当成最大尺寸 0，改用大上限表示「不限制」
   win.setMaximumSize(10000, 10000)
   win.setMinimumSize(PANEL_MIN.width, PANEL_MIN.height)
-  win.setResizable(true)
 
-  const restored =
-    panelBounds ??
-    ({
-      ...defaultCenteredPanel(),
-      width: PANEL_DEFAULT.width,
-      height: PANEL_DEFAULT.height,
-    } as Electron.Rectangle)
+  const fallback = {
+    ...defaultCenteredPanel(),
+    width: PANEL_DEFAULT.width,
+    height: PANEL_DEFAULT.height,
+  }
+  const raw = panelBounds ?? fallback
+  const restored = clampBounds(
+    raw.x,
+    raw.y,
+    Math.max(raw.width, PANEL_MIN.width),
+    Math.max(raw.height, PANEL_MIN.height),
+  )
 
-  win.setBounds(clampBounds(restored.x, restored.y, restored.width, restored.height))
+  win.setBounds(restored)
+  // 再强制一次尺寸，防止仍停在小球/展开球的残缺大小
+  win.setSize(restored.width, restored.height)
+  win.setPosition(restored.x, restored.y)
+
   if (win.isMinimized()) win.restore()
   win.setOpacity(1)
   win.show()
   win.focus()
   win.moveTop()
   notifyMode(win)
+  setTimeout(() => {
+    if (!win.isDestroyed() && mode === 'panel') notifyMode(win)
+  }, 50)
 }
 
 function defaultCenteredPanel(): { x: number; y: number } {
@@ -208,7 +224,10 @@ export function setOrbPanelExpanded(expanded: boolean): void {
   orbExpanded = expanded
   const w = expanded ? ORB_PANEL_W : ORB_SIZE
   const h = expanded ? ORB_PANEL_H : ORB_SIZE
+  // resizable=false 时 Windows 常忽略 setBounds，先临时放开再锁回
+  win.setResizable(true)
   win.setBounds(boundsFromBallAnchor(anchor.right, anchor.bottom, w, h))
+  win.setResizable(false)
 }
 
 export function isOrbMode(): boolean {

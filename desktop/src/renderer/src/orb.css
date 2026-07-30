@@ -1,22 +1,7 @@
-/* 悬浮球：透明窗口内的圆球 + 悬停展开面板 */
+/* 悬浮球：仅在 data-mode=orb 时生效，避免污染主面板布局 */
 
 * {
-  margin: 0;
-  padding: 0;
   box-sizing: border-box;
-}
-
-html,
-body {
-  width: 100%;
-  height: 100%;
-  overflow: hidden;
-  background: transparent;
-  font-family:
-    'Segoe UI Variable', 'Segoe UI', 'Microsoft YaHei UI', 'Microsoft YaHei', system-ui, sans-serif;
-  color: #e8eaf0;
-  user-select: none;
-  -webkit-font-smoothing: antialiased;
 }
 
 #orb-root {
@@ -25,6 +10,29 @@ body {
   height: 100%;
   pointer-events: none;
   display: none;
+  margin: 0;
+  padding: 0;
+  overflow: hidden;
+  font-family:
+    'Segoe UI Variable', 'Segoe UI', 'Microsoft YaHei UI', 'Microsoft YaHei', system-ui, sans-serif;
+  color: #e8eaf0;
+  user-select: none;
+  -webkit-font-smoothing: antialiased;
+}
+
+html[data-mode='orb'] {
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+}
+
+html[data-mode='orb'] body {
+  width: 100%;
+  height: 100%;
+  margin: 0;
+  padding: 0;
+  overflow: hidden;
+  background: transparent !important;
 }
 
 html[data-mode='orb'] #orb-root {
@@ -34,10 +42,6 @@ html[data-mode='orb'] #orb-root {
 html[data-mode='orb'] #app,
 html[data-mode='orb'] #wallpaper {
   display: none !important;
-}
-
-html[data-mode='orb'] body {
-  background: transparent !important;
 }
 
 /* ---------- 球（收起时铺满整窗，避免缩窗失败时看不见） ---------- */

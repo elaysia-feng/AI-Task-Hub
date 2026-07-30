@@ -272,5 +272,26 @@ export function mountOrb(): void {
 
 export function applyUiMode(mode: 'panel' | 'orb'): void {
   document.documentElement.dataset.mode = mode
-  if (mode === 'orb') mountOrb()
+  const app = document.getElementById('app')
+  const orb = document.getElementById('orb-root')
+  const wall = document.getElementById('wallpaper')
+
+  if (mode === 'orb') {
+    mountOrb()
+    if (app) app.style.display = 'none'
+    if (wall) wall.style.display = 'none'
+    const root = document.getElementById('orb-root')
+    if (root) root.style.display = 'block'
+  } else {
+    expanded = false
+    if (app) {
+      app.style.display = ''
+      app.style.visibility = 'visible'
+    }
+    if (wall) wall.style.display = ''
+    if (orb) {
+      orb.style.display = 'none'
+      orb.classList.remove('expanded')
+    }
+  }
 }
