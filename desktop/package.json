@@ -1,6 +1,6 @@
 {
   "name": "ai-task-hub-desktop",
-  "version": "0.1.2",
+  "version": "0.1.3",
   "private": true,
   "description": "AI Task Hub 桌面端 — 多 AI 平台任务中心",
   "main": "./out/main/index.js",
