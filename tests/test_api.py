@@ -28,9 +28,12 @@ def test_full_task_lifecycle(client):
     assert queue[0]["status"] == "COMPLETED_UNREAD"
     assert queue[0]["source"] == "CLAUDE_CODE"
 
-    # 3. 生命周期时间线可查
+    # 3. 生命周期时间线可查（桌面端契约：camelCase + payload 对象）
     events = client.get(f"/api/tasks/{task_id}/events").json()["events"]
-    assert [e["event_type"] for e in events] == ["TASK_COMPLETED"]
+    assert [e["eventType"] for e in events] == ["TASK_COMPLETED"]
+    assert events[0]["taskId"] == task_id
+    assert isinstance(events[0]["payload"], dict)
+    assert events[0]["occurredAt"]
 
     # 4. 标记已读 → 离开队列进入历史
     res = client.post(f"/api/tasks/{task_id}/view")

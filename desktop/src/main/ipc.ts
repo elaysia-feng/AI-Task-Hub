@@ -1,4 +1,4 @@
-import { BrowserWindow, ipcMain } from 'electron'
+import { BrowserWindow, ipcMain, shell } from 'electron'
 import { apiClient } from './api-client'
 import { openTaskTarget } from './launcher'
 import type { BackendManager } from './backend'
@@ -29,6 +29,13 @@ export function registerIpcHandlers(
 
   ipcMain.handle('update:check', () => updater.check())
   ipcMain.on('update:install', () => updater.quitAndInstall())
+
+  ipcMain.handle('server:status', () => apiClient.getServerStatus())
+  ipcMain.handle('integrations:status', () => apiClient.getIntegrations())
+  ipcMain.handle('integrations:install-claude', () => apiClient.installClaude())
+  ipcMain.handle('integrations:install-codex', () => apiClient.installCodex())
+  ipcMain.handle('tasks:events', (_event, taskId: number) => apiClient.getTaskEvents(taskId))
+  ipcMain.handle('shell:open-path', (_event, target: string) => shell.openPath(target))
 
   ipcMain.on('window:minimize', () => getWindow()?.minimize())
   ipcMain.on('window:close', () => getWindow()?.hide())

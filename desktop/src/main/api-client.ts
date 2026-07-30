@@ -1,5 +1,12 @@
 import { API_BASE } from './config'
-import type { HubTask, TaskView } from '../shared/types'
+import type {
+  HubTask,
+  InstallResult,
+  IntegrationsStatus,
+  ServerStatus,
+  TaskEventRecord,
+  TaskView,
+} from '../shared/types'
 
 const TIMEOUT_MS = 3000
 
@@ -39,5 +46,26 @@ export const apiClient = {
   async readAllTasks(): Promise<number> {
     const data = await request<{ success: boolean; count: number }>('/api/tasks/read-all', { method: 'POST' })
     return data.count
+  },
+
+  async getTaskEvents(taskId: number): Promise<TaskEventRecord[]> {
+    const data = await request<{ events: TaskEventRecord[] }>(`/api/tasks/${taskId}/events`)
+    return data.events
+  },
+
+  getServerStatus(): Promise<ServerStatus> {
+    return request('/api/status')
+  },
+
+  getIntegrations(): Promise<IntegrationsStatus> {
+    return request('/api/integrations/status')
+  },
+
+  installClaude(): Promise<InstallResult> {
+    return request('/api/integrations/claude-code/install', { method: 'POST' })
+  },
+
+  installCodex(): Promise<InstallResult> {
+    return request('/api/integrations/codex/install', { method: 'POST' })
   },
 }

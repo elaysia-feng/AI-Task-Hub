@@ -1,10 +1,11 @@
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { app, BrowserWindow, Notification, shell } from 'electron'
+import { apiClient } from './api-client'
 import { BackendManager } from './backend'
 import { registerIpcHandlers } from './ipc'
 import { notifyTaskChanged } from './notification'
-import { createTray } from './tray'
+import { createTray, type TrayHandle } from './tray'
 import { UpdateManager } from './updater'
 import { TaskSocket } from './ws-client'
 import { RESOURCES_DIR } from './config'
@@ -98,6 +99,7 @@ app.whenReady().then(() => {
         showMainWindow,
       )
     }
+    refreshTrayUnread()
   })
   socket.connect()
 
@@ -109,6 +111,15 @@ app.whenReady().then(() => {
     },
     onInstallUpdate: () => updater.quitAndInstall(),
   })
+
+  /** 托盘 tooltip 未读计数：WS 事件后 300ms 防抖刷新（本地 HTTP 开销可忽略） */
+  let trayRefreshTimer: NodeJS.Timeout | null = null
+  const refreshTrayUnread = (): void => {
+    if (trayRefreshTimer) clearTimeout(trayRefreshTimer)
+    trayRefreshTimer = setTimeout(() => void updateTrayTooltip(trayHandle), 300)
+  }
+
+  void updateTrayTooltip(trayHandle)
 
   updater.onStateChange((state) => {
     mainWindow?.webContents.send('update:status', state)
@@ -137,6 +148,20 @@ app.on('before-quit', () => {
   socket.close()
   updater.stop()
 })
+
+/** 托盘 tooltip：未读/待输入计数概览 */
+async function updateTrayTooltip(trayHandle: TrayHandle): Promise<void> {
+  try {
+    const queue = await apiClient.listTasks('queue')
+    const unread = queue.filter((t) => t.status === 'COMPLETED_UNREAD' || t.status === 'FAILED_UNREAD').length
+    const needsInput = queue.filter((t) => t.status === 'NEEDS_INPUT').length
+    trayHandle.tray.setToolTip(
+      unread + needsInput > 0 ? `AI Task Hub — ${unread} 未读 · ${needsInput} 待输入` : 'AI Task Hub',
+    )
+  } catch {
+    // 后端离线时保持默认 tooltip
+  }
+}
 
 app.on('window-all-closed', () => {
   // 托盘常驻：所有窗口关闭时不退出（macOS 除外也不退，靠托盘菜单退出）

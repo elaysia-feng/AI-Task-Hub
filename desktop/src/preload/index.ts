@@ -1,6 +1,8 @@
 import { contextBridge, ipcRenderer } from 'electron'
 import type { AihubApi, BackendStatus, ServerMessage, UpdateState } from '../shared/types'
 
+// 其余结构化类型（ServerStatus/IntegrationsStatus 等）经由 IPC 往返，类型在 shared/types.ts 约束
+
 const api: AihubApi = {
   getQueue: () => ipcRenderer.invoke('tasks:queue'),
   getHistory: () => ipcRenderer.invoke('tasks:history'),
@@ -30,6 +32,13 @@ const api: AihubApi = {
     ipcRenderer.on('update:status', listener)
     return () => ipcRenderer.removeListener('update:status', listener)
   },
+
+  getServerStatus: () => ipcRenderer.invoke('server:status'),
+  getIntegrations: () => ipcRenderer.invoke('integrations:status'),
+  installClaude: () => ipcRenderer.invoke('integrations:install-claude'),
+  installCodex: () => ipcRenderer.invoke('integrations:install-codex'),
+  getTaskEvents: (taskId) => ipcRenderer.invoke('tasks:events', taskId),
+  openPath: (target) => ipcRenderer.invoke('shell:open-path', target),
 
   minimizeWindow: () => ipcRenderer.send('window:minimize'),
   closeWindow: () => ipcRenderer.send('window:close'),
