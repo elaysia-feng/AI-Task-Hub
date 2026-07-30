@@ -62,7 +62,7 @@ npm run dev              # electron-vite 热更新，自动拉起后端
 ### 测试与冒烟
 
 ```bash
-pytest                          # 后端 36 项（test_mysql 库，缺 MySQL 自动 skip）
+pytest                          # 后端 38 项（test_mysql 库，缺 MySQL 自动 skip）
 cd desktop && npm test          # 渲染层 vitest 12 项
 python scripts/e2e_smoke.py     # 端到端 8 步冒烟（隔离端口 17899 + test_mysql）
 ```
