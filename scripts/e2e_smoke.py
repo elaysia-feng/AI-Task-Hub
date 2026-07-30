@@ -63,6 +63,11 @@ def main() -> None:
         assert status["db"]["ok"], f"数据库探活失败: {status}"
         print(f"[2/8] status ok: v{status['version']} db={status['db']['database']}")
 
+        # 前次运行若中途失败会残留任务，先清空保证可重复执行
+        http("DELETE", "/api/tasks")
+        assert http("GET", "/api/tasks?view=queue")["tasks"] == []
+        assert http("GET", "/api/tasks?view=history")["tasks"] == []
+
         http("POST", "/api/events", {
             "source": "OTHER", "eventType": "TASK_COMPLETED",
             "externalTaskId": "e2e-smoke", "title": "e2e 冒烟任务",
