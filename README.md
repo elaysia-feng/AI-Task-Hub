@@ -1,174 +1,104 @@
 # AI Task Hub
 
-运行在本地的桌面任务中心，统一管理 **Claude Code / Codex / ChatGPT** 等多个 AI Agent 的任务状态：
+> 多 AI 平台的本地任务中心：ChatGPT 网页 / Claude Code / Codex CLI 的任务事件统一汇入桌面队列，实时通知、一键打开对话、一键已读清理。
+
+[![CI](https://github.com/elaysia-feng/AI-Task-Hub/actions/workflows/ci.yml/badge.svg)](https://github.com/elaysia-feng/AI-Task-Hub/actions/workflows/ci.yml)
+
+## 它能做什么
+
+- **统一队列**：三个平台的「任务完成 / 等待输入 / 失败」事件实时进入同一个桌面队列（WebSocket 秒级推送）
+- **原生通知**：Windows 原生通知 + 系统托盘未读计数，点击直达对话现场（浏览器标签 / 终端 / 会话链接）
+- **接入向导**：设置页一键接入 Claude Code（hooks）与 Codex（notify 链式转发，保留你原有 notify 命令），ChatGPT 扩展在线体检
+- **事件时间线**：每个任务可展开完整生命周期事件与原始载荷，排障有据
+- **自动更新**：打包版每 4 小时检查 GitHub Releases，下载后一键重启安装
+
+## 架构
 
 ```
-AI 开始执行
-    ↓
-AI 完成 / 失败 / 等待输入
-    ↓
-任务进入桌面端 Queue
-    ↓
-系统通知 + 桌面卡片实时出现
-    ↓
-点击卡片打开对应会话（终端 / 浏览器）
-    ↓
-任务标记已查看并退出 Queue
+ChatGPT 网页 ── Chrome 扩展 ─┐
+Claude Code ── hooks 适配器 ─┼─ POST /api/events ─→ FastAPI 事件服务 ─→ MySQL（任务状态机）
+Codex CLI ──── notify 适配器 ┘      （统一事件协议）        │
+                                     │ WebSocket /ws/tasks
+                                     ▼
+                          Electron 桌面端（队列/历史/详情/设置）
 ```
 
-## 核心设计
+- **事件协议**：[`shared/event_schema.json`](shared/event_schema.json)（source / eventType / externalTaskId / title / projectPath / conversationUrl / contentPreview…）
+- **幂等**：`(source, externalTaskId)` 唯一约束，重复事件合并到同一任务
+- **状态机**：RUNNING → NEEDS_INPUT / COMPLETED_UNREAD / FAILED_UNREAD → VIEWED / IGNORED
+- **离线补偿**：Chrome 扩展在后端不可达时本地排队，恢复后自动补发
+- **适配器零依赖**：仅用 Python 标准库，且绕过系统代理访问 127.0.0.1
 
-> **桌面端永远只处理统一任务模型，每个平台的差异全部放在 Adapter 中。**
+## 快速开始（用户）
 
+1. 从 [Releases](https://github.com/elaysia-feng/AI-Task-Hub/releases) 下载 `AI Task Hub Setup x.y.z.exe` 安装
+2. 准备 MySQL 8：创建数据库 `ai_task_hub`，在 `%APPDATA%\AI Task Hub\config.env` 写入：
+   ```env
+   AIHUB_MYSQL_HOST=127.0.0.1
+   AIHUB_MYSQL_PORT=3306
+   AIHUB_MYSQL_USER=root
+   AIHUB_MYSQL_PASSWORD=你的密码
+   AIHUB_MYSQL_DB=ai_task_hub
+   ```
+3. 启动应用，首次运行自动进入**设置页 → 接入集成**：
+   - **Claude Code**：点「一键接入」（写入 `~/.claude/settings.json` 的 PostToolUse hook）
+   - **Codex**：点「一键接入」（改写 `~/.codex/config.toml` 的 notify；原命令保留转发）。**已运行的 Codex 进程需重启**才会加载新配置，设置页会检测并提示
+   - **ChatGPT**：点「打开扩展目录」，在 `chrome://extensions` 开启开发者模式 →「加载已解压的扩展程序」→ 选择该目录；扩展每 5 分钟心跳，设置页显示在线状态
+
+## 快速开始（开发）
+
+```bash
+# 后端（Python 3.12+，uv 或 pip）
+uv venv && uv pip install -r requirements.txt
+copy .env.example .env   # 填入 MySQL 凭据
+python -m app.main       # http://127.0.0.1:17891
+
+# 桌面端（Node 22+）
+cd desktop
+npm install
+npm run dev              # electron-vite 热更新，自动拉起后端
 ```
-Claude Code Hook ──┐
-Codex notify ──────┼── Adapter（统一事件协议）──► FastAPI 事件服务 ──► MySQL
-Codex launcher ────┘        POST /api/events         │
-ChatGPT Chrome 扩展 ────────┘                        │ WebSocket
-                                                    ▼
-                                          Electron 桌面端（托盘常驻）
+
+### 测试与冒烟
+
+```bash
+pytest                          # 后端 36 项（test_mysql 库，缺 MySQL 自动 skip）
+cd desktop && npm test          # 渲染层 vitest 12 项
+python scripts/e2e_smoke.py     # 端到端 8 步冒烟（隔离端口 17899 + test_mysql）
 ```
 
-- **统一事件协议**：`shared/event_schema.json`，所有平台事件先由 Adapter 转成该格式
-- **幂等去重**：`(source, external_task_id)` 唯一约束，同一会话的多次事件合并为同一任务
-- **状态机**：`RUNNING → NEEDS_INPUT / COMPLETED_UNREAD / FAILED_UNREAD → VIEWED / IGNORED`
-- **生命周期流水**：`task_event` 表记录每次事件原始报文，支持时间线回放与离线补偿
+### 构建与发布
 
-## 技术栈
+```bash
+# 后端单文件 exe（PyInstaller）
+pyinstaller packaging/backend.spec --distpath packaging/dist --workpath packaging/build
 
-| 模块 | 技术 |
-|------|------|
-| 桌面端 | Electron + TypeScript（electron-vite，原生 TS 渲染层） |
-| 事件服务 | FastAPI + WebSocket |
-| 数据库 | MySQL 8（`ai_task_hub`，测试库 `test_mysql`） |
-| Adapter | Python 纯标准库（Hook 环境零依赖） |
+# 桌面安装包（NSIS，内嵌后端 exe）
+cd desktop && npm run dist
+
+# 发布：打 tag 触发 GitHub Actions 构建并发布 Release（latest.yml 供自动更新）
+git tag v0.1.1 && git push origin v0.1.1
+```
 
 ## 目录结构
 
 ```
-ai-task-hub/
-├── app/                        # 后端（FastAPI + MySQL）
-│   ├── main.py                 # 事件服务入口
-│   ├── api/                    # REST + WebSocket 路由
-│   ├── service/                # 任务状态机
-│   ├── repository/             # 数据访问
-│   ├── model/                  # AgentEvent / Task 模型
-│   └── database/               # 连接管理与 schema.sql
-├── desktop/                    # 桌面端（Electron + TypeScript）
-│   └── src/
-│       ├── main/               # 主进程：窗口/托盘/通知/WS/后端拉起
-│       ├── preload/            # contextBridge 安全桥
-│       ├── renderer/           # 渲染层：原生 TS + 手写设计系统
-│       └── shared/             # 进程间共享类型
-├── adapters/                   # 平台适配器（纯标准库）
-│   ├── claude-code/            # Hook → 统一事件
-│   └── codex/                  # notify 钩子 + 启动包装器
-├── shared/                     # 事件协议 JSON Schema 与常量
-├── tests/                      # pytest（使用 test_mysql 测试库）
-└── requirements.txt
+app/            # FastAPI 事件服务（api/service/repository/database 分层）
+adapters/       # 平台适配器：claude-code hooks / codex notify / chatgpt 扩展
+desktop/        # Electron + TypeScript 桌面端（main/preload/renderer）
+packaging/      # PyInstaller spec
+scripts/        # e2e 冒烟、DB 诊断、Codex 模拟器
+shared/         # 事件协议 schema 与共享常量
+tests/          # pytest（状态机 / API / 集成接入 / 编码防回归）
 ```
 
-## 快速开始
+## 常见问题
 
-### 1. 配置 MySQL
+- **Codex 事件不上报**：Codex 只在启动时读配置。接入后需重启所有 Codex 进程（设置页会检测旧进程并警告）
+- **ChatGPT 无通知**：确认扩展已安装且浏览器在运行；设置页看「扩展在线 vX」
+- **系统代理导致事件丢失**：所有适配器已内置 127.0.0.1 代理绕过；若仍异常看 `%APPDATA%\AI Task Hub\logs\backend.log`
+- **更新检查失败**：更新走 GitHub Releases，需要能访问 github.com（设置页可手动重试）
 
-```bash
-cp .env.example .env   # 填写本机 MySQL 账号密码
-```
+## License
 
-数据库 `ai_task_hub` 与表结构会在首次启动时**自动创建**。
-
-### 2. 启动事件服务
-
-```bash
-uv venv
-uv pip install -r requirements.txt
-.venv/Scripts/python.exe -m app.main          # http://127.0.0.1:17891
-```
-
-### 3. 启动桌面端
-
-```bash
-cd desktop
-npm install
-npm run dev        # 开发模式（HMR）
-npm run build && npm run start   # 生产构建运行
-```
-
-桌面端启动时会自动探测事件服务，未运行则尝试用仓库 `.venv` 拉起。
-
-### 4. 验证链路
-
-```bash
-curl -X POST http://127.0.0.1:17891/api/events \
-  -H "Content-Type: application/json" \
-  -d '{"source":"CODEX","eventType":"TASK_COMPLETED","externalTaskId":"demo-001","title":"测试任务"}'
-```
-
-桌面端应立即出现任务卡片。
-
-## 接入 AI 平台
-
-### Claude Code
-
-把 `adapters/claude-code/settings.example.json` 中的 `hooks` 合并到 `~/.claude/settings.json`：
-
-| Hook | 映射事件 |
-|------|---------|
-| `UserPromptSubmit` | `TASK_STARTED` |
-| `Notification` | `TASK_NEEDS_INPUT` |
-| `Stop` | `TASK_COMPLETED` |
-
-### Codex
-
-方式一（推荐）：config.toml 配置 notify 钩子。若 notify 已被占用（如 Codex 桌面端），使用链式适配器——上报后继续转发给原命令（原命令存于 `adapters/codex/forward_target.json`）：
-
-```toml
-notify = [ 'D:\develop\AI-Task-Hub\.venv\Scripts\python.exe', 'D:\develop\AI-Task-Hub\adapters\codex\notify_chain.py' ]
-```
-
-方式二：用启动包装器代替直接运行 codex
-
-```bash
-python adapters/codex/launcher.py "帮我修复登录接口"
-```
-
-### ChatGPT
-
-加载 `adapters/chatgpt-extension`（Chrome → 扩展程序 → 开发者模式 → 加载已解压的扩展程序）。回答完成自动上报，打开对话自动已读；事件服务不可达时本地缓存自动补发。
-
-> 所有 Adapter 均**纯标准库零依赖**，且已内置系统代理绕过（localhost 直连）。
-
-### 点击卡片后的唤起
-
-- **ChatGPT** → 系统浏览器打开对话 URL
-- **Claude Code** → Windows Terminal 进入项目目录并 `claude --resume <session>`
-- **Codex** → Windows Terminal 进入项目目录并 `codex resume <session>`
-
-第一版采用"点击即视为已读"。
-
-## API 一览
-
-| 方法 | 路径 | 说明 |
-|------|------|------|
-| POST | `/api/events` | 接收统一事件（Adapter 入口） |
-| GET | `/api/tasks?view=queue\|history` | 任务列表 |
-| GET | `/api/tasks/{id}/events` | 任务生命周期时间线 |
-| POST | `/api/tasks/{id}/view` | 标记已读 |
-| POST | `/api/tasks/{id}/ignore` | 忽略 |
-| DELETE | `/api/tasks/{id}` | 删除 |
-| WS | `/ws/tasks` | 任务变更实时推送 |
-
-## 测试
-
-```bash
-.venv/Scripts/python.exe -m pytest tests -v   # 18 项测试，使用 test_mysql 库
-cd desktop && npm run typecheck               # 桌面端类型检查
-```
-
-## 数据库说明
-
-- 主键 `BIGINT AUTO_INCREMENT`
-- 时间字段 `DATETIME(3)`（毫秒精度，本地时间）
-- 枚举码字段 `VARCHAR(32)`（`status` / `event_type` / `source`，保持可读性便于排障）
-- `raw_payload JSON`：MySQL 原生 JSON 类型，存统一事件原始报文
+MIT
