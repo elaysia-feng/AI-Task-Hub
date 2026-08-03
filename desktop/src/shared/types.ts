@@ -52,6 +52,8 @@ export type ServerMessage = TaskChangedMessage | TaskDeletedMessage | TasksClear
 export type BackendStatus = 'connecting' | 'online' | 'offline'
 
 export type TaskView = 'queue' | 'history'
+export type TaskLoadState = 'loading' | 'ready' | 'error'
+export type TaskSort = 'newest' | 'oldest'
 
 export interface UpdateState {
   state: 'checking' | 'available' | 'not-available' | 'downloading' | 'downloaded' | 'error'
@@ -142,6 +144,7 @@ export interface AihubApi {
   pickWallpaper(): Promise<WallpaperState>
   clearWallpaper(): Promise<WallpaperState>
   setWallpaperPrefs(prefs: Partial<WallpaperPrefs>): Promise<WallpaperState>
+  showWallpaperDialog(): Promise<'pick' | 'clear' | 'cancel'>
   minimizeWindow(): void
   closeWindow(): void
   /** 显示主面板 */
@@ -157,6 +160,6 @@ export interface AihubApi {
   /** 主进程切换 panel / orb 模式 */
   onUiMode(cb: (mode: 'panel' | 'orb') => void): () => void
   /** 设置页：确认后生成本地 exe 安装包 */
-  buildExe(): Promise<{ ok: boolean; cancelled?: boolean; message: string; distDir?: string }>
+  buildExe(): Promise<{ ok: boolean; cancelled?: boolean; message: string; distDir?: string; missing?: 'nsis' | 'backend' | 'python' }>
   onPackagingStatus(cb: (s: { state: string; message: string }) => void): () => void
 }

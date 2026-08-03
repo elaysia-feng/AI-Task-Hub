@@ -40,6 +40,14 @@ def setup_logging(level: int = logging.INFO) -> Path:
         root.addHandler(file_handler)
 
     if not any(isinstance(h, logging.StreamHandler) and not isinstance(h, RotatingFileHandler) for h in root.handlers):
+        # Windows 中文系统 stderr 默认 GBK，但日志内容已是 UTF-8，强制 stdout/stderr 走 UTF-8
+        if sys.platform == "win32":
+            for stream in (sys.stdout, sys.stderr):
+                try:
+                    stream.reconfigure(encoding="utf-8")
+                except Exception as exc:
+                    import logging as _logging
+                    _logging.getLogger(__name__).warning("stream.reconfigure 失败: %s", exc)
         console = logging.StreamHandler()
         console.setFormatter(formatter)
         root.addHandler(console)

@@ -4,6 +4,7 @@ export function formatRelativeTime(iso: string | null | undefined): string {
   const date = new Date(iso)
   if (Number.isNaN(date.getTime())) return ''
 
+  // Use UTC to avoid DST boundary skew
   const now = new Date()
   const diffSec = Math.floor((now.getTime() - date.getTime()) / 1000)
   if (diffSec < 60) return '刚刚'
@@ -16,22 +17,22 @@ export function formatRelativeTime(iso: string | null | undefined): string {
   yesterday.setDate(now.getDate() - 1)
   const hm = formatHM(date)
   if (isSameDay(yesterday, date)) return `昨天 ${hm}`
-  if (date.getFullYear() === now.getFullYear()) {
-    return `${pad(date.getMonth() + 1)}-${pad(date.getDate())} ${hm}`
+  if (date.getUTCFullYear() === now.getUTCFullYear()) {
+    return `${pad(date.getUTCMonth() + 1)}-${pad(date.getUTCDate())} ${hm}`
   }
-  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}`
+  return `${date.getUTCFullYear()}-${pad(date.getUTCMonth() + 1)}-${pad(date.getUTCDate())}`
 }
 
 function isSameDay(a: Date, b: Date): boolean {
   return (
-    a.getFullYear() === b.getFullYear() &&
-    a.getMonth() === b.getMonth() &&
-    a.getDate() === b.getDate()
+    a.getUTCFullYear() === b.getUTCFullYear() &&
+    a.getUTCMonth() === b.getUTCMonth() &&
+    a.getUTCDate() === b.getUTCDate()
   )
 }
 
 function formatHM(d: Date): string {
-  return `${pad(d.getHours())}:${pad(d.getMinutes())}`
+  return `${pad(d.getUTCHours())}:${pad(d.getUTCMinutes())}`
 }
 
 function pad(n: number): string {

@@ -27,6 +27,7 @@ def test_full_task_lifecycle(client):
     assert [t["id"] for t in queue] == [task_id]
     assert queue[0]["status"] == "COMPLETED_UNREAD"
     assert queue[0]["source"] == "CLAUDE_CODE"
+    assert client.get(f"/api/tasks/{task_id}").json()["task"]["id"] == task_id
 
     # 3. 生命周期时间线可查（桌面端契约：camelCase + payload 对象）
     events = client.get(f"/api/tasks/{task_id}/events").json()["events"]
@@ -55,6 +56,8 @@ def test_ignore_flow(client):
 
     assert res.json()["task"]["status"] == "IGNORED"
     assert client.get("/api/tasks?view=queue").json()["tasks"] == []
+    events = client.get(f"/api/tasks/{task_id}/events").json()["events"]
+    assert [event["eventType"] for event in events] == ["TASK_COMPLETED", "TASK_IGNORED"]
 
 
 def test_clear_all_tasks(client):
@@ -65,7 +68,7 @@ def test_clear_all_tasks(client):
     )
     task_id = client.get("/api/tasks?view=queue").json()["tasks"][0]["id"]
 
-    res = client.delete("/api/tasks")
+    res = client.delete("/api/tasks?confirm=true")
 
     assert res.status_code == 200
     assert res.json() == {"success": True, "deleted": 2}
@@ -78,7 +81,7 @@ def test_clear_all_tasks(client):
 def test_websocket_broadcasts_tasks_cleared(client):
     client.post("/api/events", json=EVENT_PAYLOAD)
     with client.websocket_connect("/ws/tasks") as ws:
-        client.delete("/api/tasks")
+        client.delete("/api/tasks?confirm=true")
         message = ws.receive_json()
 
     assert message["type"] == "tasks_cleared"

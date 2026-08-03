@@ -1,5 +1,5 @@
 import { contextBridge, ipcRenderer } from 'electron'
-import type { AihubApi, BackendStatus, ServerMessage, UpdateState } from '../shared/types'
+import type { AihubApi, BackendStatus, ServerMessage, UpdateState, WallpaperPrefs } from '../shared/types'
 
 const api: AihubApi = {
   getQueue: () => ipcRenderer.invoke('tasks:queue'),
@@ -41,7 +41,19 @@ const api: AihubApi = {
   getWallpaper: () => ipcRenderer.invoke('wallpaper:get'),
   pickWallpaper: () => ipcRenderer.invoke('wallpaper:pick'),
   clearWallpaper: () => ipcRenderer.invoke('wallpaper:clear'),
-  setWallpaperPrefs: (prefs) => ipcRenderer.invoke('wallpaper:set-prefs', prefs),
+  setWallpaperPrefs: (prefs) => {
+    const allowed = ['blur', 'dim', 'opacity'] as const
+    const unknown = Object.keys(prefs).filter((k) => !(allowed as readonly string[]).includes(k))
+    if (unknown.length > 0) console.warn('[preload] setWallpaperPrefs: unknown fields', unknown)
+    const filtered: Partial<WallpaperPrefs> = {}
+    for (const k of allowed) {
+      if (k in prefs) (filtered as Record<string, unknown>)[k] = prefs[k as keyof WallpaperPrefs]
+    }
+    // 注意：不要在这里 .catch() 吞错——调用方（settings.ts pushPrefs）依赖 reject 来走错误分支，
+    // 吞错会把 resolve 值变成 undefined，导致 applyWallpaper(undefined) 解构抛 TypeError。
+    return ipcRenderer.invoke('wallpaper:set-prefs', filtered)
+  },
+  showWallpaperDialog: () => ipcRenderer.invoke('wallpaper:dialog'),
 
   minimizeWindow: () => ipcRenderer.send('window:minimize'),
   closeWindow: () => ipcRenderer.send('window:close'),

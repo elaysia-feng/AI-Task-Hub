@@ -4,6 +4,7 @@
 """
 
 import json
+import os
 import subprocess
 import sys
 import urllib.request
@@ -34,8 +35,10 @@ if proc.stdout:
 if proc.stderr:
     print("stderr:", proc.stderr[:500])
 
+# 与后端起拉保持一致：端口读 AIHUB_PORT，默认 17891（LOW：硬编码端口）
+port = os.environ.get("AIHUB_PORT", "17891")
 opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
-with opener.open("http://127.0.0.1:17891/api/tasks?view=queue", timeout=3) as res:
+with opener.open(f"http://127.0.0.1:{port}/api/tasks?view=queue", timeout=3) as res:
     queue = json.loads(res.read())["tasks"]
 print("queue count:", len(queue))
 for t in queue:

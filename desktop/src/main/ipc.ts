@@ -1,16 +1,39 @@
 import { BrowserWindow, dialog, ipcMain, shell } from 'electron'
+import path from 'node:path'
+import os from 'node:os'
 import { apiClient } from './api-client'
 import { openTaskTarget } from './launcher'
 import { buildExeWithConfirm } from './packaging'
+import { resolveAllowedPath } from './path-util'
 import {
   clearWallpaper,
   getWallpaperState,
   pickWallpaper,
   setWallpaperPrefs,
+  showWallpaperDialog,
 } from './wallpaper'
 import type { BackendManager } from './backend'
 import type { UpdateManager } from './updater'
 import type { WallpaperPrefs } from '../shared/types'
+
+// Allowed path prefixes for shell:open-path (user-controlled directories only)
+const ALLOWED_OPEN_PREFIXES = [
+  os.homedir(),
+  path.join(os.homedir(), 'Desktop'),
+  path.join(os.homedir(), 'Documents'),
+  path.join(os.homedir(), 'Downloads'),
+]
+
+function sanitizeCoord(v: unknown): number {
+  const n = Number(v)
+  if (!Number.isFinite(n)) return 0
+  return Math.max(-10000, Math.min(10000, n))
+}
+
+/** realpath 解析 junction/symlink + NTFS 大小写不敏感 + 拒绝 URL 协议，见 path-util（M18/M19） */
+function isAllowedOpenPath(input: string): boolean {
+  return resolveAllowedPath(input, ALLOWED_OPEN_PREFIXES) !== null
+}
 
 export interface OrbIpc {
   enterOrb: () => void
@@ -33,10 +56,16 @@ export function registerIpcHandlers(
   ipcMain.handle('tasks:history', () => apiClient.listTasks('history'))
 
   ipcMain.handle('tasks:open', async (_event, id: number) => {
-    const queue = await apiClient.listTasks('queue')
-    const task = queue.find((t) => t.id === id)
-    if (task) await openTaskTarget(task)
-    await apiClient.markViewed(id)
+    try {
+      const task = await apiClient.getTask(id)
+      await openTaskTarget(task)
+      await apiClient.markViewed(id)
+      return { ok: true }
+    } catch (err) {
+      // 任务已删除 / 后端离线等场景不产生未处理 rejection，把错误带回渲染层
+      console.warn('[ipc] tasks:open failed:', err)
+      return { ok: false, err: err instanceof Error ? err.message : String(err) }
+    }
   })
 
   ipcMain.handle('tasks:ignore', (_event, id: number) => apiClient.markIgnored(id))
@@ -52,8 +81,17 @@ export function registerIpcHandlers(
   ipcMain.handle('integrations:status', () => apiClient.getIntegrations())
   ipcMain.handle('integrations:install-claude', () => apiClient.installClaude())
   ipcMain.handle('integrations:install-codex', () => apiClient.installCodex())
-  ipcMain.handle('tasks:events', (_event, taskId: number) => apiClient.getTaskEvents(taskId))
-  ipcMain.handle('shell:open-path', (_event, target: string) => shell.openPath(target))
+  ipcMain.handle('tasks:events', (_event, taskId: number) => {
+    const id = Number(taskId)
+    if (!Number.isInteger(id) || id <= 0) return null
+    return apiClient.getTaskEvents(id)
+  })
+  ipcMain.handle('shell:open-path', (_event, target: string) => {
+    if (!isAllowedOpenPath(target)) {
+      return { err: 'Disallowed path: must be under user home directory' }
+    }
+    return shell.openPath(target)
+  })
 
   ipcMain.handle('wallpaper:get', () => getWallpaperState())
   ipcMain.handle('wallpaper:pick', () => pickWallpaper(getWindow()))
@@ -61,6 +99,7 @@ export function registerIpcHandlers(
   ipcMain.handle('wallpaper:set-prefs', (_event, prefs: Partial<WallpaperPrefs>) =>
     setWallpaperPrefs(prefs),
   )
+  ipcMain.handle('wallpaper:dialog', () => showWallpaperDialog(getWindow()))
 
   ipcMain.on('window:minimize', () => getWindow()?.minimize())
   ipcMain.on('window:close', () => {
@@ -78,10 +117,10 @@ export function registerIpcHandlers(
     orb?.setPanelExpanded(Boolean(expanded))
   })
   ipcMain.on('orb:drag-start', (_event, screenX: number, screenY: number) => {
-    orb?.dragStart(Number(screenX), Number(screenY))
+    orb?.dragStart(sanitizeCoord(screenX), sanitizeCoord(screenY))
   })
   ipcMain.on('orb:drag-move', (_event, screenX: number, screenY: number) => {
-    orb?.dragMove(Number(screenX), Number(screenY))
+    orb?.dragMove(sanitizeCoord(screenX), sanitizeCoord(screenY))
   })
   ipcMain.on('orb:drag-end', () => {
     orb?.dragEnd()

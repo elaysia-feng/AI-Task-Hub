@@ -1,7 +1,9 @@
 import { WS_URL } from './config'
 import type { ServerMessage } from '../shared/types'
 
-const RECONNECT_DELAY_MS = 2000
+const INITIAL_RECONNECT_DELAY_MS = 1000
+const MAX_RECONNECT_DELAY_MS = 30000
+const MAX_RECONNECT_ATTEMPTS = 20
 
 type MessageListener = (msg: ServerMessage) => void
 
@@ -10,12 +12,20 @@ export class TaskSocket {
   private ws: WebSocket | null = null
   private listeners = new Set<MessageListener>()
   private closedByUser = false
+  private reconnectAttempts = 0
+  private reconnectTimer: NodeJS.Timeout | null = null
 
   onMessage(listener: MessageListener): void {
     this.listeners.add(listener)
   }
 
   connect(): void {
+    this.closedByUser = false
+    // 清掉任何尚未触发的重连定时器，保证同一时刻至多一个连接在途（LOW）
+    if (this.reconnectTimer) {
+      clearTimeout(this.reconnectTimer)
+      this.reconnectTimer = null
+    }
     try {
       this.ws = new WebSocket(WS_URL)
     } catch {
@@ -34,19 +44,36 @@ export class TaskSocket {
     this.ws.onclose = () => {
       if (!this.closedByUser) this.scheduleReconnect()
     }
-    this.ws.onerror = () => {
+    this.ws.onerror = (event) => {
+      console.error('[ws-client] WebSocket error:', event)
       this.ws?.close()
     }
   }
 
   private scheduleReconnect(): void {
-    setTimeout(() => {
+    if (this.reconnectAttempts >= MAX_RECONNECT_ATTEMPTS) {
+      console.warn('[ws-client] Max reconnect attempts reached, giving up')
+      return
+    }
+    const delay = Math.min(
+      INITIAL_RECONNECT_DELAY_MS * 2 ** this.reconnectAttempts + Math.random() * 1000,
+      MAX_RECONNECT_DELAY_MS,
+    )
+    this.reconnectAttempts++
+    // 先清旧句柄再排新定时器：onclose 与 onerror 可能先后各触发一次，避免双连接（LOW）
+    if (this.reconnectTimer) clearTimeout(this.reconnectTimer)
+    this.reconnectTimer = setTimeout(() => {
+      this.reconnectTimer = null
       if (!this.closedByUser) this.connect()
-    }, RECONNECT_DELAY_MS)
+    }, delay)
   }
 
   close(): void {
     this.closedByUser = true
+    if (this.reconnectTimer) {
+      clearTimeout(this.reconnectTimer)
+      this.reconnectTimer = null
+    }
     this.ws?.close()
   }
 }

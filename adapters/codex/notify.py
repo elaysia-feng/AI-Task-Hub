@@ -16,7 +16,8 @@ import urllib.request
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from event_converter import codex_notify_to_event  # noqa: E402
 
-API_URL = "http://127.0.0.1:17891/api/events"
+# 端口允许用 AIHUB_PORT 覆盖（冒烟测试并行实例、端口冲突场景）
+API_URL = f"http://127.0.0.1:{int(os.environ.get('AIHUB_PORT', '17891'))}/api/events"
 TIMEOUT_SEC = 2
 
 # 本机可能开启系统代理（Clash 等）：localhost 请求必须直连

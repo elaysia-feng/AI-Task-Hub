@@ -13,12 +13,14 @@ Claude Code 在钩子触发时通过 stdin 传入 JSON 载荷，本脚本将其�
 """
 
 import json
+import os
 import re
 import sys
 import urllib.request
 from pathlib import Path
 
-API_URL = "http://127.0.0.1:17891/api/events"
+# 端口允许用 AIHUB_PORT 覆盖（冒烟测试并行实例、端口冲突场景）
+API_URL = f"http://127.0.0.1:{int(os.environ.get('AIHUB_PORT', '17891'))}/api/events"
 TIMEOUT_SEC = 2
 MAX_TITLE_LEN = 60
 

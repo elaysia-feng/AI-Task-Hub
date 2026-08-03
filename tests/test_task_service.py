@@ -53,11 +53,29 @@ class TestHandleEvent:
         assert task.status == "NEEDS_INPUT"
         assert task.content_preview == "是否允许执行测试？"
 
-    def test_event_without_external_id_always_creates_new_task(self, task_service):
+    def test_event_without_external_id_dedups_per_source(self, task_service):
+        """修复 DB MEDIUM #3 后，NULL external_task_id 也需按 source 幂等去重。
+
+        历史行为：两次 NULL 事件会创建两条任务（幂等失效）。
+        新行为：同源 NULL 事件合并到同一任务，状态/字段被覆盖更新。
+        """
         first = task_service.handle_event(make_event(externalTaskId=None))
         second = task_service.handle_event(make_event(externalTaskId=None))
 
-        assert first.id != second.id
+        # 同源 + NULL external_task_id 折叠为同一占位 (source, '')，必须合并
+        assert first.id == second.id
+        assert len(task_service.get_queue()) == 1
+
+    def test_event_without_external_id_different_sources_create_separate(self, task_service):
+        """不同 source 的 NULL external_task_id 各自独立，不应跨源合并。"""
+        codex_task = task_service.handle_event(
+            make_event(externalTaskId=None, source="CODEX")
+        )
+        claude_task = task_service.handle_event(
+            make_event(externalTaskId=None, source="CLAUDE_CODE")
+        )
+
+        assert codex_task.id != claude_task.id
         assert len(task_service.get_queue()) == 2
 
 

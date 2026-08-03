@@ -1,6 +1,7 @@
 """接入集成 API：一键接入幂等性、链式转发保留、旧进程检测、扩展心跳。"""
 
 import json
+import os
 import time
 
 import pytest
@@ -49,14 +50,14 @@ def test_claude_install_preserves_existing_settings(client, claude_settings):
 def test_codex_install_chains_existing_notify(client, codex_paths):
     config, forward = codex_paths
     config.parent.mkdir(parents=True)
-    # TOML 字面字符串（单引号）避免反斜杠转义问题
-    config.write_text("notify = ['C:\\Tools\\old-notify.exe', '--flag']\n", encoding="utf-8")
+    # Use forward slashes for cross-platform TOML path (TOML parser handles both / and \)
+    config.write_text("notify = ['C:/Tools/old-notify.exe', '--flag']\n", encoding="utf-8")
 
     res = client.post("/api/integrations/codex/install").json()
     assert res["success"] is True and res["changed"] is True
     assert res["forwardTarget"] is True
 
-    assert json.loads(forward.read_text(encoding="utf-8"))["command"] == ["C:\\Tools\\old-notify.exe", "--flag"]
+    assert json.loads(forward.read_text(encoding="utf-8"))["command"] == ["C:/Tools/old-notify.exe", "--flag"]
     assert "notify_chain.py" in config.read_text(encoding="utf-8")
 
     again = client.post("/api/integrations/codex/install").json()

@@ -1,6 +1,6 @@
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { app, BrowserWindow, Notification, shell } from 'electron'
+import { app, BrowserWindow, crashReporter, Notification, shell } from 'electron'
 import { apiClient } from './api-client'
 import { BackendManager } from './backend'
 import { registerIpcHandlers } from './ipc'
@@ -21,8 +21,17 @@ import { createTray, type TrayHandle } from './tray'
 import { UpdateManager } from './updater'
 import { TaskSocket } from './ws-client'
 import { RESOURCES_DIR } from './config'
+import { killAllTrackedChildren } from './launcher'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
+
+// Global exception handlers to prevent silent crashes
+process.on('uncaughtException', (err) => {
+  console.error('[main] Uncaught exception:', err)
+})
+process.on('unhandledRejection', (reason) => {
+  console.error('[main] Unhandled rejection:', reason)
+})
 
 let mainWindow: BrowserWindow | null = null
 let isQuitting = false
@@ -104,6 +113,21 @@ function createMainWindow(): BrowserWindow {
     void shell.openExternal(url)
     return { action: 'deny' }
   })
+  win.webContents.on('will-navigate', (event, url) => {
+    if (!url.startsWith('app://') && !url.startsWith('file://') && !url.startsWith('http://localhost') && !url.startsWith('https://')) {
+      event.preventDefault()
+    }
+  })
+  win.webContents.on('render-process-gone', (_event, details) => {
+    if (details.reason === 'clean-exit') return
+    console.error(`[main] Renderer process gone: ${details.reason} (exit ${details.exitCode})`)
+    // 渲染崩溃 = 黑窗口：延迟自动重载恢复，而不是把用户晾在黑屏上（M20）
+    if (!win.isDestroyed()) {
+      setTimeout(() => {
+        if (!win.isDestroyed()) win.webContents.reload()
+      }, 300)
+    }
+  })
 
   if (process.env.ELECTRON_RENDERER_URL) {
     void win.loadURL(process.env.ELECTRON_RENDERER_URL)
@@ -115,6 +139,13 @@ function createMainWindow(): BrowserWindow {
 
 app.whenReady().then(() => {
   app.setAppUserModelId('com.ai-task-hub.desktop')
+
+  // 本地崩溃转储：无上报服务器，写盘供诊断（M19）
+  crashReporter.start({
+    productName: 'AI Task Hub',
+    companyName: 'AI Task Hub',
+    uploadToServer: false,
+  })
 
   mainWindow = createMainWindow()
   bindOrbWindow(() => mainWindow)
@@ -170,10 +201,13 @@ app.whenReady().then(() => {
     mainWindow?.webContents.send('update:status', state)
     if (state.state === 'downloaded' && state.version) {
       trayHandle.setUpdateReady(state.version)
-      new Notification({
+      const notif = new Notification({
         title: 'AI Task Hub 更新就绪',
         body: `v${state.version} 已下载完成，托盘菜单可重启安装`,
-      }).show()
+      })
+      // 点通知直接拉出主面板（M21）
+      notif.on('click', () => showMainWindow())
+      notif.show()
     }
   })
   updater.start()
@@ -190,6 +224,7 @@ app.whenReady().then(() => {
 
 app.on('before-quit', () => {
   isQuitting = true
+  killAllTrackedChildren()
   backend.stop()
   socket.close()
   updater.stop()

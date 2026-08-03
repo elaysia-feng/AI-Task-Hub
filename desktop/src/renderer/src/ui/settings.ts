@@ -57,25 +57,38 @@ function makeAppearanceSection(): HTMLElement {
 
   const pushPrefs = async (partial: Partial<WallpaperPrefs>): Promise<void> => {
     if (applying) return
+    applying = true
     try {
       const ws = await window.aihub.setWallpaperPrefs(partial)
       applyState(ws)
     } catch (err) {
       showToast(err instanceof Error ? err.message : '保存外观失败', 'var(--st-fail)')
+    } finally {
+      applying = false
     }
+  }
+
+  let debounceTimer: ReturnType<typeof setTimeout> | undefined
+  const debouncePush = (partial: Partial<WallpaperPrefs>): void => {
+    if (debounceTimer !== undefined) clearTimeout(debounceTimer)
+    debounceTimer = setTimeout(() => {
+      // 视图已卸载/重渲染（刷新设置页会重建外观区）则丢弃，避免对脱离文档的滑杆再写偏好
+      if (!blurInput.isConnected) return
+      void pushPrefs(partial)
+    }, 200)
   }
 
   blurInput.oninput = () => {
     blurVal.textContent = `${blurInput.value}px`
-    void pushPrefs({ blur: Number(blurInput.value) })
+    debouncePush({ blur: Number(blurInput.value) })
   }
   dimInput.oninput = () => {
     dimVal.textContent = `${dimInput.value}%`
-    void pushPrefs({ dim: Number(dimInput.value) })
+    debouncePush({ dim: Number(dimInput.value) })
   }
   opacityInput.oninput = () => {
     opacityVal.textContent = `${opacityInput.value}%`
-    void pushPrefs({ opacity: Number(opacityInput.value) })
+    debouncePush({ opacity: Number(opacityInput.value) })
   }
 
   pickBtn.onclick = async () => {
@@ -263,26 +276,54 @@ function makeUpdateSection(): HTMLElement {
   const buildStatus = h('div', 'wallpaper-status', [
     '开发用：点按钮会先弹出确认框，再本地打包到 desktop/dist',
   ])
+  let cleanupPackagingStatus: (() => void) | null = null
+
   buildBtn.onclick = async () => {
     buildBtn.disabled = true
     buildStatus.textContent = '等待确认…'
+
+    // 实时跟随主进程发回的打包步骤状态
+    cleanupPackagingStatus?.()
+    cleanupPackagingStatus = window.aihub.onPackagingStatus((s) => {
+      // 视图被刷新（refreshSettings 重建设置区）后旧监听不再有可见 UI → 自行解除
+      if (!buildStatus.isConnected) {
+        cleanupPackagingStatus?.()
+        cleanupPackagingStatus = null
+        return
+      }
+      if (s.state === 'running') {
+        buildStatus.textContent = `⏳ ${s.message}`
+      } else if (s.state === 'error') {
+        buildStatus.textContent = `❌ ${s.message}`
+      } else if (s.state === 'done') {
+        buildStatus.textContent = `✅ ${s.message}`
+      }
+    })
+
     try {
       const result = await window.aihub.buildExe()
       if (result.cancelled) {
         buildStatus.textContent = '已取消生成'
       } else if (result.ok) {
-        buildStatus.textContent = result.message
+        buildStatus.textContent = `✅ ${result.message}`
         showToast(result.message, 'var(--st-done)')
       } else {
-        buildStatus.textContent = result.message
+        const hint = result.missing
+          ? { nsis: '请安装 NSIS 后重试', backend: '后端打包失败，见弹窗', python: '请配置 Python 环境' }[
+              result.missing
+            ]
+          : ''
+        buildStatus.textContent = `❌ ${result.message}${hint ? `（${hint}）` : ''}`
         showToast('生成失败，详见状态说明', 'var(--st-fail)')
       }
     } catch (err) {
       const msg = err instanceof Error ? err.message : '生成失败'
-      buildStatus.textContent = msg
+      buildStatus.textContent = `❌ ${msg}`
       showToast(msg, 'var(--st-fail)')
     } finally {
       buildBtn.disabled = false
+      cleanupPackagingStatus?.()
+      cleanupPackagingStatus = null
     }
   }
 

@@ -3,6 +3,7 @@
 import sys
 from pathlib import Path
 
+from conftest import TEST_DB_NAME
 from app.database.mysql import _config_candidates, _resource_path
 from app.logging_config import log_dir
 
@@ -16,7 +17,7 @@ def test_status_endpoint(client):
     assert body["status"] == "ok"
     assert body["version"]
     assert body["db"]["ok"] is True
-    assert body["db"]["database"] == "test_mysql"
+    assert body["db"]["database"] == TEST_DB_NAME
     assert isinstance(body["tasks"], int)
     assert isinstance(body["events"], int)
     assert body["logFile"].endswith("backend.log")
@@ -25,6 +26,7 @@ def test_status_endpoint(client):
 
 def test_config_candidates_priority(monkeypatch, tmp_path):
     explicit = tmp_path / "explicit.env"
+    explicit.write_text("")  # must exist for AIHUB_CONFIG to be accepted
     monkeypatch.setenv("AIHUB_CONFIG", str(explicit))
     monkeypatch.setenv("APPDATA", str(tmp_path))
     candidates = _config_candidates()

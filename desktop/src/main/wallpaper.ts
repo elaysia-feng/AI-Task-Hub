@@ -2,6 +2,7 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { app, dialog, BrowserWindow } from 'electron'
 import type { WallpaperPrefs, WallpaperState } from '../shared/types'
+import { readPrefs, writePrefs } from './prefs'
 
 const MAX_BYTES = 15 * 1024 * 1024
 const ALLOWED_EXT = new Set(['.jpg', '.jpeg', '.png', '.webp', '.bmp'])
@@ -18,13 +19,12 @@ function wallpaperDir(): string {
   return dir
 }
 
-function prefsPath(): string {
-  return path.join(app.getPath('userData'), 'ui-preferences.json')
-}
-
 function currentImagePath(): string | null {
-  const dir = wallpaperDir()
-  for (const name of fs.readdirSync(dir)) {
+  let dir: string
+  try { dir = wallpaperDir() } catch { return null }
+  let names: string[]
+  try { names = fs.readdirSync(dir) } catch { return null }
+  for (const name of names) {
     if (name.startsWith('current.') && ALLOWED_EXT.has(path.extname(name).toLowerCase())) {
       return path.join(dir, name)
     }
@@ -58,23 +58,16 @@ function clampPrefs(input: Partial<WallpaperPrefs> | undefined): WallpaperPrefs 
 }
 
 function readStoredPrefs(): WallpaperPrefs {
-  try {
-    const raw = JSON.parse(fs.readFileSync(prefsPath(), 'utf-8')) as { wallpaper?: Partial<WallpaperPrefs> }
-    return clampPrefs(raw.wallpaper)
-  } catch {
-    return { ...DEFAULT_WALLPAPER_PREFS }
-  }
+  const raw = readPrefs() as { wallpaper?: Partial<WallpaperPrefs> }
+  return clampPrefs(raw.wallpaper)
 }
 
 function writeStoredPrefs(prefs: WallpaperPrefs): void {
-  let existing: Record<string, unknown> = {}
-  try {
-    existing = JSON.parse(fs.readFileSync(prefsPath(), 'utf-8')) as Record<string, unknown>
-  } catch {
-    existing = {}
-  }
-  existing.wallpaper = prefs
-  fs.writeFileSync(prefsPath(), JSON.stringify(existing, null, 2), 'utf-8')
+  // 与 orb.ts 的 saveOrbPos 共用同一原子写路径，避免两套读写把对方的键覆盖掉（M17）
+  writePrefs((existing) => {
+    existing.wallpaper = prefs
+    return existing
+  })
 }
 
 function toDataUrl(filePath: string): string | null {
@@ -125,8 +118,12 @@ export async function pickWallpaper(win: BrowserWindow | null): Promise<Wallpape
 
   const dir = wallpaperDir()
   // 清掉旧 current.*
-  for (const name of fs.readdirSync(dir)) {
-    if (name.startsWith('current.')) fs.unlinkSync(path.join(dir, name))
+  let oldNames: string[]
+  try { oldNames = fs.readdirSync(dir) } catch { oldNames = [] }
+  for (const name of oldNames) {
+    if (name.startsWith('current.')) {
+      try { fs.unlinkSync(path.join(dir, name)) } catch { /* ignore */ }
+    }
   }
   const dest = path.join(dir, `current${ext}`)
   fs.copyFileSync(src, dest)
@@ -134,15 +131,41 @@ export async function pickWallpaper(win: BrowserWindow | null): Promise<Wallpape
 }
 
 export function clearWallpaper(): WallpaperState {
-  const dir = wallpaperDir()
-  for (const name of fs.readdirSync(dir)) {
+  let dir: string
+  try { dir = wallpaperDir() } catch { return getWallpaperState() }
+  let names: string[]
+  try { names = fs.readdirSync(dir) } catch { names = [] }
+  for (const name of names) {
     if (name.startsWith('current.')) {
-      try {
-        fs.unlinkSync(path.join(dir, name))
-      } catch {
-        // ignore
-      }
+      try { fs.unlinkSync(path.join(dir, name)) } catch { /* ignore */ }
     }
   }
   return getWallpaperState()
+}
+
+/** 小球面板壁纸操作弹窗：返回用户选择的操作 */
+export async function showWallpaperDialog(win: BrowserWindow | null): Promise<'pick' | 'clear' | 'cancel'> {
+  const buttons = ['取消', '选择壁纸…', '清除壁纸']
+  const result = win
+    ? await dialog.showMessageBox(win, {
+        type: 'question',
+        buttons,
+        defaultId: 1,
+        cancelId: 0,
+        title: '壁纸',
+        message: '壁纸设置',
+        detail: '选择一张桌面壁纸作为悬浮球背景，或清除当前壁纸。',
+      })
+    : await dialog.showMessageBox({
+        type: 'question',
+        buttons,
+        defaultId: 1,
+        cancelId: 0,
+        title: '壁纸',
+        message: '壁纸设置',
+        detail: '选择一张桌面壁纸作为悬浮球背景，或清除当前壁纸。',
+      })
+  if (result.response === 1) return 'pick'
+  if (result.response === 2) return 'clear'
+  return 'cancel'
 }

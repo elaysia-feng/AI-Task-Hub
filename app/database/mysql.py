@@ -1,12 +1,16 @@
+import logging
 import os
 import sys
 import threading
+from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Optional
 
 import pymysql
 from pymysql.cursors import DictCursor
+
+logger = logging.getLogger(__name__)
 
 _PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
 
@@ -26,7 +30,13 @@ def _config_candidates() -> list[Path]:
     """配置文件候选，按优先级排列：显式指定 > 用户级 > 仓库开发态。"""
     candidates: list[Path] = []
     if os.environ.get("AIHUB_CONFIG"):
-        candidates.append(Path(os.environ["AIHUB_CONFIG"]))
+        try:
+            p = Path(os.environ["AIHUB_CONFIG"]).resolve(strict=True)
+            # 只接受绝对路径，防路径遍历攻击
+            if p.is_absolute():
+                candidates.append(p)
+        except (OSError, ValueError):
+            pass  # 静默忽略非法 env 值
     appdata = os.environ.get("APPDATA")
     if appdata:
         candidates.append(Path(appdata) / "AI Task Hub" / "config.env")
@@ -98,7 +108,11 @@ class Database:
         )
         if with_database:
             kwargs["database"] = self.config.database
-        return pymysql.connect(**kwargs)
+        conn = pymysql.connect(**kwargs)
+        # 5 秒查询超时，防止慢查询长期持锁
+        with conn.cursor() as cursor:
+            cursor.execute("SET SESSION MAX_EXECUTION_TIME = 5000")
+        return conn
 
     def _ensure_database(self) -> None:
         """库不存在则自动创建，免去手动建库步骤。"""
@@ -113,14 +127,49 @@ class Database:
             conn.close()
 
     def _init_schema(self) -> None:
+        import re
+
         statements = [
             stmt.strip()
             for stmt in _SCHEMA_PATH.read_text(encoding="utf-8").split(";")
             if stmt.strip()
         ]
-        with self._lock, self._conn.cursor() as cursor:
-            for stmt in statements:
-                cursor.execute(stmt)
+        created_tables: list[str] = []
+        try:
+            with self.transaction():
+                with self._conn.cursor() as cursor:
+                    for stmt in statements:
+                        stmt_upper = stmt.upper()
+                        table_name: Optional[str] = None
+                        if stmt_upper.startswith("CREATE TABLE"):
+                            m = re.search(
+                                r"CREATE\s+TABLE\s+(?:`([^`]+)`|(\w+))",
+                                stmt_upper,
+                                re.IGNORECASE,
+                            )
+                            table_name = (m.group(1) or m.group(2)) if m else None
+                        cursor.execute(stmt)
+                        if table_name:
+                            created_tables.append(table_name)
+        except Exception:
+            # DDL statements commit automatically in MySQL, so we cannot truly rollback.
+            # On failure, drop any tables that were successfully created to leave
+            # the schema in a clean state, then re-raise.
+            with self._lock:
+                try:
+                    conn = self._connect(with_database=True)
+                    try:
+                        with conn.cursor() as cursor:
+                            for tbl in reversed(created_tables):
+                                cursor.execute(f"DROP TABLE IF EXISTS `{tbl}`")
+                    finally:
+                        conn.close()
+                    self._conn = self._connect(with_database=True)
+                except Exception:
+                    logger.exception(
+                        "schema cleanup after init failure also failed; schema may be partially initialised"
+                    )
+            raise
 
     def _cursor(self):
         # 长时间空闲后 MySQL 会断开连接：ping 失败则整体重建连接
@@ -130,20 +179,58 @@ class Database:
             self._conn = self._connect(with_database=True)
         return self._conn.cursor()
 
+    def execute_many(self, sql: str, params: list[tuple]):
+        """批量执行同一条 SQL，返回 cursor（带 rowcount）。
+
+        注意：本方法默认 autocommit=True 行为，必须在 transaction() 块内调用才能参与同一事务。
+        INSERT IGNORE 时 rowcount 为实际插入行数（被跳过的行不计）。
+        """
+        with self._lock, self._cursor() as cursor:
+            cursor.executemany(sql, params)
+            return cursor
+
     def execute(self, sql: str, params: tuple = ()):
+        """执行写SQL并返回cursor。注意：必须在transaction()块内调用才参与事务；否则每条语句立即提交。"""
         with self._lock, self._cursor() as cursor:
             cursor.execute(sql, params)
             return cursor
 
     def query_one(self, sql: str, params: tuple = ()) -> Optional[dict]:
+        """查询单行。注意：必须在transaction()块内调用才参与事务；否则每条语句立即提交。"""
         with self._lock, self._cursor() as cursor:
             cursor.execute(sql, params)
             return cursor.fetchone()
 
     def query_all(self, sql: str, params: tuple = ()) -> list[dict]:
+        """查询多行。注意：必须在transaction()块内调用才参与事务；否则每条语句立即提交。"""
         with self._lock, self._cursor() as cursor:
             cursor.execute(sql, params)
             return list(cursor.fetchall())
+
+    @contextmanager
+    def transaction(self):
+        """在单连接上执行短事务；RLock 允许仓库方法在事务内复用。
+
+        事务期间 autocommit 设为 False，锁保持到事务结束，防止其他线程
+        在事务执行期间交错查询同一连接。
+
+        重要约束：必须在 transaction() 块内调用本类其他 DB 方法（execute,
+        query_one, query_all, execute_many）才能参与同一事务；每个方法使用
+        独立 cursor 但共享 connection 级 autocommit 状态——在事务外调用时每条
+        语句自动提交（autocommit=True 的默认行为）。
+        """
+        with self._lock:
+            self._conn.autocommit(False)
+            self._conn.begin()
+            try:
+                yield
+                self._conn.commit()
+            except Exception:
+                # 失败路径在这里统一 rollback；finally 不再重复 rollback（原实现双重回滚，M7）
+                self._conn.rollback()
+                raise
+            finally:
+                self._conn.autocommit(True)
 
     def close(self) -> None:
         with self._lock:

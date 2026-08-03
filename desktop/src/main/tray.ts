@@ -1,5 +1,5 @@
 import path from 'node:path'
-import { app, Menu, nativeImage, Tray, type MenuItemConstructorOptions } from 'electron'
+import { Menu, nativeImage, Tray, type MenuItemConstructorOptions } from 'electron'
 import { RESOURCES_DIR } from './config'
 
 export interface TrayCallbacks {
@@ -41,10 +41,4 @@ export function createTray(callbacks: TrayCallbacks): TrayHandle {
   buildMenu(null)
 
   return { tray, setUpdateReady: buildMenu }
-}
-
-/** macOS 上退出前清理（Windows 由系统回收） */
-export function destroyTray(tray: Tray | null): void {
-  if (tray && process.platform !== 'win32') tray.destroy()
-  void app
 }

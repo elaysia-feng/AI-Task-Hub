@@ -1,10 +1,11 @@
-# 生成应用图标：渐变圆角方块 + 白色 hub 图形
+# 生成应用图标：石墨圆角方块 + 四向汇聚 hub 图形
 # 输出：icon.png / tray.png / icon.ico（多尺寸，供 electron-builder 与 PyInstaller）
 # 用法：pwsh scripts/make-icon.ps1
 param(
     [string]$OutDir = (Join-Path $PSScriptRoot '..\resources')
 )
 
+$ErrorActionPreference = 'Stop'
 Add-Type -AssemblyName System.Drawing
 
 function New-RoundedRectPath([float]$x, [float]$y, [float]$w, [float]$h, [float]$r) {
@@ -28,37 +29,62 @@ function New-HubBitmap([int]$size) {
     $rect = New-Object System.Drawing.Rectangle(0, 0, $size, $size)
     $brush = New-Object System.Drawing.Drawing2D.LinearGradientBrush(
         $rect,
-        [System.Drawing.Color]::FromArgb(255, 99, 102, 241),
-        [System.Drawing.Color]::FromArgb(255, 168, 85, 247),
-        45
+        [System.Drawing.Color]::FromArgb(255, 49, 58, 61),
+        [System.Drawing.Color]::FromArgb(255, 23, 27, 29),
+        55
     )
-    $radius = [Math]::Max(1, $size * 0.22)
-    $roundPath = New-RoundedRectPath 0 0 $size $size $radius
+    $inset = [Math]::Max(0, $size * 0.025)
+    $radius = [Math]::Max(1, $size * 0.24)
+    $roundPath = New-RoundedRectPath $inset $inset ($size - $inset * 2) ($size - $inset * 2) $radius
     $g.FillPath($brush, $roundPath)
 
-    $white = [System.Drawing.Color]::White
-    $nodeR = [Math]::Max(1, $size * 0.085)
-    $cx = $size / 2
-    $topY = $size * 0.30
-    $leftX = $size * 0.30; $botY = $size * 0.68
-    $rightX = $size * 0.70
+    $borderPen = New-Object System.Drawing.Pen(
+        [System.Drawing.Color]::FromArgb(72, 255, 255, 255),
+        [Math]::Max(1, $size * 0.008)
+    )
+    $g.DrawPath($borderPen, $roundPath)
 
-    $pen = New-Object System.Drawing.Pen($white, [Math]::Max(1, $size * 0.05))
+    $ivory = [System.Drawing.Color]::FromArgb(255, 247, 243, 235)
+    $coral = [System.Drawing.Color]::FromArgb(255, 223, 118, 84)
+    $ink = [System.Drawing.Color]::FromArgb(255, 32, 38, 41)
+    $cx = $size / 2
+    $cy = $size / 2
+    $outer = @(
+        @(($size * 0.29), ($size * 0.29)),
+        @(($size * 0.71), ($size * 0.29)),
+        @(($size * 0.29), ($size * 0.71)),
+        @(($size * 0.71), ($size * 0.71))
+    )
+
+    $pen = New-Object System.Drawing.Pen($ivory, [Math]::Max(1, $size * 0.047))
     $pen.StartCap = [System.Drawing.Drawing2D.LineCap]::Round
     $pen.EndCap = [System.Drawing.Drawing2D.LineCap]::Round
-    $g.DrawLine($pen, $cx, $topY, $leftX, $botY)
-    $g.DrawLine($pen, $cx, $topY, $rightX, $botY)
-    $g.DrawLine($pen, $leftX, $botY, $rightX, $botY)
+    foreach ($pt in $outer) {
+        $g.DrawLine($pen, $cx, $cy, $pt[0], $pt[1])
+    }
 
-    $nodeBrush = New-Object System.Drawing.SolidBrush($white)
-    foreach ($pt in @(@($cx, $topY), @($leftX, $botY), @($rightX, $botY))) {
+    $nodeR = [Math]::Max(1, $size * 0.055)
+    $nodeBrush = New-Object System.Drawing.SolidBrush($ivory)
+    foreach ($pt in $outer) {
         $g.FillEllipse($nodeBrush, $pt[0] - $nodeR, $pt[1] - $nodeR, $nodeR * 2, $nodeR * 2)
     }
 
+    $centerR = [Math]::Max(1.5, $size * 0.115)
+    $centerBrush = New-Object System.Drawing.SolidBrush($coral)
+    $g.FillEllipse($centerBrush, $cx - $centerR, $cy - $centerR, $centerR * 2, $centerR * 2)
+
+    $coreR = [Math]::Max(0.7, $size * 0.038)
+    $coreBrush = New-Object System.Drawing.SolidBrush($ink)
+    $g.FillEllipse($coreBrush, $cx - $coreR, $cy - $coreR, $coreR * 2, $coreR * 2)
+
     $g.Dispose()
     $brush.Dispose()
+    $borderPen.Dispose()
     $pen.Dispose()
     $nodeBrush.Dispose()
+    $centerBrush.Dispose()
+    $coreBrush.Dispose()
+    $roundPath.Dispose()
     return $bmp
 }
 

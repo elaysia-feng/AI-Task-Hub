@@ -1,5 +1,8 @@
 import path from 'node:path'
+import { fileURLToPath } from 'node:url'
 import { app } from 'electron'
+
+const __dirname = path.dirname(fileURLToPath(import.meta.url))
 
 /** 仓库根目录（desktop/out/main → 上三级），开发模式下用于拉起 Python 后端 */
 export const REPO_ROOT = path.resolve(__dirname, '..', '..', '..')

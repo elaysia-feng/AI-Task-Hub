@@ -19,6 +19,7 @@ class EventType(str, Enum):
     TASK_COMPLETED = "TASK_COMPLETED"
     TASK_FAILED = "TASK_FAILED"
     TASK_VIEWED = "TASK_VIEWED"
+    TASK_IGNORED = "TASK_IGNORED"
 
 
 class AgentEvent(BaseModel):

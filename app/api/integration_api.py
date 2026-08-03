@@ -39,7 +39,20 @@ _CODEX_CHAIN_MARKER = "notify_chain.py"
 
 
 def _venv_python() -> str:
-    return str(_REPO_ROOT / ".venv" / "Scripts" / "python.exe")
+    """后端虚拟环境 Python 的绝对路径（会被拼进 settings.json / config.toml 命令）。
+
+    A31：路径来自仓库固定位置，但作为命令拼接进配置文件，必须校验为绝对路径
+    且不含引号/换行，防止破坏命令拼接或注入；缺失时告警而不是静默写坏配置。
+    """
+    exe = _REPO_ROOT / ".venv" / "Scripts" / "python.exe"
+    text = str(exe)
+    if not exe.is_absolute():
+        raise ValueError(f"_venv_python: 需要绝对路径，收到 {text!r}")
+    if any(c in text for c in ('"', "\n", "\r")):
+        raise ValueError(f"_venv_python: 路径含引号/换行，拒绝写入配置: {text!r}")
+    if not exe.is_file():
+        logger.warning("虚拟环境 Python 不存在（%s），写入的钩子/notify 命令将不可用", exe)
+    return text
 
 
 def _codex_processes() -> list[dict[str, Any]]:

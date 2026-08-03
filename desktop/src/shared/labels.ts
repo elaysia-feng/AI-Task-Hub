@@ -27,8 +27,9 @@ export const STATUS_LABELS: Record<string, string> = {
 
 const NOISE_PREFIXES = ['<task-notification', '<task-', '<teammate', '<agent-', 'system:']
 const LOG_LINE_RE = /^\d{1,2}:\d{2}:\d{2}\b/
+// 注意：不包含 `from\s`——"from xxx" 常见于自然语言标题，误判成代码会隐藏真实任务（LOW）
 const CODE_START_RE =
-  /^(if\s*\(|function\s|const\s|let\s|var\s|import\s|from\s|def\s|class\s|export\s|#include)/
+  /^(if\s*\(|function\s|const\s|let\s|var\s|import\s|def\s|class\s|export\s|#include)/
 const GENERIC_WAIT_RE = /waiting for your input|needs your permission|claude code 等待/i
 const XML_TAG_RE =
   /<(summary|title|message|description|subject|task|content)[^>]*>([\s\S]*?)<\/\1>/i

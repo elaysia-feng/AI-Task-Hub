@@ -1,6 +1,9 @@
 import './orb.css'
-import type { HubTask, TaskStatus } from '../../shared/types'
+import type { HubTask, TaskStatus, WallpaperState } from '../../shared/types'
 import { SOURCE_LABELS, STATUS_LABELS, displayTitle } from '../../shared/labels'
+import { state, subscribe } from './state'
+import { BRAND_MARK_SVG } from './ui/dom'
+import { applyWallpaper } from './ui/wallpaper'
 
 const STATUS_COLOR: Record<string, string> = {
   RUNNING: '#38bdf8',
@@ -8,9 +11,6 @@ const STATUS_COLOR: Record<string, string> = {
   COMPLETED_UNREAD: '#22c55e',
   FAILED_UNREAD: '#ef4444',
 }
-
-const LOGO_SVG =
-  '<svg viewBox="0 0 24 24" fill="none"><circle cx="12" cy="12" r="2.6" fill="#fff"/><circle cx="5" cy="7" r="1.85" fill="#fff"/><circle cx="19" cy="7" r="1.85" fill="#fff"/><circle cx="5" cy="17" r="1.85" fill="#fff"/><circle cx="19" cy="17" r="1.85" fill="#fff"/><path d="M6.6 8 10.1 10.4M17.4 8 13.9 10.4M6.6 16 10.1 13.6M17.4 16 13.9 13.6" stroke="#fff" stroke-width="1.65" stroke-linecap="round"/></svg>'
 
 let queue: HubTask[] = []
 let leaveTimer: number | null = null
@@ -22,6 +22,28 @@ let pressY = 0
 let mounted = false
 
 const STATUS_ORDER: TaskStatus[] = ['RUNNING', 'NEEDS_INPUT', 'FAILED_UNREAD', 'COMPLETED_UNREAD']
+
+/** 壁纸状态缓存，供 orb 面板壁纸按钮使用 */
+let wallpaperState: WallpaperState | null = null
+
+async function refreshWallpaper(): Promise<void> {
+  try {
+    wallpaperState = await window.aihub.getWallpaper()
+    applyWallpaper(wallpaperState)
+    updateWallpaperToggle()
+  } catch {
+    // 主进程尚未就绪
+  }
+}
+
+function updateWallpaperToggle(): void {
+  const toggle = document.querySelector('.orb-bg-toggle') as HTMLElement | null
+  if (!toggle) return
+  const hasWallpaper = wallpaperState?.hasImage && wallpaperState?.dataUrl
+  toggle.classList.toggle('active', !!hasWallpaper)
+  toggle.textContent = hasWallpaper ? '🌄 已设' : '🌄 壁纸'
+  toggle.title = hasWallpaper ? '更换 / 清除壁纸' : '选择一张桌面壁纸'
+}
 
 export function mountOrb(): void {
   if (mounted) return
@@ -38,13 +60,14 @@ export function mountOrb(): void {
   ball.className = 'orb-ball'
   ball.type = 'button'
   ball.title = '拖动移动 · 点击打开面板 · 悬停查看任务'
-  ball.innerHTML = `<span class="orb-ring"></span><span class="orb-core">${LOGO_SVG}</span><span class="orb-count hidden">0</span>`
+  ball.innerHTML = `<span class="orb-ring"></span><span class="orb-core">${BRAND_MARK_SVG}</span><span class="orb-count hidden">0</span>`
 
   const panel = document.createElement('div')
   panel.className = 'orb-panel'
   panel.innerHTML = `
     <div class="orb-panel-head">
       <h2>任务概览</h2>
+      <button type="button" class="orb-bg-toggle" title="选择一张桌面壁纸">🌄 壁纸</button>
       <span class="hint">拖动可移动</span>
     </div>
     <div class="orb-stats"></div>
@@ -263,8 +286,42 @@ export function mountOrb(): void {
     await reload()
   })
 
-  window.aihub.onTaskChanged(() => {
-    void reload()
+  // 壁纸切换：单击换壁纸，如果已有壁纸则弹出选择（可换或清除）
+  const bgToggle = panel.querySelector('.orb-bg-toggle') as HTMLElement
+  bgToggle.addEventListener('click', async (e) => {
+    e.stopPropagation()
+    try {
+      const hasWallpaper = wallpaperState?.hasImage && wallpaperState?.dataUrl
+      let next: WallpaperState | null = null
+      if (hasWallpaper) {
+        const action = await window.aihub.showWallpaperDialog()
+        if (action === 'clear') {
+          next = await window.aihub.clearWallpaper()
+        } else if (action === 'pick') {
+          next = await window.aihub.pickWallpaper()
+        }
+        // 'cancel' → next 保持 null，什么都不做
+      } else {
+        next = await window.aihub.pickWallpaper()
+      }
+      if (next) {
+        wallpaperState = next
+        applyWallpaper(wallpaperState)
+        updateWallpaperToggle()
+      }
+    } catch {
+      // 对话框被中断或主进程出错：保持现有壁纸状态，不产生未处理 rejection
+    }
+  })
+
+  // 初始加载壁纸状态
+  void refreshWallpaper()
+
+  // 订阅共享状态而非重复注册 onTaskChanged：main.ts 已统一监听并 reload 更新 state.queue，
+  // 这里只随 state 重渲染，避免每个事件触发两次 reload（M20）
+  subscribe(() => {
+    queue = state.queue
+    render()
   })
 
   void reload()
@@ -279,7 +336,7 @@ export function applyUiMode(mode: 'panel' | 'orb'): void {
   if (mode === 'orb') {
     mountOrb()
     if (app) app.style.display = 'none'
-    if (wall) wall.style.display = 'none'
+    // 保留壁纸在 orb 模式可见，作为背景层
     const root = document.getElementById('orb-root')
     if (root) root.style.display = 'block'
   } else {

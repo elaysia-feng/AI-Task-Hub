@@ -13,7 +13,7 @@
     },
     "eventType": {
       "type": "string",
-      "enum": ["TASK_STARTED", "TASK_NEEDS_INPUT", "TASK_COMPLETED", "TASK_FAILED", "TASK_VIEWED"],
+      "enum": ["TASK_STARTED", "TASK_NEEDS_INPUT", "TASK_COMPLETED", "TASK_FAILED", "TASK_VIEWED", "TASK_IGNORED"],
       "description": "事件类型"
     },
     "externalTaskId": {

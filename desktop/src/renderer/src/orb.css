@@ -1,4 +1,7 @@
-/* 悬浮球：仅在 data-mode=orb 时生效，避免污染主面板布局 */
+/* ────────────────────────────────────────────────
+   AI Task Hub · Orb 悬浮球
+   玻璃拟态球体 + 悬停展开任务面板
+   ──────────────────────────────────────────────── */
 
 * {
   box-sizing: border-box;
@@ -18,6 +21,8 @@
   color: #e8eaf0;
   user-select: none;
   -webkit-font-smoothing: antialiased;
+  /* 壁纸层铺满窗口，球和面板浮在壁纸上 */
+  z-index: 0;
 }
 
 html[data-mode='orb'] {
@@ -39,195 +44,252 @@ html[data-mode='orb'] #orb-root {
   display: block;
 }
 
-html[data-mode='orb'] #app,
-html[data-mode='orb'] #wallpaper {
+html[data-mode='orb'] #app {
   display: none !important;
 }
 
-/* ---------- 球（收起时铺满整窗，避免缩窗失败时看不见） ---------- */
+/* 壁纸在 orb 模式也保留，展开展示 */
+html[data-mode='orb'] #wallpaper {
+  display: block !important;
+}
+
+/* 注册自定义属性类型，使 keyframe 动画可插值 */
+@property --glow-alpha {
+  syntax: '<number>';
+  inherits: true;
+  initial-value: 0;
+}
+
+/* ───────── 球体（收起时撑满 44px 窗）───────── */
 
 .orb-ball {
+  --tone: #df7654;
+  --glow-alpha: 0;
+
   position: absolute;
-  left: 4px;
-  top: 4px;
-  right: 4px;
-  bottom: 4px;
+  inset: 4px;
   width: auto;
   height: auto;
-  min-width: 32px;
-  min-height: 32px;
+  min-width: 28px;
+  min-height: 28px;
   border-radius: 50%;
   pointer-events: auto;
   cursor: grab;
   display: grid;
   place-items: center;
   -webkit-app-region: no-drag;
-  background:
-    radial-gradient(circle at 32% 28%, rgba(255, 255, 255, 0.28), transparent 42%),
-    linear-gradient(145deg, #4f46e5 0%, #7c3aed 48%, #2563eb 100%);
-  border: 1.5px solid rgba(255, 255, 255, 0.28);
-  box-shadow:
-    0 6px 16px rgba(0, 0, 0, 0.4),
-    0 0 0 1px rgba(99, 102, 241, 0.25),
-    inset 0 1px 0 rgba(255, 255, 255, 0.22);
-  transition:
-    transform 0.2s cubic-bezier(0.22, 1, 0.36, 1),
-    box-shadow 0.2s ease;
   z-index: 2;
+
+  /* 多层渐变模拟玻璃球体高光 + 折射 */
+  background:
+    /* 顶部高光 */ radial-gradient(
+      ellipse 75% 35% at 50% 22%,
+      rgba(255, 255, 255, 0.18) 0%,
+      transparent 70%
+    ),
+    /* 底部反光 */ radial-gradient(
+      ellipse 60% 30% at 50% 88%,
+      rgba(255, 255, 255, 0.06) 0%,
+      transparent 65%
+    ),
+    /* 球体主色 */ radial-gradient(
+        circle at 38% 32%,
+        color-mix(in srgb, var(--tone) 55%, #fff) 0%,
+        color-mix(in srgb, var(--tone) 75%, #1a1d24) 38%,
+        color-mix(in srgb, var(--tone) 95%, #0c0e14) 100%
+      );
+
+  border: 1.5px solid color-mix(in srgb, var(--tone) 50%, rgba(255, 255, 255, 0.5));
+
+  box-shadow:
+    /* 外发光 */ 0 0 18px rgba(223, 118, 84, calc(var(--glow-alpha) * 0.55)),
+    0 0 38px rgba(223, 118, 84, calc(var(--glow-alpha) * 0.3)),
+    /* 投影 */ 0 8px 22px rgba(0, 0, 0, 0.45),
+    /* 内高光 */ inset 0 1.5px 0 rgba(255, 255, 255, 0.28),
+    /* 内缘 */ inset 0 0 0 1px rgba(255, 255, 255, 0.06);
+
+  transition:
+    transform 0.28s cubic-bezier(0.22, 1, 0.36, 1),
+    box-shadow 0.28s ease,
+    --glow-alpha 0.35s ease;
 }
 
+/* 收起：球撑满窗口 */
 html[data-mode='orb'] .orb-root:not(.expanded) .orb-ball {
-  /* 收起：球撑满 44px 窗口 */
-  inset: 2px;
+  inset: 3px;
 }
 
+/* 展开：球缩到右下角 */
 html[data-mode='orb'] .orb-root.expanded .orb-ball {
   left: auto;
   top: auto;
-  right: 4px;
-  bottom: 4px;
+  right: 6px;
+  bottom: 6px;
   width: 36px;
   height: 36px;
 }
 
+/* ───────── 悬停 / 展开态 ───────── */
+
 .orb-ball:hover,
 .orb-root.expanded .orb-ball {
-  transform: scale(1.08);
-  box-shadow:
-    0 8px 20px rgba(0, 0, 0, 0.48),
-    0 0 0 1px rgba(165, 180, 252, 0.45),
-    inset 0 1px 0 rgba(255, 255, 255, 0.28);
+  --glow-alpha: 1;
+  transform: scale(1.07);
 }
 
 .orb-ball.dragging {
   cursor: grabbing;
-  transform: scale(1.1);
+  transform: scale(1.12);
   transition: none;
+  --glow-alpha: 1;
 }
 
+/* ───────── 状态色调 ───────── */
+
 .orb-ball.pulse {
-  animation: orb-pulse 1.8s ease-in-out infinite;
+  animation: orb-breathe 2.2s ease-in-out infinite;
 }
 
 .orb-ball[data-tone='run'] {
-  background:
-    radial-gradient(circle at 32% 28%, rgba(255, 255, 255, 0.28), transparent 42%),
-    linear-gradient(145deg, #0ea5e9 0%, #2563eb 55%, #4f46e5 100%);
+  --tone: #38bdf8;
 }
-
 .orb-ball[data-tone='input'] {
-  background:
-    radial-gradient(circle at 32% 28%, rgba(255, 255, 255, 0.28), transparent 42%),
-    linear-gradient(145deg, #f59e0b 0%, #ea580c 55%, #db2777 100%);
+  --tone: #f59e0b;
 }
-
 .orb-ball[data-tone='fail'] {
-  background:
-    radial-gradient(circle at 32% 28%, rgba(255, 255, 255, 0.28), transparent 42%),
-    linear-gradient(145deg, #ef4444 0%, #e11d48 55%, #7c3aed 100%);
+  --tone: #ef4444;
 }
-
 .orb-ball[data-tone='done'] {
-  background:
-    radial-gradient(circle at 32% 28%, rgba(255, 255, 255, 0.28), transparent 42%),
-    linear-gradient(145deg, #22c55e 0%, #10b981 55%, #0ea5e9 100%);
+  --tone: #22c55e;
 }
-
 .orb-ball[data-tone='idle'] {
-  background:
-    radial-gradient(circle at 32% 28%, rgba(255, 255, 255, 0.22), transparent 42%),
-    linear-gradient(145deg, #6366f1 0%, #4f46e5 50%, #312e81 100%);
-  opacity: 0.92;
+  --tone: #df7654;
 }
 
-@keyframes orb-pulse {
+@keyframes orb-breathe {
   0%,
   100% {
-    box-shadow:
-      0 10px 28px rgba(0, 0, 0, 0.45),
-      0 0 0 0 rgba(56, 189, 248, 0.45);
+    --glow-alpha: 0.5;
+    transform: scale(1);
   }
-  50% {
-    box-shadow:
-      0 10px 28px rgba(0, 0, 0, 0.45),
-      0 0 0 10px rgba(56, 189, 248, 0);
+  40% {
+    --glow-alpha: 1;
+    transform: scale(1.06);
+  }
+  70% {
+    --glow-alpha: 0.7;
+    transform: scale(1.02);
   }
 }
 
+/* ───────── 内圈流光 ───────── */
+
+.orb-ring {
+  position: absolute;
+  inset: -2.5px;
+  border-radius: 50%;
+  pointer-events: none;
+  border: 2px solid transparent;
+  opacity: 0;
+  transition: opacity 0.3s;
+}
+
+.orb-ball[data-tone='run'] .orb-ring,
+.orb-ball[data-tone='input'] .orb-ring {
+  opacity: 1;
+  animation: ring-spin 6s linear infinite;
+}
+
+.orb-ball[data-tone='run'] .orb-ring {
+  border-top-color: rgba(56, 189, 248, 0.55);
+  border-right-color: rgba(56, 189, 248, 0.25);
+}
+.orb-ball[data-tone='input'] .orb-ring {
+  border-top-color: rgba(245, 158, 11, 0.6);
+  border-right-color: rgba(245, 158, 11, 0.28);
+}
+
+@keyframes ring-spin {
+  from {
+    transform: rotate(0deg);
+  }
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+/* ───────── 中心图标 ───────── */
+
 .orb-core {
-  width: 16px;
-  height: 16px;
+  width: 18px;
+  height: 18px;
   display: grid;
   place-items: center;
+  filter: drop-shadow(0 1px 2px rgba(0, 0, 0, 0.3));
+  pointer-events: none;
 }
 
 .orb-core svg {
-  width: 12px;
-  height: 12px;
+  width: 14px;
+  height: 14px;
+  color: rgba(255, 255, 255, 0.92);
 }
+
+/* ───────── 未读计数 ───────── */
 
 .orb-count {
   position: absolute;
-  top: -3px;
-  right: -3px;
-  min-width: 14px;
-  height: 14px;
-  padding: 0 3px;
+  top: -4px;
+  right: -4px;
+  min-width: 16px;
+  height: 16px;
+  padding: 0 4px;
   border-radius: 999px;
-  font-size: 9px;
+  font-size: 9.5px;
   font-weight: 700;
-  line-height: 14px;
+  line-height: 16px;
   text-align: center;
   color: #fff;
   background: #ef4444;
-  border: 1.5px solid rgba(15, 17, 24, 0.85);
-  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.35);
+  border: 2px solid rgba(12, 14, 20, 0.9);
+  box-shadow: 0 3px 8px rgba(239, 68, 68, 0.35);
+  transition: transform 0.2s cubic-bezier(0.34, 1.56, 0.64, 1);
 }
 
 .orb-count.hidden {
   display: none;
 }
 
-.orb-ring {
-  position: absolute;
-  inset: -2px;
-  border-radius: 50%;
-  border: 1.5px solid transparent;
-  pointer-events: none;
-}
-
-.orb-ball[data-tone='run'] .orb-ring {
-  border-color: rgba(56, 189, 248, 0.55);
-}
-.orb-ball[data-tone='input'] .orb-ring {
-  border-color: rgba(245, 158, 11, 0.6);
-}
-
-/* ---------- 展开面板 ---------- */
+/* ───────── 展开面板（玻璃拟态）───────── */
 
 .orb-panel {
   position: absolute;
-  right: 4px;
-  bottom: 48px;
-  width: calc(100% - 8px);
-  max-width: 280px;
-  max-height: calc(100% - 56px);
+  right: 6px;
+  bottom: 50px;
+  width: calc(100% - 12px);
+  max-width: 272px;
+  max-height: calc(100% - 62px);
   pointer-events: none;
   opacity: 0;
-  transform: translateY(10px) scale(0.96);
+  transform: translateY(12px) scale(0.94);
   transform-origin: bottom right;
   transition:
-    opacity 0.2s ease,
-    transform 0.22s cubic-bezier(0.22, 1, 0.36, 1);
+    opacity 0.25s ease,
+    transform 0.28s cubic-bezier(0.22, 1, 0.36, 1);
   z-index: 1;
   display: flex;
   flex-direction: column;
   gap: 0;
-  padding: 12px;
-  border-radius: 22px;
-  background: rgba(16, 18, 26, 0.88);
-  border: 1px solid rgba(255, 255, 255, 0.12);
-  box-shadow: 0 18px 48px rgba(0, 0, 0, 0.5);
+  padding: 14px;
+  border-radius: 20px;
+  /* 毛玻璃面板（叠在壁纸上或纯黑底上都通透） */
+  background: rgba(15, 17, 23, 0.78);
+  backdrop-filter: blur(28px) saturate(1.2);
+  -webkit-backdrop-filter: blur(28px) saturate(1.2);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  box-shadow:
+    0 20px 56px rgba(0, 0, 0, 0.55),
+    0 0 0 0.5px rgba(255, 255, 255, 0.06) inset;
   overflow: hidden;
 }
 
@@ -236,6 +298,8 @@ html[data-mode='orb'] .orb-root.expanded .orb-ball {
   opacity: 1;
   transform: none;
 }
+
+/* ───────── 面板头部 ───────── */
 
 .orb-panel-head {
   display: flex;
@@ -252,9 +316,11 @@ html[data-mode='orb'] .orb-root.expanded .orb-ball {
 
 .orb-panel-head .hint {
   margin-left: auto;
-  font-size: 10.5px;
-  color: rgba(232, 234, 240, 0.45);
+  font-size: 10px;
+  color: rgba(232, 234, 240, 0.4);
 }
+
+/* ───────── 统计标签 ───────── */
 
 .orb-stats {
   display: flex;
@@ -267,13 +333,13 @@ html[data-mode='orb'] .orb-root.expanded .orb-ball {
   display: inline-flex;
   align-items: center;
   gap: 5px;
-  padding: 4px 9px;
+  padding: 4px 10px;
   border-radius: 999px;
   font-size: 11px;
   font-weight: 600;
-  background: rgba(255, 255, 255, 0.06);
-  border: 1px solid rgba(255, 255, 255, 0.08);
-  color: rgba(232, 234, 240, 0.75);
+  background: rgba(255, 255, 255, 0.05);
+  border: 1px solid rgba(255, 255, 255, 0.07);
+  color: rgba(232, 234, 240, 0.72);
 }
 
 .orb-stat .dot {
@@ -284,21 +350,26 @@ html[data-mode='orb'] .orb-root.expanded .orb-ball {
   box-shadow: 0 0 6px var(--c, transparent);
 }
 
+/* ───────── 任务列表 ───────── */
+
 .orb-list {
   display: flex;
   flex-direction: column;
-  gap: 6px;
+  gap: 5px;
   overflow-y: auto;
-  max-height: 210px;
+  max-height: 200px;
   padding-right: 2px;
 }
 
 .orb-list::-webkit-scrollbar {
-  width: 6px;
+  width: 5px;
 }
 .orb-list::-webkit-scrollbar-thumb {
-  background: rgba(255, 255, 255, 0.15);
+  background: rgba(255, 255, 255, 0.12);
   border-radius: 999px;
+}
+.orb-list::-webkit-scrollbar-thumb:hover {
+  background: rgba(255, 255, 255, 0.22);
 }
 
 .orb-item {
@@ -307,10 +378,10 @@ html[data-mode='orb'] .orb-root.expanded .orb-ball {
   gap: 2px;
   text-align: left;
   width: 100%;
-  padding: 9px 11px 9px 12px;
-  border-radius: 14px;
-  border: 1px solid rgba(255, 255, 255, 0.08);
-  background: rgba(255, 255, 255, 0.04);
+  padding: 8px 10px 8px 10px;
+  border-radius: 12px;
+  border: 1px solid rgba(255, 255, 255, 0.06);
+  background: rgba(255, 255, 255, 0.03);
   color: inherit;
   font: inherit;
   cursor: pointer;
@@ -321,17 +392,17 @@ html[data-mode='orb'] .orb-root.expanded .orb-ball {
 .orb-item::before {
   content: '';
   position: absolute;
-  left: 5px;
-  top: 10px;
-  bottom: 10px;
-  width: 3px;
+  left: 4px;
+  top: 9px;
+  bottom: 9px;
+  width: 2.5px;
   border-radius: 999px;
   background: var(--c, #64748b);
 }
 
 .orb-item:hover {
   background: rgba(255, 255, 255, 0.08);
-  border-color: rgba(255, 255, 255, 0.16);
+  border-color: rgba(255, 255, 255, 0.15);
   transform: translateY(-1px);
 }
 
@@ -339,7 +410,7 @@ html[data-mode='orb'] .orb-root.expanded .orb-ball {
   display: flex;
   align-items: center;
   gap: 6px;
-  padding-left: 6px;
+  padding-left: 5px;
 }
 
 .orb-item-src {
@@ -351,26 +422,31 @@ html[data-mode='orb'] .orb-root.expanded .orb-ball {
 .orb-item-status {
   margin-left: auto;
   font-size: 10px;
-  color: rgba(232, 234, 240, 0.45);
+  color: rgba(232, 234, 240, 0.4);
 }
 
 .orb-item-title {
-  padding-left: 6px;
+  padding-left: 5px;
   font-size: 12.5px;
   font-weight: 600;
   line-height: 1.35;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+  min-width: 0;
 }
 
+/* ───────── 空态 ───────── */
+
 .orb-empty {
-  padding: 22px 12px;
+  padding: 20px 12px;
   text-align: center;
-  color: rgba(232, 234, 240, 0.45);
+  color: rgba(232, 234, 240, 0.4);
   font-size: 12px;
   line-height: 1.5;
 }
+
+/* ───────── 底部按钮 ───────── */
 
 .orb-foot {
   display: flex;
@@ -380,11 +456,11 @@ html[data-mode='orb'] .orb-root.expanded .orb-ball {
 
 .orb-foot button {
   flex: 1;
-  height: 32px;
+  height: 30px;
   border-radius: 999px;
-  border: 1px solid rgba(255, 255, 255, 0.12);
-  background: rgba(255, 255, 255, 0.06);
-  color: rgba(232, 234, 240, 0.85);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  background: rgba(255, 255, 255, 0.05);
+  color: rgba(232, 234, 240, 0.82);
   font-size: 12px;
   font-weight: 550;
   cursor: pointer;
@@ -393,15 +469,58 @@ html[data-mode='orb'] .orb-root.expanded .orb-ball {
 
 .orb-foot button:hover {
   background: rgba(255, 255, 255, 0.12);
-  border-color: rgba(255, 255, 255, 0.22);
+  border-color: rgba(255, 255, 255, 0.2);
 }
 
 .orb-foot button.primary {
-  background: rgba(99, 102, 241, 0.28);
-  border-color: rgba(129, 140, 248, 0.45);
-  color: #e0e7ff;
+  background: rgba(223, 118, 84, 0.22);
+  border-color: rgba(223, 118, 84, 0.45);
+  color: #ffc2aa;
 }
 
 .orb-foot button.primary:hover {
-  background: rgba(99, 102, 241, 0.42);
+  background: rgba(223, 118, 84, 0.34);
+}
+
+/* ───────── 壁纸背景选项（小球面板内）───────── */
+
+.orb-bg-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  margin-left: auto;
+  padding: 2px 8px;
+  border-radius: 999px;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  background: rgba(255, 255, 255, 0.04);
+  color: rgba(232, 234, 240, 0.55);
+  font-size: 9.5px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.15s;
+  line-height: 1.6;
+}
+
+.orb-bg-toggle:hover {
+  background: rgba(255, 255, 255, 0.1);
+  color: rgba(232, 234, 240, 0.85);
+}
+
+.orb-bg-toggle.active {
+  background: rgba(223, 118, 84, 0.18);
+  border-color: rgba(223, 118, 84, 0.4);
+  color: #ffc2aa;
+}
+
+/* ───────── 减少动画 ───────── */
+
+@media (prefers-reduced-motion: reduce) {
+  .orb-ball,
+  .orb-panel,
+  .orb-ring,
+  .orb-item,
+  .orb-count {
+    animation: none !important;
+    transition-duration: 0.01ms !important;
+  }
 }

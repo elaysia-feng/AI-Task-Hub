@@ -2,9 +2,11 @@
 
 import type { HubTask, TaskSource, TaskStatus } from '../../../shared/types'
 import { EVENT_LABELS, SOURCE_LABELS, STATUS_LABELS, displayTitle } from '../../../shared/labels'
-import { emit, filteredTasks, findTask, state } from '../state'
+import { emit, filteredTasks, state } from '../state'
 import { h, showToast, svgIcon, type IconName } from './dom'
 import { formatRelativeTime } from '../time'
+
+type ReloadTasks = () => Promise<boolean>
 
 const QUEUE_SECTIONS: Array<{ status: TaskStatus; title: string; color: string }> = [
   { status: 'RUNNING', title: '执行中', color: 'var(--st-run)' },
@@ -21,12 +23,27 @@ const SOURCE_OPTIONS: Array<{ value: TaskSource | 'all'; label: string }> = [
   { value: 'OTHER', label: '其他' },
 ]
 
-export function renderTasksView(container: HTMLElement): void {
+const VIEW_STATUS_OPTIONS: Record<'queue' | 'history', Array<{ value: TaskStatus | 'all'; label: string }>> = {
+  queue: [
+    { value: 'all', label: '全部' },
+    { value: 'RUNNING', label: '执行中' },
+    { value: 'NEEDS_INPUT', label: '等待输入' },
+    { value: 'COMPLETED_UNREAD', label: '已完成' },
+    { value: 'FAILED_UNREAD', label: '失败' },
+  ],
+  history: [
+    { value: 'all', label: '全部' },
+    { value: 'VIEWED', label: '已查看' },
+    { value: 'IGNORED', label: '已忽略' },
+  ],
+}
+
+export function renderTasksView(container: HTMLElement, reloadTasks: ReloadTasks): void {
   const title = state.view === 'history' ? '历史' : '待处理'
 
-  const clearBtn = makeClearButton()
+  const clearBtn = makeClearButton(reloadTasks)
   clearBtn.disabled = state.queue.length + state.history.length === 0
-  const readAllBtn = makeReadAllButton()
+  const readAllBtn = makeReadAllButton(reloadTasks)
   readAllBtn.disabled = unreadCount() === 0
 
   const summary = summaryText()
@@ -37,23 +54,43 @@ export function renderTasksView(container: HTMLElement): void {
   container.append(
     h('div', 'view-chrome', [
       h('div', 'content-header', headerKids),
+      makeStatusFilters(),
       makeFilterBar(),
     ]),
   )
 
   if (state.backend === 'offline') {
-    container.append(
-      h('div', 'offline-banner', ['本地事件服务未连接，等待自动恢复…恢复后任务会自动同步。']),
-    )
+    const offline = h('div', 'offline-banner', ['本地事件服务未连接，等待自动恢复…恢复后任务会自动同步。'])
+    offline.setAttribute('role', 'status')
+    offline.setAttribute('aria-live', 'polite')
+    container.append(offline)
+  } else if (state.taskLoadState === 'error' && state.queue.length + state.history.length > 0) {
+    const stale = h('div', 'offline-banner stale-banner', ['任务刷新失败，当前显示的是上次缓存结果。'])
+    stale.setAttribute('role', 'status')
+    stale.setAttribute('aria-live', 'polite')
+    container.append(stale)
   }
 
-  const selected = state.selectedTaskId !== null ? findTask(state.selectedTaskId) : undefined
+  if (state.taskLoadState === 'loading') {
+    container.append(makeLoadingState())
+    return
+  }
+  if (state.taskLoadState === 'error' && state.queue.length + state.history.length === 0) {
+    container.append(makeErrorState(reloadTasks))
+    return
+  }
+
+  const visibleTasks = filteredTasks()
+  const selected =
+    state.selectedTaskId !== null
+      ? visibleTasks.find((task) => task.id === state.selectedTaskId)
+      : undefined
   const listArea = h('div', 'list-area')
-  if (state.view === 'queue') renderQueue(listArea)
-  else renderHistory(listArea)
+  if (state.view === 'queue') renderQueue(listArea, reloadTasks)
+  else renderHistory(listArea, reloadTasks)
 
   if (selected) {
-    const body = h('div', 'tasks-split', [listArea, makeDetailPane(selected)])
+    const body = h('div', 'tasks-split', [listArea, makeDetailPane(selected, reloadTasks)])
     container.append(body)
   } else {
     container.append(listArea)
@@ -62,17 +99,75 @@ export function renderTasksView(container: HTMLElement): void {
 
 /* ---------- 过滤栏 ---------- */
 
+function makeStatusFilters(): HTMLElement {
+  const view = state.view === 'history' ? 'history' : 'queue'
+  const tasks = view === 'history' ? state.history : state.queue
+  const buttons = VIEW_STATUS_OPTIONS[view].map((option) => {
+    const count =
+      option.value === 'all' ? tasks.length : tasks.filter((task) => task.status === option.value).length
+    const button = h('button', 'filter-chip', [
+      h('span', 'filter-chip-dot'),
+      option.label,
+      h('span', 'filter-chip-count', [String(count)]),
+    ])
+    button.dataset.status = option.value
+    button.classList.toggle('active', state.statusFilter === option.value)
+    button.setAttribute('aria-pressed', String(state.statusFilter === option.value))
+    button.onclick = () => {
+      if (state.statusFilter === option.value) return
+      state.statusFilter = option.value
+      state.selectedTaskId = null
+      emit()
+    }
+    return button
+  })
+  const filters = h('div', 'status-filters', buttons)
+  filters.setAttribute('aria-label', '按任务状态筛选')
+  return filters
+}
+
 function makeFilterBar(): HTMLElement {
   const search = h('input', 'filter-search') as HTMLInputElement
   search.type = 'search'
   search.placeholder = '搜索标题 / 路径 / 摘要…'
+  search.setAttribute('aria-label', '搜索任务')
+  search.setAttribute('aria-keyshortcuts', 'Control+K')
   search.value = state.search
-  search.oninput = () => {
+  const applySearch = (): void => {
     state.search = search.value
+    if (state.selectedTaskId !== null && !filteredTasks().some((task) => task.id === state.selectedTaskId)) {
+      state.selectedTaskId = null
+    }
     emit()
+    focusSearch(state.search.length)
+  }
+  search.oninput = (event) => {
+    state.search = search.value
+    if ((event as InputEvent).isComposing) return
+    applySearch()
+  }
+  search.addEventListener('compositionend', applySearch)
+
+  const clearSearch = h('button', 'search-clear', [svgIcon('close')])
+  clearSearch.title = '清空搜索'
+  clearSearch.setAttribute('aria-label', '清空搜索')
+  clearSearch.classList.toggle('hidden', !state.search)
+  clearSearch.onclick = () => {
+    state.search = ''
+    state.selectedTaskId = null
+    emit()
+    focusSearch(0)
   }
 
+  const searchBox = h('div', 'search-control', [
+    svgIcon('search'),
+    search,
+    clearSearch,
+    h('kbd', state.search ? 'search-shortcut hidden' : 'search-shortcut', ['Ctrl K']),
+  ])
+
   const select = h('select', 'filter-source') as HTMLSelectElement
+  select.setAttribute('aria-label', '按来源筛选')
   for (const opt of SOURCE_OPTIONS) {
     const el = h('option', '', [opt.label]) as HTMLOptionElement
     el.value = opt.value
@@ -81,10 +176,42 @@ function makeFilterBar(): HTMLElement {
   }
   select.onchange = () => {
     state.sourceFilter = select.value as TaskSource | 'all'
+    state.selectedTaskId = null
     emit()
   }
 
-  return h('div', 'filter-bar', [search, select])
+  const sort = h('select', 'filter-source filter-sort') as HTMLSelectElement
+  sort.setAttribute('aria-label', '任务排序')
+  for (const [value, label] of [
+    ['newest', '最新优先'],
+    ['oldest', '最早优先'],
+  ] as const) {
+    const option = h('option', '', [label]) as HTMLOptionElement
+    option.value = value
+    option.selected = state.sort === value
+    sort.append(option)
+  }
+  sort.onchange = () => {
+    state.sort = sort.value as 'newest' | 'oldest'
+    emit()
+  }
+
+  return h('div', 'filter-bar', [
+    searchBox,
+    filterField('来源', select),
+    filterField('排序', sort),
+  ])
+}
+
+function filterField(label: string, control: HTMLElement): HTMLElement {
+  return h('label', 'filter-field', [h('span', '', [label]), control])
+}
+
+function focusSearch(cursor: number): void {
+  const next = document.querySelector('.filter-search') as HTMLInputElement | null
+  if (!next) return
+  next.focus({ preventScroll: true })
+  next.setSelectionRange(cursor, cursor)
 }
 
 /* ---------- 摘要与按钮 ---------- */
@@ -104,17 +231,27 @@ function unreadCount(): number {
   return state.queue.filter((t) => t.status === 'COMPLETED_UNREAD' || t.status === 'FAILED_UNREAD').length
 }
 
+function actionToast(message: string, refreshed: boolean): void {
+  showToast(
+    refreshed ? message : `${message}，但列表刷新失败`,
+    refreshed ? 'var(--st-done)' : 'var(--st-input)',
+  )
+}
+
 /* 一键已读：非破坏性操作，单击即执行；不动等待输入的任务 */
-function makeReadAllButton(): HTMLButtonElement {
+function makeReadAllButton(reloadTasks: ReloadTasks): HTMLButtonElement {
   const btn = h('button', 'btn read-all-btn', [svgIcon('check'), '一键已读'])
   btn.title = '将所有已完成/失败的未读任务标记为已读'
   btn.onclick = async () => {
     btn.disabled = true
     try {
       const count = await window.aihub.readAllTasks()
-      showToast(count > 0 ? `已将 ${count} 个任务标记为已读` : '没有未读任务', 'var(--st-done)')
+      const refreshed = await reloadTasks()
+      actionToast(count > 0 ? `已将 ${count} 个任务标记为已读` : '没有未读任务', refreshed)
     } catch {
       showToast('操作失败，请确认事件服务已连接', 'var(--st-fail)')
+    } finally {
+      // IPC 成功但 reloadTasks() 返回 false 时也要恢复按钮（M21）
       btn.disabled = false
     }
   }
@@ -122,7 +259,7 @@ function makeReadAllButton(): HTMLButtonElement {
 }
 
 /* 一键清理：第一次点击进入确认态，3.2s 内再次点击才执行，避免误删 */
-function makeClearButton(): HTMLButtonElement {
+function makeClearButton(reloadTasks: ReloadTasks): HTMLButtonElement {
   const btn = h('button', 'btn danger clear-btn', [svgIcon('trash'), '一键清理'])
   let armed = false
   let timer = 0
@@ -130,12 +267,14 @@ function makeClearButton(): HTMLButtonElement {
   const reset = (): void => {
     armed = false
     window.clearTimeout(timer)
+    timer = 0
     btn.classList.remove('armed')
     btn.replaceChildren(svgIcon('trash'), '一键清理')
   }
 
   btn.onclick = async () => {
     if (!armed) {
+      window.clearTimeout(timer) // clear any stale timer from previous renders
       const total = state.queue.length + state.history.length
       armed = true
       btn.classList.add('armed')
@@ -147,9 +286,12 @@ function makeClearButton(): HTMLButtonElement {
     btn.disabled = true
     try {
       const deleted = await window.aihub.clearTasks()
-      showToast(`已清空 ${deleted} 个任务`, 'var(--st-done)')
+      state.selectedTaskId = null
+      const refreshed = await reloadTasks()
+      actionToast(`已清空 ${deleted} 个任务`, refreshed)
     } catch {
       showToast('清理失败，请确认事件服务已连接', 'var(--st-fail)')
+    } finally {
       btn.disabled = false
     }
   }
@@ -158,7 +300,7 @@ function makeClearButton(): HTMLButtonElement {
 
 /* ---------- 列表 ---------- */
 
-function renderQueue(container: HTMLElement): void {
+function renderQueue(container: HTMLElement, reloadTasks: ReloadTasks): void {
   const tasks = filteredTasks()
   if (tasks.length === 0) {
     container.append(
@@ -181,12 +323,12 @@ function renderQueue(container: HTMLElement): void {
     )
 
     const grid = h('div', 'card-grid')
-    for (const task of sectionTasks) grid.append(queueCard(task))
+    for (const task of sectionTasks) grid.append(queueCard(task, reloadTasks))
     container.append(grid)
   }
 }
 
-function renderHistory(container: HTMLElement): void {
+function renderHistory(container: HTMLElement, reloadTasks: ReloadTasks): void {
   const tasks = filteredTasks()
   if (tasks.length === 0) {
     container.append(
@@ -202,23 +344,35 @@ function renderHistory(container: HTMLElement): void {
     const deleteBtn = h('button', 'btn danger', [svgIcon('trash'), '删除'])
     deleteBtn.onclick = async (e) => {
       e.stopPropagation()
-      if (state.selectedTaskId === task.id) state.selectedTaskId = null
-      await window.aihub.deleteTask(task.id)
+      deleteBtn.disabled = true
+      try {
+        await window.aihub.deleteTask(task.id)
+        if (state.selectedTaskId === task.id) state.selectedTaskId = null
+        const refreshed = await reloadTasks()
+        actionToast('任务已删除', refreshed)
+      } catch {
+        showToast('删除失败，请确认事件服务已连接', 'var(--st-fail)')
+      } finally {
+        deleteBtn.disabled = false
+      }
     }
     grid.append(buildCard(task, [deleteBtn]))
   }
   container.append(grid)
 }
 
-function queueCard(task: HubTask): HTMLElement {
+function queueCard(task: HubTask, reloadTasks: ReloadTasks): HTMLElement {
   const openBtn = h('button', 'btn primary', [svgIcon('external'), '打开'])
   openBtn.onclick = async (e) => {
     e.stopPropagation()
     openBtn.disabled = true
     try {
       await window.aihub.openTask(task.id)
+      const refreshed = await reloadTasks()
+      if (!refreshed) actionToast('对话已打开', false)
     } catch {
       showToast('打开任务失败，请确认后端已连接', 'var(--st-fail)')
+    } finally {
       openBtn.disabled = false
     }
   }
@@ -226,7 +380,16 @@ function queueCard(task: HubTask): HTMLElement {
   const ignoreBtn = h('button', 'btn', [svgIcon('ignore'), '忽略'])
   ignoreBtn.onclick = async (e) => {
     e.stopPropagation()
-    await window.aihub.ignoreTask(task.id)
+    ignoreBtn.disabled = true
+    try {
+      await window.aihub.ignoreTask(task.id)
+      const refreshed = await reloadTasks()
+      actionToast('任务已移入历史', refreshed)
+    } catch {
+      showToast('忽略失败，请确认事件服务已连接', 'var(--st-fail)')
+    } finally {
+      ignoreBtn.disabled = false
+    }
   }
 
   return buildCard(task, [ignoreBtn, openBtn])
@@ -242,24 +405,26 @@ function buildCard(task: HubTask, actions: HTMLElement[]): HTMLElement {
   ])
 
   const title = h('div', 'card-title', [displayTitle(task)])
-  const children: HTMLElement[] = [top, title]
+  const detailChildren: HTMLElement[] = [top, title]
 
   if (task.contentPreview) {
-    children.push(h('div', 'card-preview', [task.contentPreview]))
+    detailChildren.push(h('div', 'card-preview', [task.contentPreview]))
+  }
+
+  const detailTrigger = h('button', 'card-detail-trigger', detailChildren)
+  detailTrigger.setAttribute('aria-label', `查看任务详情：${displayTitle(task)}`)
+  detailTrigger.onclick = () => {
+    state.selectedTaskId = state.selectedTaskId === task.id ? null : task.id
+    emit()
   }
 
   const pathEl = h('span', 'card-path', [task.projectPath ?? ''])
   pathEl.title = task.projectPath ?? ''
   const footer = h('div', 'card-footer', [pathEl, h('div', 'card-actions', actions)])
-  children.push(footer)
 
-  const card = h('article', 'card', children)
+  const card = h('article', 'card', [detailTrigger, footer])
   card.dataset.status = task.status
   if (state.selectedTaskId === task.id) card.classList.add('selected')
-  card.onclick = () => {
-    state.selectedTaskId = state.selectedTaskId === task.id ? null : task.id
-    emit()
-  }
 
   const chip = h('span', 'status-chip', [STATUS_LABELS[task.status] ?? task.status])
   top.append(chip)
@@ -274,9 +439,43 @@ function emptyState(icon: IconName, title: string, desc: string): HTMLElement {
   ])
 }
 
+function makeLoadingState(): HTMLElement {
+  const loading = h('div', 'skeleton-grid', [
+    ...Array.from({ length: 4 }, () =>
+      h('div', 'skeleton-card', [
+        h('span', 'skeleton-line short'),
+        h('span', 'skeleton-line title'),
+        h('span', 'skeleton-line'),
+        h('span', 'skeleton-line medium'),
+      ]),
+    ),
+  ])
+  loading.setAttribute('aria-label', '正在加载任务')
+  loading.setAttribute('aria-busy', 'true')
+  loading.setAttribute('role', 'status')
+  loading.setAttribute('aria-live', 'polite')
+  return loading
+}
+
+function makeErrorState(reloadTasks: ReloadTasks): HTMLElement {
+  const retry = h('button', 'btn primary', [svgIcon('refresh'), '重新连接'])
+  retry.onclick = () => {
+    retry.disabled = true
+    void reloadTasks()
+  }
+  const error = h('div', 'empty error-state', [
+    h('div', 'art', [svgIcon('offline')]),
+    h('div', 'title', ['暂时无法读取任务']),
+    h('div', 'desc', ['检查 MySQL 与本地事件服务后重试，已有数据不会被删除']),
+    retry,
+  ])
+  error.setAttribute('role', 'alert')
+  return error
+}
+
 /* ---------- 详情面板 ---------- */
 
-function makeDetailPane(task: HubTask): HTMLElement {
+function makeDetailPane(task: HubTask, reloadTasks: ReloadTasks): HTMLElement {
   const closeBtn = h('button', 'win-btn detail-close', [svgIcon('close')])
   closeBtn.title = '关闭详情'
   closeBtn.onclick = () => {
@@ -289,8 +488,11 @@ function makeDetailPane(task: HubTask): HTMLElement {
     openBtn.disabled = true
     try {
       await window.aihub.openTask(task.id)
+      const refreshed = await reloadTasks()
+      if (!refreshed) actionToast('对话已打开', false)
     } catch {
       showToast('打开失败，请确认后端已连接', 'var(--st-fail)')
+    } finally {
       openBtn.disabled = false
     }
   }
@@ -323,11 +525,15 @@ function makeDetailPane(task: HubTask): HTMLElement {
   const srcPill = pane.querySelector('.src-pill') as HTMLElement
   srcPill.dataset.source = task.source
 
+  // Version counter to cancel stale async responses when pane is unmounted
   const taskId = task.id
+
   window.aihub
     .getTaskEvents(taskId)
     .then((events) => {
+      // Discard if task changed or pane was unmounted (DOM node no longer in document)
       if (state.selectedTaskId !== taskId) return
+      if (!pane.isConnected) return
       timelineBox.textContent = ''
       if (events.length === 0) {
         timelineBox.append(h('div', 'timeline-loading', ['暂无事件记录']))
@@ -352,7 +558,9 @@ function makeDetailPane(task: HubTask): HTMLElement {
       }
     })
     .catch(() => {
+      // Discard if task changed or pane was unmounted
       if (state.selectedTaskId !== taskId) return
+      if (!pane.isConnected) return
       timelineBox.textContent = ''
       timelineBox.append(h('div', 'timeline-loading', ['事件加载失败（后端离线？）']))
     })

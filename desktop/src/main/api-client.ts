@@ -14,7 +14,7 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const res = await fetch(`${API_BASE}${path}`, {
     ...init,
     signal: AbortSignal.timeout(TIMEOUT_MS),
-    headers: { 'Content-Type': 'application/json' },
+    headers: { 'Content-Type': 'application/json', ...init?.headers },
   })
   if (!res.ok) throw new Error(`${init?.method ?? 'GET'} ${path} → ${res.status}`)
   return (await res.json()) as T
@@ -24,6 +24,11 @@ export const apiClient = {
   async listTasks(view: TaskView): Promise<HubTask[]> {
     const data = await request<{ tasks: HubTask[] }>(`/api/tasks?view=${view}`)
     return data.tasks
+  },
+
+  async getTask(id: number): Promise<HubTask> {
+    const data = await request<{ task: HubTask }>(`/api/tasks/${id}`)
+    return data.task
   },
 
   markViewed(id: number): Promise<void> {

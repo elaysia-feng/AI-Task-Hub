@@ -1,18 +1,27 @@
 {
   "name": "ai-task-hub-desktop",
   "version": "0.1.7",
+  "author": "elaysia-feng <qskaouayshuayszas@gmail.com>",
   "private": true,
   "description": "AI Task Hub 桌面端 — 多 AI 平台任务中心",
   "main": "./out/main/index.js",
   "scripts": {
+    "ensure:electron": "node scripts/ensure-electron.mjs",
+    "predev": "npm run ensure:electron",
     "dev": "electron-vite dev",
     "build": "electron-vite build",
+    "prestart": "npm run ensure:electron",
     "start": "electron-vite preview",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
+    "predist": "npm run ensure:electron && npm run ensure:nsis && npm run ensure:backend",
     "dist": "npm run build && electron-builder",
+    "predist:publish": "npm run ensure:electron && npm run ensure:nsis && npm run ensure:backend",
     "dist:publish": "npm run build && electron-builder --publish always",
-    "dist:local": "npm run build && electron-builder"
+    "predist:local": "npm run ensure:electron && npm run ensure:nsis && npm run ensure:backend",
+    "dist:local": "npm run build && electron-builder",
+    "ensure:backend": "node scripts/ensure-backend.mjs",
+    "ensure:nsis": "node scripts/ensure-nsis.mjs"
   },
   "devDependencies": {
     "@types/node": "^26.1.2",
@@ -46,8 +55,7 @@
         "nsis",
         "portable"
       ],
-      "icon": "resources/icon.ico",
-      "signExecutable": false
+      "icon": "resources/icon.ico"
     },
     "nsis": {
       "oneClick": false,

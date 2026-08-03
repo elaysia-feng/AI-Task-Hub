@@ -25,10 +25,11 @@ describe('formatRelativeTime', () => {
     }
   })
 
-  it('昨天显示 昨天 HH:mm', () => {
+  it('昨天显示 昨天 HH:mm（UTC）', () => {
+    // Uses UTC to avoid DST boundary skew; formatRelativeTime also uses UTC
     const yesterday = new Date()
-    yesterday.setDate(yesterday.getDate() - 1)
-    yesterday.setHours(15, 30, 0, 0)
+    yesterday.setUTCDate(yesterday.getUTCDate() - 1)
+    yesterday.setUTCHours(15, 30, 0, 0)
     expect(formatRelativeTime(yesterday.toISOString())).toBe('昨天 15:30')
   })
 

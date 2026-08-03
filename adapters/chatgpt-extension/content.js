@@ -100,7 +100,7 @@ function reportCompleted(messageEl, fingerprint) {
     openUrl: location.href,
   })
 
-  pendingCompletion = { conversationId, messageEl }
+  pendingCompletion = { conversationId }
   watchViewed()
 }
 
@@ -114,7 +114,11 @@ function isInViewport(el) {
 function maybeViewed() {
   if (!pendingCompletion) return
   if (document.visibilityState !== 'visible' || !document.hasFocus()) return
-  if (!isInViewport(pendingCompletion.messageEl)) return
+  // 不持有完成时刻捕获的 DOM 引用：React 重渲染会替换节点，旧引用变成分离节点
+  // （getBoundingClientRect 恒为 0，isInViewport 永远 false → TASK_VIEWED 永久阻塞）。
+  // 改为实时查询当前最后一条助手回答：它进入可视区即视为已读。
+  const current = getLastAssistantMessage()
+  if (!current || !isInViewport(current)) return
 
   sendEvent({
     source: 'CHATGPT',

@@ -24,7 +24,9 @@ def codex_notify_to_event(payload: dict, cwd: str | None) -> dict | None:
         return None
 
     input_messages = payload.get("input-messages") or []
-    title = truncate(input_messages[0], MAX_TITLE_LEN) if input_messages else None
+    if not input_messages:
+        return None
+    title = truncate(input_messages[0], MAX_TITLE_LEN)
     last_message = payload.get("last-assistant-message") or ""
 
     return {

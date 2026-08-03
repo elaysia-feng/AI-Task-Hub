@@ -1,6 +1,5 @@
-import fs from 'node:fs'
-import path from 'node:path'
-import { BrowserWindow, app, screen } from 'electron'
+import { BrowserWindow, screen } from 'electron'
+import { readPrefs, writePrefs } from './prefs'
 
 /** 小球收起尺寸（整窗就是球，可拖满屏） */
 export const ORB_SIZE = 44
@@ -27,32 +26,18 @@ export function getWindowMode(): WindowMode {
   return mode
 }
 
-function prefsPath(): string {
-  return path.join(app.getPath('userData'), 'ui-preferences.json')
-}
-
 function loadOrbPos(): { x: number; y: number } | null {
-  try {
-    const raw = JSON.parse(fs.readFileSync(prefsPath(), 'utf-8')) as { orb?: { x?: number; y?: number } }
-    if (typeof raw.orb?.x === 'number' && typeof raw.orb?.y === 'number') {
-      return { x: raw.orb.x, y: raw.orb.y }
-    }
-  } catch {
-    /* first run */
+  const raw = readPrefs() as { orb?: { x?: number; y?: number } }
+  if (typeof raw.orb?.x === 'number' && typeof raw.orb?.y === 'number') {
+    return { x: raw.orb.x, y: raw.orb.y }
   }
   return null
 }
 
 function saveOrbPos(x: number, y: number): void {
   try {
-    let existing: Record<string, unknown> = {}
-    try {
-      existing = JSON.parse(fs.readFileSync(prefsPath(), 'utf-8')) as Record<string, unknown>
-    } catch {
-      /* empty */
-    }
-    existing.orb = { x, y }
-    fs.writeFileSync(prefsPath(), JSON.stringify(existing, null, 2), 'utf-8')
+    // 与 wallpaper.ts 共用同一原子写路径，避免两套读写把对方的键覆盖掉（M17）
+    writePrefs((existing) => ({ ...existing, orb: { x, y } }))
   } catch {
     /* ignore */
   }

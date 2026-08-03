@@ -6,7 +6,7 @@ CREATE TABLE IF NOT EXISTS task (
     id BIGINT PRIMARY KEY AUTO_INCREMENT,
     source VARCHAR(32) NOT NULL COMMENT '事件来源平台：CHATGPT / CLAUDE_CODE / CODEX / OTHER',
     external_task_id VARCHAR(128) NULL COMMENT '平台侧任务/会话 ID，用于幂等去重',
-    event_type VARCHAR(32) NOT NULL COMMENT '最近事件类型：TASK_STARTED / NEEDS_INPUT / COMPLETED / FAILED / VIEWED',
+    event_type VARCHAR(32) NOT NULL COMMENT '最近事件类型：TASK_STARTED / TASK_NEEDS_INPUT / TASK_COMPLETED / TASK_FAILED / TASK_VIEWED / TASK_IGNORED',
     title VARCHAR(512) NULL,
     content_preview TEXT NULL COMMENT '任务内容摘要（等待输入的问题、错误信息等）',
     project_path VARCHAR(1024) NULL COMMENT '项目目录，用于打开终端恢复会话',
@@ -16,7 +16,8 @@ CREATE TABLE IF NOT EXISTS task (
     created_at DATETIME(3) NOT NULL,
     completed_at DATETIME(3) NULL,
     viewed_at DATETIME(3) NULL,
-    UNIQUE KEY uk_source_external (source, external_task_id),
+    external_task_id_not_null VARCHAR(128) GENERATED ALWAYS AS (IFNULL(external_task_id, '')) STORED COMMENT '用于唯一约束占位，NULL 转为空字符串',
+    UNIQUE KEY uk_source_external (source, external_task_id_not_null),
     KEY idx_status (status),
     KEY idx_created_at (created_at)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='统一任务表';
@@ -28,6 +29,6 @@ CREATE TABLE IF NOT EXISTS task_event (
     event_type VARCHAR(32) NOT NULL,
     raw_payload JSON NULL COMMENT '统一事件原始报文（AgentEvent JSON）',
     created_at DATETIME(3) NOT NULL,
-    KEY idx_task_id (task_id),
+    KEY idx_task_id_created (task_id, created_at, id),
     CONSTRAINT fk_task_event_task FOREIGN KEY (task_id) REFERENCES task(id) ON DELETE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='任务生命周期事件表';

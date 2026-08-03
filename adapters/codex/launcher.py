@@ -22,7 +22,8 @@ import uuid
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from event_converter import launcher_event, truncate  # noqa: E402
 
-API_URL = "http://127.0.0.1:17891/api/events"
+# 端口允许用 AIHUB_PORT 覆盖（冒烟测试并行实例、端口冲突场景）
+API_URL = f"http://127.0.0.1:{int(os.environ.get('AIHUB_PORT', '17891'))}/api/events"
 TIMEOUT_SEC = 2
 
 
@@ -54,11 +55,16 @@ def main() -> None:
 
     post_event(launcher_event("TASK_STARTED", external_id, cwd, title))
 
-    process = subprocess.run(["codex", *args])
-    event_type = "TASK_COMPLETED" if process.returncode == 0 else "TASK_FAILED"
-    post_event(launcher_event(event_type, external_id, cwd, title))
-
-    sys.exit(process.returncode)
+    try:
+        process = subprocess.run(["codex", *args])
+        event_type = "TASK_COMPLETED" if process.returncode == 0 else "TASK_FAILED"
+        post_event(launcher_event(event_type, external_id, cwd, title))
+        sys.exit(process.returncode)
+    except FileNotFoundError:
+        # codex 不在 PATH：必须上报 TASK_FAILED，否则任务在队列里永久僵尸 RUNNING
+        print("aihub-codex: error: 找不到 codex 可执行文件（请确认已安装且加入 PATH）", file=sys.stderr)
+        post_event(launcher_event("TASK_FAILED", external_id, cwd, title))
+        sys.exit(127)
 
 
 if __name__ == "__main__":

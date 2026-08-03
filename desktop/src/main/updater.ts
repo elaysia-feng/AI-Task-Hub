@@ -26,6 +26,7 @@ export class UpdateManager {
   start(): void {
     if (!this.enabled) return
     autoUpdater.autoDownload = true
+    autoUpdater.autoInstallOnAppQuit = true
     autoUpdater.on('checking-for-update', () => this.emit({ state: 'checking' }))
     autoUpdater.on('update-available', (info) => this.emit({ state: 'available', version: info.version }))
     autoUpdater.on('update-not-available', () => this.emit({ state: 'not-available' }))

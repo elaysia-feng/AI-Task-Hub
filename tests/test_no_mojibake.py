@@ -7,22 +7,26 @@
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
-SCAN_DIRS = ["app", "tests", "adapters", "shared", "scripts"]
-SCAN_SUFFIXES = {".py", ".ts", ".js", ".json", ".md"}
-# 运行时缓存/日志（已在 .gitignore），不计入源码污染
-SKIP_NAMES = {"session_titles.json", "forward_target.json", "notify_debug.log"}
+# glob patterns for auto-discovery (no manual directory list needed)
+SCAN_PATTERNS = [
+    "app/**/*.py", "app/**/*.ts", "app/**/*.js", "app/**/*.json",
+    "tests/**/*.py", "tests/**/*.ts", "tests/**/*.js",
+    "adapters/**/*.py", "adapters/**/*.ts", "adapters/**/*.js",
+    "shared/**/*.py", "shared/**/*.ts", "shared/**/*.js",
+    "scripts/**/*.py", "scripts/**/*.ts", "scripts/**/*.js",
+    "desktop/src/**/*.ts", "desktop/src/**/*.js",
+]
+SKIP_NAMES = {"session_titles.json", "forward_target.json"}
 MOJIBAKE_MARK = chr(63) * 3  # 连续三个问号：GBK 破坏中文后的典型残留
 SELF = Path(__file__).resolve()
 
 
 def test_no_mojibake_in_sources():
     offenders: list[str] = []
-    for scan_dir in SCAN_DIRS:
-        base = REPO_ROOT / scan_dir
-        if not base.exists():
-            continue
-        for path in base.rglob("*"):
-            if path.suffix not in SCAN_SUFFIXES or not path.is_file():
+    for pattern in SCAN_PATTERNS:
+        for path in REPO_ROOT.glob(pattern):
+            # glob 模式已限定后缀，这里只做防御校验（no .md glob，故不放 .md）
+            if path.suffix not in {".py", ".ts", ".js", ".json"} or not path.is_file():
                 continue
             if path.name in SKIP_NAMES or path.resolve() == SELF:
                 continue

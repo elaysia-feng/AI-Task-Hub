@@ -15,7 +15,8 @@ const THEME_STORAGE_KEY = 'aihub-theme'
 let themeToggleBtn: HTMLButtonElement
 
 function currentTheme(): Theme {
-  return (localStorage.getItem(THEME_STORAGE_KEY) as Theme) || 'dark'
+  const stored = localStorage.getItem(THEME_STORAGE_KEY)
+  return stored === 'light' || stored === 'dark' ? stored : 'dark'
 }
 
 function applyTheme(theme: Theme): void {
@@ -28,7 +29,12 @@ function applyTheme(theme: Theme): void {
 
 function toggleTheme(): void {
   const next: Theme = currentTheme() === 'dark' ? 'light' : 'dark'
-  localStorage.setItem(THEME_STORAGE_KEY, next)
+  try {
+    localStorage.setItem(THEME_STORAGE_KEY, next)
+  } catch {
+    // quota exceeded → keep current theme
+    return
+  }
   applyTheme(next)
 }
 
@@ -62,19 +68,24 @@ let contentEl: HTMLElement
 function renderShell(): void {
   const minimizeBtn = h('button', 'win-btn', [svgIcon('minus')])
   minimizeBtn.title = '最小化'
+  minimizeBtn.setAttribute('aria-label', '最小化')
   minimizeBtn.onclick = () => window.aihub.minimizeWindow()
 
   const orbBtn = h('button', 'win-btn orb-toggle', [svgIcon('orb')])
   orbBtn.title = '收起为悬浮球'
+  orbBtn.setAttribute('aria-label', '收起为悬浮球')
   orbBtn.onclick = () => window.aihub.collapseToOrb()
 
   const closeBtn = h('button', 'win-btn close', [svgIcon('close')])
-  closeBtn.title = '收起为悬浮球'
+  // 与 orb-toggle 的 tooltip 区分，title 与 aria-label 统一为「关闭到悬浮球」
+  closeBtn.title = '关闭到悬浮球'
+  closeBtn.setAttribute('aria-label', '关闭到悬浮球')
   closeBtn.onclick = () => window.aihub.closeWindow()
 
   backendPill = h('div', 'backend-pill connecting', [h('span', 'dot'), h('span', 'label')])
 
   themeToggleBtn = h('button', 'win-btn theme-toggle')
+  themeToggleBtn.setAttribute('aria-label', '切换明暗主题')
   themeToggleBtn.onclick = toggleTheme
 
   const titlebar = h('header', 'titlebar', [
@@ -108,6 +119,7 @@ function navItem(item: { view: 'queue' | 'history' | 'settings'; title: string; 
     if (state.view === item.view) return
     state.view = item.view
     state.selectedTaskId = null
+    state.statusFilter = 'all'
     document.querySelectorAll('.nav-item').forEach((el) => {
       el.classList.toggle('active', (el as HTMLElement).dataset.view === item.view)
     })
@@ -126,7 +138,7 @@ function updateBackendPill(): void {
 function renderContent(): void {
   contentEl.textContent = ''
   if (state.view === 'settings') renderSettingsView(contentEl)
-  else renderTasksView(contentEl)
+  else renderTasksView(contentEl, reload)
 
   const count = state.queue.length
   if (queueBadge) {
@@ -137,15 +149,63 @@ function renderContent(): void {
 
 /* ---------- 数据 ---------- */
 
-async function reload(): Promise<void> {
+let reloadRequestId = 0
+
+async function reload(): Promise<boolean> {
+  const requestId = ++reloadRequestId
+  if (state.queue.length + state.history.length === 0) {
+    state.taskLoadState = 'loading'
+    emit()
+  }
   try {
     const [queue, history] = await Promise.all([window.aihub.getQueue(), window.aihub.getHistory()])
+    if (requestId !== reloadRequestId) return true
     state.queue = queue
     state.history = history
+    state.taskLoadState = 'ready'
+    const current = state.view === 'history' ? history : queue
+    if (state.selectedTaskId !== null && !current.some((task) => task.id === state.selectedTaskId)) {
+      state.selectedTaskId = null
+    }
   } catch {
-    // 后端暂不可达时保留现有数据，由 backend:status 事件提示
+    if (requestId !== reloadRequestId) return true
+    state.taskLoadState = 'error'
+    emit()
+    return false
   }
   emit()
+  return true
+}
+
+// SPA 单例，监听器永久有效；如未来支持多实例需加 cleanup
+function bindKeyboardShortcuts(): void {
+  document.addEventListener('keydown', (event) => {
+    const target = event.target as HTMLElement | null
+    const editing =
+      target instanceof HTMLInputElement ||
+      target instanceof HTMLTextAreaElement ||
+      target instanceof HTMLSelectElement
+
+    if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'k') {
+      if (state.view === 'settings') return
+      event.preventDefault()
+      ;(document.querySelector('.filter-search') as HTMLInputElement | null)?.focus()
+      return
+    }
+    if (event.key === '/' && !editing && state.view !== 'settings') {
+      event.preventDefault()
+      ;(document.querySelector('.filter-search') as HTMLInputElement | null)?.focus()
+      return
+    }
+    if (event.key !== 'Escape') return
+    if (state.selectedTaskId !== null) {
+      state.selectedTaskId = null
+      emit()
+    } else if (state.search) {
+      state.search = ''
+      emit()
+    }
+  })
 }
 
 /* ---------- 启动 ---------- */
@@ -158,7 +218,11 @@ async function bootstrap(): Promise<void> {
   // 首次运行落到设置页（接入向导），之后记住
   if (!localStorage.getItem(WIZARD_SEEN_KEY)) {
     state.view = 'settings'
-    localStorage.setItem(WIZARD_SEEN_KEY, '1')
+    try {
+      localStorage.setItem(WIZARD_SEEN_KEY, '1')
+    } catch {
+      // localStorage full/quota exceeded → continue with in-memory flag
+    }
   }
   renderShell()
   applyTheme(currentTheme()) // 补齐按钮图标
@@ -169,6 +233,7 @@ async function bootstrap(): Promise<void> {
   }
   updateBackendPill()
   subscribe(renderContent)
+  bindKeyboardShortcuts()
   renderContent()
 
   state.backend = await window.aihub.getBackendStatus()
@@ -182,9 +247,10 @@ async function bootstrap(): Promise<void> {
   window.aihub.onBackendStatus((status) => {
     const recovered = status === 'online' && state.backend !== 'online'
     state.backend = status
+    if (status === 'offline' && state.taskLoadState === 'loading') state.taskLoadState = 'error'
     updateBackendPill()
     emit()
-    if (recovered) void reload()
+    if (recovered) void reload().catch((err) => console.error('[main] reload failed:', err))
   })
 
   window.aihub.onTaskChanged((msg) => {
@@ -192,10 +258,10 @@ async function bootstrap(): Promise<void> {
       const label = STATUS_LABELS[msg.task.status] ?? ''
       const accent = TOAST_ACCENTS[msg.eventType]
       if (accent) {
-        showToast(`${SOURCE_LABELS[msg.task.source]} · ${label}：${displayTitle(msg.task)}`, accent)
+        showToast(`${SOURCE_LABELS[msg.task.source]} · ${label}：${displayTitle(msg.task)}`, accent, `task:${msg.task.id}:${msg.eventType}`)
       }
     }
-    void reload()
+    void reload().catch((err) => console.error('[main] reload failed:', err))
   })
 
   window.aihub.onUpdateStatus((s) => {

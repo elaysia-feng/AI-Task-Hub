@@ -10,16 +10,20 @@ config.toml 中的 notify 指向本脚本后，事件流向：
 """
 
 import json
+import logging
 import os
+import re
 import subprocess
 import sys
 import urllib.request
 from datetime import datetime
+from logging.handlers import RotatingFileHandler
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from event_converter import codex_notify_to_event  # noqa: E402
 
-API_URL = "http://127.0.0.1:17891/api/events"
+# 端口允许用 AIHUB_PORT 覆盖（冒烟测试并行实例、端口冲突场景）
+API_URL = f"http://127.0.0.1:{int(os.environ.get('AIHUB_PORT', '17891'))}/api/events"
 TIMEOUT_SEC = 2
 FORWARD_TARGET_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "forward_target.json")
 DEBUG_LOG_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "notify_debug.log")
@@ -29,12 +33,39 @@ DEBUG_LOG_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "notif
 _opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
 
 
+_debug_logger = None
+
+
+def _get_debug_logger():
+    global _debug_logger
+    if _debug_logger is None:
+        try:
+            _debug_logger = logging.getLogger("notify_debug")
+            _debug_logger.setLevel(logging.INFO)
+            _debug_logger.addHandler(
+                RotatingFileHandler(
+                    DEBUG_LOG_PATH, maxBytes=1_000_000, backupCount=3, encoding="utf-8"
+                )
+            )
+            _debug_logger.handlers[0].setFormatter(
+                logging.Formatter("%(message)s")
+            )
+        except (OSError, PermissionError) as exc:
+            logging.warning("[_get_debug_logger] failed to initialize debug logger: %s", exc)
+            _debug_logger = None
+    return _debug_logger
+
+
 def debug_log(entry: dict) -> None:
     """排障日志：记录每次 notify 触发的载荷与处理结果，任何失败静默。"""
     try:
-        entry["ts"] = datetime.now().isoformat(timespec="seconds")
-        with open(DEBUG_LOG_PATH, "a", encoding="utf-8") as f:
-            f.write(json.dumps(entry, ensure_ascii=False) + "\n")
+        entry.setdefault("ts", datetime.now().isoformat(timespec="seconds"))
+        logger = _get_debug_logger()
+        if logger:
+            logger.info(json.dumps(entry, ensure_ascii=False))
+        else:
+            with open(DEBUG_LOG_PATH, "a", encoding="utf-8") as f:
+                f.write(json.dumps(entry, ensure_ascii=False) + "\n")
     except Exception:
         pass
 
@@ -55,21 +86,69 @@ def post_event(event: dict) -> str:
         return f"error: {exc}"
 
 
+# Codex 桌面 runtime 路径模式：.../runtimes/<runtime>/<hash>/<suffix>（hash 升级后变化）
+_CODEX_RUNTIME_RE = re.compile(
+    r"^(?P<root>.+[\\/]runtimes[\\/][^\\/]+[\\/])[^\\/]+(?P<suffix>[\\/].*)$",
+    re.IGNORECASE,
+)
+
+
+def _resolve_stale_target(orig: str) -> str | None:
+    """Codex 升级后 runtime hash 变化：按相同相对后缀在 runtimes 目录下找可执行文件。
+
+    只处理已知的 Codex runtimes 路径模式，其余命令原样走「目标不存在」分支。
+    多个候选时选 mtime 最新的（hash 不透明，不能用字典序比较）。
+    """
+    m = _CODEX_RUNTIME_RE.match(orig)
+    if not m:
+        return None
+    root, suffix = m.group("root"), m.group("suffix").lstrip("\\/")
+    candidates: list[tuple[float, str]] = []
+    try:
+        for entry in os.listdir(root):
+            p = os.path.join(root, entry, suffix)
+            if os.path.isfile(p):
+                try:
+                    candidates.append((os.path.getmtime(p), p))
+                except OSError:
+                    continue
+    except OSError:
+        return None
+    if not candidates:
+        return None
+    candidates.sort(reverse=True)
+    return candidates[0][1]
+
+
 def forward(payload_json: str) -> None:
     """把原始载荷转发给被接管的官方 notify 命令。"""
     try:
         with open(FORWARD_TARGET_PATH, encoding="utf-8") as f:
             target = json.load(f).get("command")
-        if not target or not os.path.exists(target[0]):
+        if not target:
+            # 配置缺失路径不再静默：记入诊断日志，便于排查「转发消失」问题（M10）
+            debug_log({"stage": "forward_skipped", "reason": "forward_target.json 无 command 字段"})
             return
+        resolved = os.path.abspath(target[0])
+        if not os.path.exists(resolved):
+            # 目标命令路径失效（如 Codex 升级后 runtime hash 变化）：先尝试自愈解析（M11）
+            remapped = _resolve_stale_target(resolved)
+            if remapped:
+                debug_log({"stage": "forward_remapped", "from": target[0], "to": remapped})
+                resolved = remapped
+            else:
+                debug_log({"stage": "forward_skipped", "reason": f"目标命令不存在且无法自愈: {resolved}"})
+                return
+        # pass payload as final argument, shell=False for cross-platform safety
         subprocess.run(
-            [*target, payload_json],
+            [resolved, *target[1:], payload_json],
+            shell=False,
             timeout=10,
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
         )
-    except Exception:
-        pass
+    except Exception as exc:
+        debug_log({"stage": "forward_failed", "error": str(exc)})
 
 
 def main() -> None:
@@ -86,12 +165,14 @@ def main() -> None:
         if event:
             result = post_event(event)
             debug_log({"stage": "posted", "result": result, "payload_type": payload.get("type")})
+            # skip forward if post_event failed to avoid split-brain
+            if result == "ok":
+                forward(payload_json)
         else:
             debug_log({"stage": "skipped", "reason": "converter returned None", "payload_type": payload.get("type"), "payload_keys": sorted(payload.keys())})
     except Exception as exc:
         debug_log({"stage": "error", "error": str(exc)})
 
-    forward(payload_json)
     sys.exit(0)
 
 

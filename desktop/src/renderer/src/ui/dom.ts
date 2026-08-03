@@ -4,16 +4,19 @@
 const S =
   'viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"'
 
+export const BRAND_MARK_SVG =
+  '<svg viewBox="0 0 24 24" fill="none">' +
+  '<path d="M7.2 7.2 10 10m6.8-2.8L14 10m-6.8 6.8L10 14m6.8 2.8L14 14" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/>' +
+  '<circle cx="5.5" cy="5.5" r="1.7" fill="currentColor"/>' +
+  '<circle cx="18.5" cy="5.5" r="1.7" fill="currentColor"/>' +
+  '<circle cx="5.5" cy="18.5" r="1.7" fill="currentColor"/>' +
+  '<circle cx="18.5" cy="18.5" r="1.7" fill="currentColor"/>' +
+  '<circle cx="12" cy="12" r="3.25" fill="#df7654"/>' +
+  '<circle cx="12" cy="12" r="1.15" fill="#202629"/>' +
+  '</svg>'
+
 const ICONS = {
-  logo:
-    '<svg viewBox="0 0 24 24" fill="none">' +
-    '<circle cx="12" cy="12" r="2.6" fill="#fff"/>' +
-    '<circle cx="5" cy="7" r="1.85" fill="#fff"/>' +
-    '<circle cx="19" cy="7" r="1.85" fill="#fff"/>' +
-    '<circle cx="5" cy="17" r="1.85" fill="#fff"/>' +
-    '<circle cx="19" cy="17" r="1.85" fill="#fff"/>' +
-    '<path d="M6.6 8 10.1 10.4M17.4 8 13.9 10.4M6.6 16 10.1 13.6M17.4 16 13.9 13.6" stroke="#fff" stroke-width="1.65" stroke-linecap="round"/>' +
-    '</svg>',
+  logo: BRAND_MARK_SVG,
   minus: `<svg ${S}><path d="M5 12h14"/></svg>`,
   close: `<svg ${S}><path d="m6 6 12 12M18 6 6 18"/></svg>`,
   check: `<svg ${S}><path d="m5 12.5 4.5 4.5L19 7.5"/></svg>`,
@@ -27,6 +30,8 @@ const ICONS = {
   moon: `<svg ${S}><path d="M21 14.5A8.5 8.5 0 1 1 9.5 3 7 7 0 0 0 21 14.5z"/></svg>`,
   gear: `<svg ${S}><path d="M20 7h-9"/><path d="M14 17H5"/><circle cx="17" cy="17" r="3"/><circle cx="7" cy="7" r="3"/></svg>`,
   refresh: `<svg ${S}><path d="M21 12a9 9 0 1 1-2.64-6.36"/><path d="M21 3v6h-6"/></svg>`,
+  search: `<svg ${S}><circle cx="11" cy="11" r="7"/><path d="m20 20-4-4"/></svg>`,
+  offline: `<svg ${S}><path d="M5.5 9.5a10 10 0 0 1 13 0"/><path d="M8.5 13a5.5 5.5 0 0 1 7 0"/><path d="M12 17.5h.01"/><path d="m3 3 18 18"/></svg>`,
   folder: `<svg ${S}><path d="M20 20a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.69-.9l-.81-1.2A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2z"/></svg>`,
   link: `<svg ${S}><path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/></svg>`,
   orb: `<svg ${S}><circle cx="12" cy="12" r="8"/><circle cx="12" cy="12" r="3.2"/></svg>`,
@@ -48,23 +53,44 @@ export function h<K extends keyof HTMLElementTagNameMap>(
 export function svgIcon(name: IconName): HTMLElement {
   const span = document.createElement('span')
   span.innerHTML = ICONS[name]
-  return span.firstElementChild as HTMLElement
+  const icon = span.firstElementChild as HTMLElement
+  icon.setAttribute('aria-hidden', 'true')
+  return icon
 }
 
 /* ---------- Toast ---------- */
 
 let toastRoot: HTMLElement | null = null
+const activeToasts = new Map<string, ReturnType<typeof setTimeout>>() // key → setTimeout id
 
-export function showToast(text: string, accent?: string): void {
+function hideToast(toast: Element, key: string): void {
+  toast.classList.add('leaving')
+  toast.addEventListener('animationend', () => toast.remove(), { once: true })
+  activeToasts.delete(key)
+}
+
+export function showToast(text: string, accent?: string, key?: string): void {
   if (!toastRoot) {
     toastRoot = h('div', 'toast-root')
+    toastRoot.setAttribute('role', 'status')
+    toastRoot.setAttribute('aria-live', 'polite')
     document.body.append(toastRoot)
   }
+
+  if (key) {
+    const existingTimer = activeToasts.get(key)
+    if (existingTimer !== undefined) {
+      clearTimeout(existingTimer)
+    }
+    const existing = toastRoot.querySelector(`[data-toast-key="${key}"]`)
+    if (existing) existing.remove()
+  }
+
   const toast = h('div', 'toast', [h('span', 'dot'), h('span', '', [text])])
   if (accent) toast.style.setProperty('--toast-accent', accent)
+  if (key) toast.setAttribute('data-toast-key', key)
   toastRoot.append(toast)
-  setTimeout(() => {
-    toast.classList.add('leaving')
-    toast.addEventListener('animationend', () => toast.remove(), { once: true })
-  }, 3600)
+
+  const timer = setTimeout(() => hideToast(toast, key ?? ''), 3600)
+  if (key) activeToasts.set(key, timer)
 }

@@ -4,13 +4,18 @@
  * 事件服务不可达时写入本地队列，定时补偿重发（离线事件补偿）。
  */
 
-const API_URL = 'http://127.0.0.1:17891/api/events'
-const HEARTBEAT_URL = 'http://127.0.0.1:17891/api/integrations/chatgpt/heartbeat'
+const DEFAULT_PORT = 17891
+const PORT_KEY = 'aihubPort' // 在扩展设置里可改（如 AIHUB_PORT 非默认值时）
 const QUEUE_KEY = 'aihub_pending_events'
 const RETRY_ALARM = 'aihub-retry'
 const RETRY_PERIOD_MIN = 1
 const HEARTBEAT_ALARM = 'aihub-heartbeat'
 const HEARTBEAT_PERIOD_MIN = 5
+
+async function baseUrl(path) {
+  const { [PORT_KEY]: port } = await chrome.storage.local.get(PORT_KEY)
+  return `http://127.0.0.1:${port ?? DEFAULT_PORT}${path}`
+}
 
 chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
   if (message?.type !== 'AIHUB_EVENT') return false
@@ -19,8 +24,9 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
 })
 
 // 心跳：让 Hub 体检页知道扩展在线（后端不可达时静默失败，不影响事件队列）
-function heartbeat() {
-  fetch(HEARTBEAT_URL, {
+async function heartbeat() {
+  const url = await baseUrl('/api/integrations/chatgpt/heartbeat')
+  fetch(url, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ version: chrome.runtime.getManifest().version }),
@@ -46,7 +52,8 @@ async function postOrQueue(event) {
 
 async function postEvent(event) {
   try {
-    const res = await fetch(API_URL, {
+    const url = await baseUrl('/api/events')
+    const res = await fetch(url, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(event),

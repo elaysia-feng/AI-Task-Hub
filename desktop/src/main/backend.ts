@@ -19,6 +19,7 @@ export class BackendManager {
   private child: ChildProcess | null = null
   private timer: NodeJS.Timeout | null = null
   private lastSpawnAt = 0
+  private stopped = false
 
   onStatusChange(listener: StatusListener): void {
     this.listeners.add(listener)
@@ -29,12 +30,17 @@ export class BackendManager {
   }
 
   start(): void {
+    this.stopped = false
     void this.tick()
   }
 
   stop(): void {
+    this.stopped = true
     if (this.timer) clearTimeout(this.timer)
-    // 不 kill 后端进程：Adapter 上报不应依赖桌面端存活
+    if (this.child) {
+      this.child.kill()
+      this.child = null
+    }
   }
 
   private setStatus(next: BackendStatus): void {
@@ -44,18 +50,24 @@ export class BackendManager {
   }
 
   private async tick(): Promise<void> {
-    const healthy = await this.checkHealth()
-    if (healthy) {
-      this.setStatus('online')
-    } else {
-      if (this.status === 'online') this.setStatus('offline')
-      // 后端中途退出也要能再次拉起，用冷却时间避免高频重启
-      if (Date.now() - this.lastSpawnAt > RESPAWN_COOLDOWN_MS) {
-        this.lastSpawnAt = Date.now()
-        this.trySpawnBackend()
+    if (this.stopped) return
+    try {
+      const healthy = await this.checkHealth()
+      if (healthy) {
+        this.setStatus('online')
+      } else {
+        if (this.status === 'online') this.setStatus('offline')
+        // 后端中途退出也要能再次拉起，用冷却时间避免高频重启
+        if (Date.now() - this.lastSpawnAt > RESPAWN_COOLDOWN_MS) {
+          this.lastSpawnAt = Date.now()
+          this.trySpawnBackend()
+        }
       }
+    } catch (err) {
+      // 任何意外异常都不允许打断轮询：记日志并继续排下一次 tick
+      console.error('[backend] tick error:', err)
     }
-    this.timer = setTimeout(() => void this.tick(), POLL_INTERVAL_MS)
+    if (!this.stopped) this.timer = setTimeout(() => void this.tick(), POLL_INTERVAL_MS)
   }
 
   private async checkHealth(): Promise<boolean> {
@@ -71,19 +83,32 @@ export class BackendManager {
   private trySpawnBackend(): void {
     if (!fs.existsSync(BACKEND_CMD.exe)) {
       console.warn(`[backend] 未找到后端可执行文件: ${BACKEND_CMD.exe}，请手动启动事件服务`)
+      this.setStatus('offline')
       return
     }
     try {
-      this.child = spawn(BACKEND_CMD.exe, BACKEND_CMD.args, {
+      // 覆盖前先杀掉旧实例，避免重复拉起时遗留孤儿进程（M15）
+      if (this.child) {
+        this.child.kill()
+        this.child = null
+      }
+      const child = spawn(BACKEND_CMD.exe, BACKEND_CMD.args, {
         cwd: BACKEND_CWD,
         stdio: 'ignore',
         windowsHide: true,
+        env: { ...process.env, PYTHONIOENCODING: 'utf-8' },
       })
-      this.child.unref()
-      this.child.on('error', (err) => console.warn('[backend] 启动失败:', err.message))
+      this.child = child
+      child.unref()
+      child.on('error', (err) => {
+        console.warn('[backend] 启动失败:', err.message)
+        // 通知 renderer，避免用户一直停留在 "connecting"（LOW：spawn 错误仅 console.warn）
+        this.setStatus('offline')
+      })
       console.log('[backend] 已拉起本地事件服务')
     } catch (err) {
       console.warn('[backend] 启动失败:', err)
+      this.setStatus('offline')
     }
   }
 }
