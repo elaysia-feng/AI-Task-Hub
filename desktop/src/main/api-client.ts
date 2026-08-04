@@ -54,7 +54,10 @@ export const apiClient = {
   },
 
   async clearTasks(): Promise<number> {
-    const data = await request<{ success: boolean; deleted: number }>('/api/tasks', { method: 'DELETE' })
+    // 后端自 303f6b6 起要求 confirm=true 防误删；漏带会 400（一键清理「用不了」的根因）
+    const data = await request<{ success: boolean; deleted: number }>('/api/tasks?confirm=true', {
+      method: 'DELETE',
+    })
     return data.deleted
   },
 
