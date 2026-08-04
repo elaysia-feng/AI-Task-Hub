@@ -161,9 +161,22 @@ function applyToWindow(dataUrl: string | null): void {
   if (!img.isEmpty()) win.setIcon(img)
 }
 
-function applyToTray(dataUrl: string | null): void {
+function applyToTray(prefs: UserIconPrefs, dataUrl: string | null): void {
   const tray = trayHandle?.tray
-  if (!tray || !dataUrl) return
+  if (!tray) return
+  // 默认预设沿用 make-icon.ps1 生成的圆形 tray.png（保持托盘圆形头像设计）；
+  // 自定义图运行时缩成 32×32 应用（方形托盘图标属 Windows 常规表现）
+  if (prefs.source === 'preset' && prefs.presetId === 'default') {
+    const p = path.join(RESOURCES_DIR, 'tray.png')
+    if (fs.existsSync(p)) {
+      const img = nativeImage.createFromPath(p)
+      if (!img.isEmpty()) {
+        tray.setImage(img)
+        return
+      }
+    }
+  }
+  if (!dataUrl) return
   const img = nativeImage.createFromDataURL(dataUrl).resize({ width: 32, height: 32 })
   if (!img.isEmpty()) tray.setImage(img)
 }
@@ -182,7 +195,7 @@ function notifyRenderer(): void {
 function commit(): UserIconState {
   const state = getUserIconState()
   applyToWindow(state.dataUrl)
-  applyToTray(state.dataUrl)
+  applyToTray(state.prefs, state.dataUrl)
   notifyRenderer()
   return state
 }
@@ -191,7 +204,7 @@ function commit(): UserIconState {
 export function applyPersistedIcon(): void {
   const state = getUserIconState()
   applyToWindow(state.dataUrl)
-  applyToTray(state.dataUrl)
+  applyToTray(state.prefs, state.dataUrl)
 }
 
 /* ---------- 变更入口 ---------- */
