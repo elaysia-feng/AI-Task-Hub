@@ -27,7 +27,7 @@ _SCHEMA_PATH = _resource_path("app/database/schema.sql")
 
 
 def _config_candidates() -> list[Path]:
-    """配置文件候选，按优先级排列：显式指定 > 用户级 > 仓库开发态。"""
+    """配置文件候选，按优先级排列：显式指定 > exe 同级（打包版）> 用户级 > 仓库开发态。"""
     candidates: list[Path] = []
     if os.environ.get("AIHUB_CONFIG"):
         try:
@@ -37,6 +37,12 @@ def _config_candidates() -> list[Path]:
                 candidates.append(p)
         except (OSError, ValueError):
             pass  # 静默忽略非法 env 值
+    if getattr(sys, "frozen", False):
+        # PyInstaller 打包版：_PROJECT_ROOT 指向临时解压目录，无法读仓库 .env。
+        # 把 config.env / .env 放在 exe 旁边即可被读取（如 packaging/dist/ 下）。
+        exe_dir = Path(sys.executable).resolve().parent
+        candidates.append(exe_dir / "config.env")
+        candidates.append(exe_dir / ".env")
     appdata = os.environ.get("APPDATA")
     if appdata:
         candidates.append(Path(appdata) / "AI Task Hub" / "config.env")
@@ -54,7 +60,11 @@ def _load_dotenv() -> None:
             if not line or line.startswith("#") or "=" not in line:
                 continue
             key, _, value = line.partition("=")
-            os.environ.setdefault(key.strip(), value.strip())
+            value = value.strip()
+            # 支持单/双引号包裹的值：密码含 @、# 等字符时用户习惯加引号（如 '@Feng050813'）
+            if len(value) >= 2 and value[0] == value[-1] and value[0] in ("'", '"'):
+                value = value[1:-1]
+            os.environ.setdefault(key.strip(), value)
         return
 
 

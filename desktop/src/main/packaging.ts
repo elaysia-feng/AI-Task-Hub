@@ -2,7 +2,7 @@ import { spawn, execFileSync } from 'node:child_process'
 import fs from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { BrowserWindow, Notification, dialog, shell } from 'electron'
+import { app, BrowserWindow, Notification, dialog, shell } from 'electron'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 
@@ -223,6 +223,14 @@ async function ensureBackendExe(win: BrowserWindow | null): Promise<string | nul
 // ---------------------------------------------------------------------------
 
 export async function buildExeWithConfirm(win: BrowserWindow | null): Promise<BuildExeResult> {
+  // 安装版（打包进 app.asar 后只读，仓库内的 packaging/、.venv、desktop/package.json 均不存在）
+  // 不具备在应用内打包的条件，直接拒绝并给出从源码打包的指引（打包按钮在安装版中应已隐藏，此为兜底）。
+  if (app.isPackaged) {
+    return {
+      ok: false,
+      message: '安装版不支持在应用内打包：请从源码仓库运行 `cd desktop && npm run dist:local`',
+    }
+  }
   // ---- 确认 ----
   const confirm = win
     ? await dialog.showMessageBox(win, {

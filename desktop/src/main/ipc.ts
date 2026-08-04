@@ -1,4 +1,4 @@
-import { BrowserWindow, dialog, ipcMain, shell } from 'electron'
+import { app, BrowserWindow, dialog, ipcMain, shell } from 'electron'
 import path from 'node:path'
 import os from 'node:os'
 import { apiClient } from './api-client'
@@ -127,4 +127,6 @@ export function registerIpcHandlers(
   })
 
   ipcMain.handle('packaging:build-exe', () => buildExeWithConfirm(getWindow()))
+  // 渲染层据此隐藏「应用内打包」按钮：安装版（app.asar）内没有打包所需源码文件
+  ipcMain.handle('app:is-packaged', () => app.isPackaged)
 }

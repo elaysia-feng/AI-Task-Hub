@@ -154,9 +154,13 @@ npm run dist:local
 | `AI-Task-Hub-Portable-x.y.z.exe` | 免安装便携版，双击即用 |
 | `win-unpacked\AI Task Hub.exe` | 解压版，直接运行 |
 
-### 方式 B：应用内一键打包
+### 方式 B：开发版界面内一键打包
 
-启动开发版 → **设置 → 应用更新 / 打包 → 生成 exe 安装包**。会自动检测 NSIS、Python、后端 exe，缺什么给什么提示。
+先以**开发版**启动（源码目录 `cd desktop` → `npm run dev`），然后在 **设置 → 应用更新 / 打包 → 生成 exe 安装包**。会自动检测 NSIS、Python、后端 exe，缺什么给什么提示。
+
+> **注意**：方式 B 与方式 A 的先决条件**完全一样**——都需要源码仓库（`packaging/`、`.venv/`、`desktop/package.json` 等）。它只是把「命令行打包」换成界面按钮，并不能省掉环境准备。
+>
+> **安装版（打包后安装的应用）内没有此功能**：打包进 `app.asar` 后上述源码文件不可用，按钮会被禁用并提示改到源码仓库打包。
 
 ### 双击 exe "没反应"？
 

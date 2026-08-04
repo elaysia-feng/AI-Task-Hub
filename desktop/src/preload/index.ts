@@ -70,6 +70,7 @@ const api: AihubApi = {
   },
 
   buildExe: () => ipcRenderer.invoke('packaging:build-exe'),
+  isPackaged: () => ipcRenderer.invoke('app:is-packaged'),
   onPackagingStatus: (cb) => {
     const listener = (
       _event: Electron.IpcRendererEvent,

@@ -276,6 +276,16 @@ function makeUpdateSection(): HTMLElement {
   const buildStatus = h('div', 'wallpaper-status', [
     '开发用：点按钮会先弹出确认框，再本地打包到 desktop/dist',
   ])
+  // 安装版（打包进 app.asar）内没有 packaging/、.venv 等源码文件，无法应用内打包：
+  // 禁用按钮并给出从源码打包的指引（主进程 buildExeWithConfirm 另有 app.isPackaged 兜底）
+  void window.aihub.isPackaged().then((packaged) => {
+    if (packaged) {
+      buildBtn.disabled = true
+      buildBtn.textContent = '安装版不可用'
+      buildBtn.title = '安装版内没有打包所需的源码文件，请在源码仓库打包'
+      buildStatus.textContent = '安装版不支持应用内打包，请到源码仓库运行 `cd desktop && npm run dist:local`'
+    }
+  })
   let cleanupPackagingStatus: (() => void) | null = null
 
   buildBtn.onclick = async () => {

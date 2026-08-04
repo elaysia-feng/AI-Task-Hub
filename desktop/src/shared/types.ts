@@ -162,4 +162,6 @@ export interface AihubApi {
   /** 设置页：确认后生成本地 exe 安装包 */
   buildExe(): Promise<{ ok: boolean; cancelled?: boolean; message: string; distDir?: string; missing?: 'nsis' | 'backend' | 'python' }>
   onPackagingStatus(cb: (s: { state: string; message: string }) => void): () => void
+  /** 是否为打包版（安装版内无源码仓库，不能应用内打包，UI 据此隐藏按钮） */
+  isPackaged(): Promise<boolean>
 }

@@ -1,10 +1,11 @@
 """阶段 1 新增：/api/status、配置文件优先级、资源解析、日志目录。"""
 
+import os
 import sys
 from pathlib import Path
 
 from conftest import TEST_DB_NAME
-from app.database.mysql import _config_candidates, _resource_path
+from app.database.mysql import _config_candidates, _load_dotenv, _resource_path
 from app.logging_config import log_dir
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -40,6 +41,32 @@ def test_config_candidates_without_explicit(monkeypatch, tmp_path):
     monkeypatch.setenv("APPDATA", str(tmp_path))
     candidates = _config_candidates()
     assert candidates[0] == tmp_path / "AI Task Hub" / "config.env"
+
+
+def test_config_candidates_frozen_uses_exe_dir(monkeypatch):
+    monkeypatch.setattr(sys, "frozen", True, raising=False)
+    monkeypatch.delenv("AIHUB_CONFIG", raising=False)
+    monkeypatch.delenv("APPDATA", raising=False)
+    exe_dir = Path(sys.executable).resolve().parent
+    candidates = _config_candidates()
+    assert candidates[0] == exe_dir / "config.env"
+    assert candidates[1] == exe_dir / ".env"
+    assert candidates[-1] == REPO_ROOT / ".env"
+
+
+def test_load_dotenv_strips_quotes(monkeypatch, tmp_path):
+    env_file = tmp_path / "config.env"
+    env_file.write_text(
+        "AIHUB_MYSQL_PASSWORD='dummy@pass#1'\n"
+        'AIHUB_MYSQL_DB="ai_task_hub_test2"\n',
+        encoding="utf-8",
+    )
+    monkeypatch.setattr("app.database.mysql._config_candidates", lambda: [env_file])
+    monkeypatch.delenv("AIHUB_MYSQL_PASSWORD", raising=False)
+    monkeypatch.delenv("AIHUB_MYSQL_DB", raising=False)
+    _load_dotenv()
+    assert os.environ["AIHUB_MYSQL_PASSWORD"] == "dummy@pass#1"
+    assert os.environ["AIHUB_MYSQL_DB"] == "ai_task_hub_test2"
 
 
 def test_resource_path_source_layout():
