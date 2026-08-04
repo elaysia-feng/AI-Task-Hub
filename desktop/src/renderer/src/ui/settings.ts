@@ -11,6 +11,36 @@ import { state } from '../state'
 import { h, showToast, svgIcon } from './dom'
 import { applyWallpaper } from './wallpaper'
 
+const INTEGRATIONS_CACHE_MS = 5000
+let integrationsCache: { value: IntegrationsStatus; expiresAt: number } | null = null
+let integrationsInFlight: Promise<IntegrationsStatus | null> | null = null
+
+function loadIntegrations(): Promise<IntegrationsStatus | null> {
+  if (integrationsCache && integrationsCache.expiresAt > Date.now()) {
+    return Promise.resolve(integrationsCache.value)
+  }
+  if (!integrationsInFlight) {
+    integrationsInFlight = window.aihub.getIntegrations()
+      .then((value) => {
+        if (value) {
+          integrationsCache = {
+            value,
+            expiresAt: Date.now() + INTEGRATIONS_CACHE_MS,
+          }
+        }
+        return value
+      })
+      .finally(() => {
+        integrationsInFlight = null
+      })
+  }
+  return integrationsInFlight
+}
+
+function invalidateIntegrationsCache(): void {
+  integrationsCache = null
+}
+
 export function renderSettingsView(container: HTMLElement): void {
   container.append(h('div', 'content-header', [h('h1', '', ['设置'])]))
 
@@ -26,15 +56,21 @@ export function renderSettingsView(container: HTMLElement): void {
   ])
   container.append(appearanceSection, integrationsSection, updateSection, diagSection)
 
-  void fillIntegrations(integrationsSection)
-  void fillDiagnostics(diagSection)
+  if (state.backend === 'online') {
+    void fillIntegrations(integrationsSection)
+    void fillDiagnostics(diagSection)
+  } else {
+    integrationsSection.querySelector('.settings-loading')!.textContent = '后端正在启动，连接后自动检测'
+    diagSection.querySelector('.settings-loading')!.textContent = '后端正在启动，连接后自动读取'
+  }
 }
 
 /* ---------- 外观 / 壁纸 ---------- */
 
 function makeAppearanceSection(): HTMLElement {
   const status = h('div', 'wallpaper-status', ['读取中…'])
-  const pickBtn = h('button', 'btn primary', ['选择壁纸'])
+  const presetWrap = h('div', 'icon-preset-wrap')
+  const pickBtn = h('button', 'btn', ['选择本地壁纸…'])
   const clearBtn = h('button', 'btn', ['清除壁纸'])
 
   const blurVal = h('span', 'val', ['—'])
@@ -50,7 +86,36 @@ function makeAppearanceSection(): HTMLElement {
   const applyState = (ws: WallpaperState): void => {
     applying = true
     applyWallpaper(ws)
-    status.textContent = ws.hasImage ? '已设置本地壁纸（保存在应用数据目录）' : '未设置壁纸（使用纯色背景）'
+    const selectedPresetId = ws.selection.source === 'preset' ? ws.selection.presetId : null
+    presetWrap.replaceChildren(
+      ...ws.presets.map((preset) => {
+        const thumb = h('span', 'preset-thumb')
+        if (preset.previewDataUrl) thumb.style.backgroundImage = `url("${preset.previewDataUrl}")`
+        const btn = h('button', 'btn preset-choice', [thumb, h('span', '', [preset.name])])
+        btn.classList.toggle(
+          'primary',
+          selectedPresetId === preset.id,
+        )
+        btn.onclick = async () => {
+          try {
+            const next = await window.aihub.setWallpaperPreset(preset.id)
+            applyState(next)
+            showToast(`已切换背景：${preset.name}`, 'var(--st-done)')
+          } catch (err) {
+            showToast(err instanceof Error ? err.message : '切换背景失败', 'var(--st-fail)')
+          }
+        }
+        return btn
+      }),
+    )
+    if (ws.selection.source === 'custom') {
+      status.textContent = '已使用本地壁纸（保存在应用数据目录）'
+    } else if (selectedPresetId !== null) {
+      const name = ws.presets.find((preset) => preset.id === selectedPresetId)?.name
+      status.textContent = `已使用内置主题：${name ?? selectedPresetId}`
+    } else {
+      status.textContent = '未设置壁纸（使用纯色背景）'
+    }
     clearBtn.disabled = !ws.hasImage
     blurInput.value = String(ws.prefs.blur)
     dimInput.value = String(ws.prefs.dim)
@@ -123,6 +188,8 @@ function makeAppearanceSection(): HTMLElement {
   return h('section', 'settings-section', [
     h('h2', '', ['外观']),
     h('div', 'wallpaper-panel', [
+      h('div', 'preset-label', ['内置背景主题（自动适配 Light / Dark）']),
+      presetWrap,
       h('div', 'wallpaper-actions', [pickBtn, clearBtn, status]),
       h('div', 'wallpaper-sliders', [
         h('div', 'wallpaper-slider-row', [h('span', '', ['模糊']), blurInput, blurVal]),
@@ -148,7 +215,9 @@ function makeIconPanel(): HTMLElement {
   const render = (s: UserIconState): void => {
     presetWrap.replaceChildren(
       ...s.presets.map((p) => {
-        const btn = h('button', 'btn icon-preset-btn', [p.name])
+        const thumb = h('span', 'preset-thumb')
+        if (p.previewDataUrl) thumb.style.backgroundImage = `url("${p.previewDataUrl}")`
+        const btn = h('button', 'btn icon-preset-btn preset-choice', [thumb, h('span', '', [p.name])])
         btn.dataset.presetId = p.id
         btn.classList.toggle('primary', s.prefs.source === 'preset' && s.prefs.presetId === p.id)
         btn.onclick = async () => {
@@ -166,8 +235,8 @@ function makeIconPanel(): HTMLElement {
     resetBtn.disabled = s.prefs.source === 'preset' && s.prefs.presetId === defaultId
     status.textContent =
       s.prefs.source === 'custom'
-        ? '已使用本地图片（悬浮球 / 窗口 / 托盘即时生效）'
-        : '已使用内置预设（悬浮球球面 / 窗口 / 托盘即时生效）'
+        ? '已使用本地图片（标题栏 / 悬浮球 / 窗口 / 托盘即时生效）'
+        : '已使用内置预设（标题栏 / 悬浮球 / 窗口 / 托盘即时生效）'
   }
 
   pickBtn.onclick = async () => {
@@ -198,10 +267,11 @@ function makeIconPanel(): HTMLElement {
   })
 
   return h('div', 'wallpaper-panel icon-panel', [
+    h('div', 'preset-label', ['内置应用图标']),
     h('div', 'wallpaper-actions', [presetWrap]),
     h('div', 'wallpaper-actions', [pickBtn, resetBtn, status]),
     h('div', 'wallpaper-status', [
-      '图标应用到悬浮球球面、窗口/任务栏与托盘；重新打包安装包时也会更新安装包图标。',
+      '图标应用到标题栏、悬浮球球面、窗口/任务栏与托盘；重新打包安装包时也会更新安装包图标。',
     ]),
   ])
 }
@@ -218,14 +288,23 @@ function rangeInput(min: number, max: number, step: number): HTMLInputElement {
 /* ---------- 接入集成 ---------- */
 
 async function fillIntegrations(section: HTMLElement): Promise<void> {
-  let info: IntegrationsStatus
+  let info: IntegrationsStatus | null
   try {
-    info = await window.aihub.getIntegrations()
+    info = await loadIntegrations()
   } catch {
-    section.querySelector('.settings-loading')!.textContent = '后端离线，无法检测接入状态'
+    if (!section.isConnected) return
+    const loading = section.querySelector('.settings-loading')
+    if (loading) loading.textContent = '接入状态检测失败，请稍后重试'
     return
   }
-  section.querySelector('.settings-loading')!.remove()
+  if (!section.isConnected) return
+  const loading = section.querySelector('.settings-loading')
+  if (!loading) return
+  if (!info) {
+    loading.textContent = '接入状态检测超时，请稍后重试'
+    return
+  }
+  loading.remove()
 
   const grid = h('div', 'int-grid', [
     claudeCard(info),
@@ -251,6 +330,7 @@ function claudeCard(info: IntegrationsStatus): HTMLElement {
     installBtn.disabled = true
     const res = await window.aihub.installClaude()
     if (res.success) {
+      invalidateIntegrationsCache()
       showToast(res.changed ? 'Claude Code 接入完成' : 'Claude Code 已接入，无需变更', 'var(--st-done)')
       refreshSettings()
     } else {
@@ -276,6 +356,7 @@ function codexCard(info: IntegrationsStatus): HTMLElement {
     installBtn.disabled = true
     const res = await window.aihub.installCodex()
     if (res.success) {
+      invalidateIntegrationsCache()
       const extra = res.forwardTarget ? '（原 notify 命令已保留转发）' : ''
       showToast(res.changed ? `Codex 接入完成${extra}` : 'Codex 已接入，无需变更', 'var(--st-done)')
       refreshSettings()

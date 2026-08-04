@@ -305,19 +305,34 @@ html[data-wallpaper='on'] .content-header h1 {
 .titlebar .logo {
   width: 26px;
   height: 26px;
+  padding: 0;
   border-radius: 9px;
   display: grid;
   place-items: center;
   color: #f7f3eb;
-  background: var(--brand-ink);
+  background-color: var(--brand-ink);
+  background-image: var(--titlebar-icon, none);
+  background-position: center;
+  background-repeat: no-repeat;
+  background-size: var(--titlebar-icon-size, auto);
   border: 1px solid rgba(255, 255, 255, 0.13);
   box-shadow: 0 4px 12px rgba(0, 0, 0, 0.24);
   flex-shrink: 0;
+  cursor: pointer;
+  -webkit-app-region: no-drag;
 }
 
 .titlebar .logo svg {
   width: 17px;
   height: 17px;
+}
+
+.titlebar .logo.has-image svg {
+  visibility: hidden;
+}
+
+.titlebar .logo:hover {
+  border-color: var(--brand-line);
 }
 
 .titlebar .app-name {
@@ -1543,13 +1558,40 @@ html[data-wallpaper='on'] .content-header h1 {
 }
 
 .icon-preset-wrap {
-  display: flex;
-  flex-wrap: wrap;
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(118px, 1fr));
   gap: 8px;
 }
 
 .icon-preset-btn {
   font-size: 12px;
+}
+
+.preset-label {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-secondary);
+}
+
+.preset-choice {
+  height: auto;
+  min-height: 58px;
+  padding: 7px 10px;
+  border-radius: var(--radius-sm);
+  justify-content: flex-start;
+  line-height: 1.25;
+  text-align: left;
+}
+
+.preset-thumb {
+  width: 42px;
+  height: 42px;
+  flex: 0 0 42px;
+  border-radius: 11px;
+  background-color: var(--hover-fill);
+  background-position: center;
+  background-size: cover;
+  box-shadow: inset 0 0 0 1px var(--border);
 }
 
 .icon-panel {

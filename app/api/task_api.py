@@ -7,7 +7,14 @@ logger = logging.getLogger(__name__)
 
 from app.model.task import Task
 from app.api.websocket_api import ws_manager
-from shared.constants import ALL_STATUSES
+from shared.constants import ALL_STATUSES, HISTORY_STATUSES, QUEUE_STATUSES
+
+# scope → 删除状态集合：queue=待处理四种状态，history=已查看/已忽略，all=全部（None）
+_CLEAR_SCOPES: dict[str, Optional[tuple[str, ...]]] = {
+    "queue": QUEUE_STATUSES,
+    "history": HISTORY_STATUSES,
+    "all": None,
+}
 
 router = APIRouter(prefix="/api/tasks")
 
@@ -100,11 +107,15 @@ async def mark_ignored(request: Request, task_id: int = Path(..., gt=0)) -> dict
 async def clear_tasks(
     request: Request,
     confirm: bool = Query(False, description="必须为 true 才执行清理"),
+    scope: str = Query("all", description="queue=只清待处理 / history=只清历史 / all=全部"),
 ) -> dict:
-    """一键清理：删除全部任务（事件流水级联删除），广播 tasks_cleared。"""
+    """一键清理：按 tab 独立清空（queue/history），事件流水级联删除，广播 tasks_cleared。"""
     if not confirm:
         raise HTTPException(status_code=400, detail="需要 confirm=true 才能执行清理")
-    deleted = request.app.state.task_service.clear_all()
+    statuses = _CLEAR_SCOPES.get(scope)
+    if scope not in _CLEAR_SCOPES:
+        raise HTTPException(status_code=400, detail=f"未知 scope: {scope}")
+    deleted = request.app.state.task_service.clear_all(statuses)
     await ws_manager.broadcast({"type": "tasks_cleared", "deleted": deleted})
     return {"success": True, "deleted": deleted}
 

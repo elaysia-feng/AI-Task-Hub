@@ -2,14 +2,14 @@
 # make-icon.ps1 —— 从单一源图生成应用全套图标
 #
 # 【单一源图模型】
-#   唯一源图：desktop/resources/anime-head.png（256×256 正方形，樱花粉二次元女头）
+#   唯一源图：desktop/resources/anime-head.png（正方形 AI 看板娘）
 #   更换图标 = 替换 anime-head.png（或传 -IconSource 指定自定义源图），然后重跑本脚本即可再生成全套：
 #     - desktop/resources/icon.png   256×256
 #     - desktop/resources/tray.png    32×32 圆形（透明四角，供系统托盘）
 #     - desktop/resources/icon.ico    16/24/32/48/64/128/256 多尺寸（PNG 帧，32bppArgb）
 #     - packaging/app.ico             icon.ico 副本（供 PyInstaller 后端 exe）
 #   用法：pwsh desktop/scripts/make-icon.ps1 [-IconSource <自定义源图绝对路径>]
-#   -IconSource：用户自定义图标重打包时传入（apply-user-icon.mjs / packaging.ts 调用）；缺省用默认女头。
+#   -IconSource：用当前所选图标重打包时传入（apply-user-icon.mjs / packaging.ts 调用）；缺省用默认看板娘。
 #   本脚本不依赖当前工作目录：路径一律基于 $PSScriptRoot 解析，可任意 cwd 运行。
 # =============================================================================
 
@@ -25,7 +25,7 @@ $sourcePng = if ($IconSource) { $IconSource } else { Join-Path $resources 'anime
 
 if (-not (Test-Path -LiteralPath $sourcePng)) {
     Write-Host "错误：缺少源图：$sourcePng" -ForegroundColor Red
-    Write-Host '请先重新生成 anime-head.png（256×256 樱花粉二次元女头），或检查 -IconSource 路径后再运行本脚本。' -ForegroundColor Red
+    Write-Host '请先重新生成 anime-head.png（正方形 AI 看板娘），或检查 -IconSource 路径后再运行本脚本。' -ForegroundColor Red
     exit 1
 }
 

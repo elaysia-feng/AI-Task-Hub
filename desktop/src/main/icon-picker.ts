@@ -7,9 +7,10 @@ import { RESOURCES_DIR } from './config'
 import type { TrayHandle } from './tray'
 
 /**
- * 应用图标偏好：用户可选内置预设（粉发少女默认）或本地自定义图片。
+ * 应用图标偏好：用户可选内置角色预设（AI 看板娘默认）或本地自定义图片。
  *
  * 生效面：
+ *   - 标题栏图标（渲染端 --titlebar-icon / --titlebar-icon-size）
  *   - 悬浮球球面（渲染端 --orb-face / --orb-face-size）
  *   - 窗口 / 任务栏图标（win.setIcon）
  *   - 托盘图标（tray.setImage，32×32）
@@ -19,21 +20,34 @@ import type { TrayHandle } from './tray'
  */
 
 const MAX_BYTES = 5 * 1024 * 1024
+const UI_ICON_MAX_EDGE = 256
 const ALLOWED_EXT = new Set(['.jpg', '.jpeg', '.png', '.webp', '.bmp'])
 
 /**
  * 内置预设注册表（可扩展）：
  * 往 desktop/resources/presets/ 丢一张正方形 PNG，再在数组里加一项即可。
- * file 为相对 RESOURCES_DIR 的路径；默认预设沿用 resources/anime-head.png（与 make-icon.ps1 同源）。
+ * file 为相对 RESOURCES_DIR 的路径；resources/anime-head.png 与默认预设保持同源。
  */
 export const ICON_PRESETS: UserIconPresetMeta[] = [
-  { id: 'default', name: '粉发少女（默认）', file: 'anime-head.png' },
+  { id: 'default', name: 'AI 看板娘（默认）', file: 'presets/default.png' },
+  { id: 'rei-ayanami', name: '绫波丽', file: 'presets/rei-ayanami.png' },
+  { id: 'tomo-ebizuka', name: '海老塚智', file: 'presets/tomo-ebizuka.png' },
+  { id: 'elaina', name: '伊蕾娜', file: 'presets/elaina.png' },
+  { id: 'mutsumi-wakaba', name: '若叶睦', file: 'presets/mutsumi-wakaba.png' },
+  { id: 'sakiko-togawa', name: '丰川祥子', file: 'presets/sakiko-togawa.png' },
+  { id: 'yui-hirasawa', name: '平泽唯', file: 'presets/yui-hirasawa.png' },
+  { id: 'mio-akiyama', name: '秋山澪', file: 'presets/mio-akiyama.png' },
+  { id: 'ritsu-tainaka', name: '田井中律', file: 'presets/ritsu-tainaka.png' },
+  { id: 'tsumugi-kotobuki', name: '琴吹紬', file: 'presets/tsumugi-kotobuki.png' },
+  { id: 'azusa-nakano', name: '中野梓', file: 'presets/azusa-nakano.png' },
 ]
 
 export const DEFAULT_ICON_PREFS = { source: 'preset', presetId: 'default' } as const
 
 let getWindow: () => BrowserWindow | null = () => null
 let trayHandle: TrayHandle | null = null
+let cachedPresetPreviews: UserIconPresetMeta[] | null = null
+const cachedPresetDataUrls = new Map<string, string | null>()
 
 export function bindIconWindow(getter: () => BrowserWindow | null): void {
   getWindow = getter
@@ -72,22 +86,6 @@ function currentImagePath(): string | null {
   return null
 }
 
-function mimeFor(ext: string): string {
-  switch (ext.toLowerCase()) {
-    case '.jpg':
-    case '.jpeg':
-      return 'image/jpeg'
-    case '.png':
-      return 'image/png'
-    case '.webp':
-      return 'image/webp'
-    case '.bmp':
-      return 'image/bmp'
-    default:
-      return 'application/octet-stream'
-  }
-}
-
 function clampPrefs(input: Record<string, unknown> | undefined): UserIconPrefs {
   if (input?.source === 'custom') return { source: 'custom' }
   const id = typeof input?.presetId === 'string' ? input.presetId : DEFAULT_ICON_PREFS.presetId
@@ -119,15 +117,19 @@ function sourcePathFor(prefs: UserIconPrefs): string | null {
   return fs.existsSync(p) ? p : null
 }
 
-function toDataUrl(filePath: string): string | null {
-  try {
-    const buf = fs.readFileSync(filePath)
-    if (buf.byteLength > MAX_BYTES) return null
-    const ext = path.extname(filePath)
-    return `data:${mimeFor(ext)};base64,${buf.toString('base64')}`
-  } catch {
-    return null
-  }
+function toUiDataUrl(filePath: string): string | null {
+  const icon = nativeImage.createFromPath(filePath)
+  if (icon.isEmpty()) return null
+
+  const { width, height } = icon.getSize()
+  const scale = Math.min(1, UI_ICON_MAX_EDGE / Math.max(width, height))
+  const resized = scale < 1
+    ? icon.resize({
+        width: Math.max(1, Math.round(width * scale)),
+        height: Math.max(1, Math.round(height * scale)),
+      })
+    : icon
+  return resized.toDataURL()
 }
 
 /* ---------- 状态读取 ---------- */
@@ -140,15 +142,37 @@ export function getUserIconState(): UserIconState {
     writeStoredPrefs(prefs)
   }
   const src = sourcePathFor(prefs)
-  const dataUrl = src ? toDataUrl(src) : null
-  return { prefs, dataUrl, presets: ICON_PRESETS }
+  const dataUrl = src
+    ? prefs.source === 'preset'
+      ? presetDataUrl(prefs.presetId, src)
+      : toUiDataUrl(src)
+    : null
+  return { prefs, dataUrl, presets: presetPreviews() }
 }
 
-/** 打包用：仅当用户设了自定义图标且文件存在时返回源图绝对路径（默认预设走 make-icon.ps1 原有逻辑） */
+function presetDataUrl(presetId: string, filePath: string): string | null {
+  if (!cachedPresetDataUrls.has(presetId)) {
+    cachedPresetDataUrls.set(presetId, toUiDataUrl(filePath))
+  }
+  return cachedPresetDataUrls.get(presetId) ?? null
+}
+
+function presetPreviews(): UserIconPresetMeta[] {
+  if (cachedPresetPreviews) return cachedPresetPreviews
+  cachedPresetPreviews = ICON_PRESETS.map((preset) => {
+    const icon = nativeImage.createFromPath(path.join(RESOURCES_DIR, preset.file))
+    return {
+      ...preset,
+      previewDataUrl: icon.isEmpty() ? null : icon.resize({ width: 96, height: 96 }).toDataURL(),
+    }
+  })
+  return cachedPresetPreviews
+}
+
+/** 应用内打包用：返回当前预设或自定义图标的源图绝对路径。 */
 export function getUserIconSourcePath(): string | null {
   const prefs = readStoredPrefs()
-  if (prefs.source !== 'custom') return null
-  const p = currentImagePath()
+  const p = sourcePathFor(prefs)
   return p && fs.existsSync(p) ? p : null
 }
 

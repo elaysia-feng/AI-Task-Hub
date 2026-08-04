@@ -1,8 +1,14 @@
 import fs from 'node:fs'
 import path from 'node:path'
-import { app, dialog, BrowserWindow } from 'electron'
-import type { WallpaperPrefs, WallpaperState } from '../shared/types'
+import { app, dialog, BrowserWindow, nativeImage } from 'electron'
+import type {
+  WallpaperPrefs,
+  WallpaperPresetMeta,
+  WallpaperSelection,
+  WallpaperState,
+} from '../shared/types'
 import { readPrefs, writePrefs } from './prefs'
+import { RESOURCES_DIR } from './config'
 
 const MAX_BYTES = 15 * 1024 * 1024
 const ALLOWED_EXT = new Set(['.jpg', '.jpeg', '.png', '.webp', '.bmp'])
@@ -12,6 +18,27 @@ export const DEFAULT_WALLPAPER_PREFS: WallpaperPrefs = {
   dim: 32,
   opacity: 35,
 }
+
+export const WALLPAPER_PRESETS: WallpaperPresetMeta[] = [
+  { id: 'default', name: 'AI 看板娘', lightFile: 'themes/default/wallpaper-light.png', darkFile: 'themes/default/wallpaper-dark.png' },
+  { id: 'rei-ayanami', name: '绫波丽', lightFile: 'themes/rei-ayanami/wallpaper-light.png', darkFile: 'themes/rei-ayanami/wallpaper-dark.png' },
+  { id: 'tomo-ebizuka', name: '海老塚智', lightFile: 'themes/tomo-ebizuka/wallpaper-light.png', darkFile: 'themes/tomo-ebizuka/wallpaper-dark.png' },
+  { id: 'elaina', name: '伊蕾娜', lightFile: 'themes/elaina/wallpaper-light.png', darkFile: 'themes/elaina/wallpaper-dark.png' },
+  { id: 'mutsumi-wakaba', name: '若叶睦', lightFile: 'themes/mutsumi-wakaba/wallpaper-light.png', darkFile: 'themes/mutsumi-wakaba/wallpaper-dark.png' },
+  { id: 'sakiko-togawa', name: '丰川祥子', lightFile: 'themes/sakiko-togawa/wallpaper-light.png', darkFile: 'themes/sakiko-togawa/wallpaper-dark.png' },
+  { id: 'yui-hirasawa', name: '平泽唯', lightFile: 'themes/yui-hirasawa/wallpaper-light.png', darkFile: 'themes/yui-hirasawa/wallpaper-dark.png' },
+  { id: 'mio-akiyama', name: '秋山澪', lightFile: 'themes/mio-akiyama/wallpaper-light.png', darkFile: 'themes/mio-akiyama/wallpaper-dark.png' },
+  { id: 'ritsu-tainaka', name: '田井中律', lightFile: 'themes/ritsu-tainaka/wallpaper-light.png', darkFile: 'themes/ritsu-tainaka/wallpaper-dark.png' },
+  { id: 'tsumugi-kotobuki', name: '琴吹紬', lightFile: 'themes/tsumugi-kotobuki/wallpaper-light.png', darkFile: 'themes/tsumugi-kotobuki/wallpaper-dark.png' },
+  { id: 'azusa-nakano', name: '中野梓', lightFile: 'themes/azusa-nakano/wallpaper-light.png', darkFile: 'themes/azusa-nakano/wallpaper-dark.png' },
+]
+
+let cachedPresetWallpaper: {
+  presetId: string
+  dataUrlLight: string | null
+  dataUrlDark: string | null
+} | null = null
+let cachedPresetPreviews: WallpaperPresetMeta[] | null = null
 
 function wallpaperDir(): string {
   const dir = path.join(app.getPath('userData'), 'wallpaper')
@@ -70,6 +97,28 @@ function writeStoredPrefs(prefs: WallpaperPrefs): void {
   })
 }
 
+function readSelection(): WallpaperSelection {
+  const raw = readPrefs().wallpaperSelection as Record<string, unknown> | undefined
+  if (raw?.source === 'preset' && typeof raw.presetId === 'string') {
+    if (WALLPAPER_PRESETS.some((preset) => preset.id === raw.presetId)) {
+      return { source: 'preset', presetId: raw.presetId }
+    }
+  }
+  if (raw?.source === 'custom') return { source: 'custom' }
+  // 兼容旧版：已有 current.* 时继续作为本地壁纸使用。
+  if (!raw && currentImagePath()) return { source: 'custom' }
+  // 新安装默认展示新版 AI 看板娘；用户主动清除后会持久化 source=none。
+  if (!raw) return { source: 'preset', presetId: 'default' }
+  return { source: 'none' }
+}
+
+function writeSelection(selection: WallpaperSelection): void {
+  writePrefs((existing) => {
+    existing.wallpaperSelection = selection
+    return existing
+  })
+}
+
 function toDataUrl(filePath: string): string | null {
   try {
     const buf = fs.readFileSync(filePath)
@@ -83,10 +132,68 @@ function toDataUrl(filePath: string): string | null {
 
 export function getWallpaperState(): WallpaperState {
   const prefs = readStoredPrefs()
-  const img = currentImagePath()
-  if (!img) return { hasImage: false, dataUrl: null, prefs }
-  const dataUrl = toDataUrl(img)
-  return { hasImage: Boolean(dataUrl), dataUrl, prefs }
+  let selection = readSelection()
+  let lightPath: string | null = null
+  let darkPath: string | null = null
+  if (selection.source === 'custom') {
+    lightPath = currentImagePath()
+    darkPath = lightPath
+    if (!lightPath) {
+      selection = { source: 'none' }
+      writeSelection(selection)
+    }
+  } else if (selection.source === 'preset') {
+    const presetId = selection.presetId
+    const preset = WALLPAPER_PRESETS.find((item) => item.id === presetId)
+    if (preset) {
+      lightPath = path.join(RESOURCES_DIR, preset.lightFile)
+      darkPath = path.join(RESOURCES_DIR, preset.darkFile)
+    }
+  }
+  let dataUrlLight: string | null
+  let dataUrlDark: string | null
+  if (selection.source === 'preset') {
+    const pair = presetWallpaperData(selection.presetId, lightPath, darkPath)
+    dataUrlLight = pair.dataUrlLight
+    dataUrlDark = pair.dataUrlDark
+  } else {
+    dataUrlLight = lightPath ? toDataUrl(lightPath) : null
+    dataUrlDark = darkPath ? toDataUrl(darkPath) : null
+  }
+  return {
+    hasImage: Boolean(dataUrlLight || dataUrlDark),
+    dataUrlLight: dataUrlLight ?? dataUrlDark,
+    dataUrlDark: dataUrlDark ?? dataUrlLight,
+    prefs,
+    selection,
+    presets: presetPreviews(),
+  }
+}
+
+function presetPreviews(): WallpaperPresetMeta[] {
+  if (cachedPresetPreviews) return cachedPresetPreviews
+  cachedPresetPreviews = WALLPAPER_PRESETS.map((preset) => {
+    const icon = nativeImage.createFromPath(path.join(RESOURCES_DIR, 'presets', `${preset.id}.png`))
+    return {
+      ...preset,
+      previewDataUrl: icon.isEmpty() ? null : icon.resize({ width: 96, height: 96 }).toDataURL(),
+    }
+  })
+  return cachedPresetPreviews
+}
+
+function presetWallpaperData(
+  presetId: string,
+  lightPath: string | null,
+  darkPath: string | null,
+): { dataUrlLight: string | null; dataUrlDark: string | null } {
+  if (cachedPresetWallpaper?.presetId === presetId) return cachedPresetWallpaper
+  cachedPresetWallpaper = {
+    presetId,
+    dataUrlLight: lightPath ? toDataUrl(lightPath) : null,
+    dataUrlDark: darkPath ? toDataUrl(darkPath) : null,
+  }
+  return cachedPresetWallpaper
 }
 
 export function setWallpaperPrefs(partial: Partial<WallpaperPrefs>): WallpaperState {
@@ -127,6 +234,14 @@ export async function pickWallpaper(win: BrowserWindow | null): Promise<Wallpape
   }
   const dest = path.join(dir, `current${ext}`)
   fs.copyFileSync(src, dest)
+  writeSelection({ source: 'custom' })
+  return getWallpaperState()
+}
+
+export function setWallpaperPreset(presetId: string): WallpaperState {
+  const valid = WALLPAPER_PRESETS.some((preset) => preset.id === presetId)
+  if (!valid) throw new Error('未知的内置壁纸')
+  writeSelection({ source: 'preset', presetId })
   return getWallpaperState()
 }
 
@@ -140,6 +255,7 @@ export function clearWallpaper(): WallpaperState {
       try { fs.unlinkSync(path.join(dir, name)) } catch { /* ignore */ }
     }
   }
+  writeSelection({ source: 'none' })
   return getWallpaperState()
 }
 

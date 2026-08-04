@@ -88,6 +88,46 @@ def test_codex_stale_check_flags_old_processes(client, codex_paths, monkeypatch)
     assert body["staleProcesses"][0]["pid"] == 1
 
 
+def test_codex_process_scan_only_reads_candidate_cmdlines():
+    class ProcessError(Exception):
+        pass
+
+    class FakeProcess:
+        def __init__(self, pid, name, cmdline):
+            self.pid = pid
+            self.info = {"name": name}
+            self._cmdline = cmdline
+            self.cmdline_calls = 0
+
+        def cmdline(self):
+            self.cmdline_calls += 1
+            return self._cmdline
+
+        def create_time(self):
+            return 123.0
+
+    unrelated = FakeProcess(1, "python.exe", ["python", "worker.py"])
+    codex_node = FakeProcess(2, "node.exe", ["node", "codex"])
+    codex_app = FakeProcess(3, "Codex.exe", [])
+    processes = [unrelated, codex_node, codex_app]
+
+    class FakePsutil:
+        NoSuchProcess = ProcessError
+        AccessDenied = ProcessError
+        ZombieProcess = ProcessError
+
+        @staticmethod
+        def process_iter(attrs):
+            assert attrs == ["name"]
+            return processes
+
+    found = integration_api._scan_codex_processes(FakePsutil)
+    assert {item["pid"] for item in found} == {2, 3}
+    assert unrelated.cmdline_calls == 0
+    assert codex_node.cmdline_calls == 1
+    assert codex_app.cmdline_calls == 0
+
+
 def test_chatgpt_heartbeat_flow(client, monkeypatch, tmp_path):
     hb_file = tmp_path / "chatgpt_heartbeat.json"
     monkeypatch.setattr(integration_api, "HEARTBEAT_FILE", hb_file)

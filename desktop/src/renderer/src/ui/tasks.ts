@@ -57,10 +57,13 @@ const VIEW_STATUS_OPTIONS: Record<'queue' | 'history', Array<{ value: TaskStatus
 }
 
 export function renderTasksView(container: HTMLElement, reloadTasks: ReloadTasks, loadMore: LoadMore): void {
-  const title = state.view === 'history' ? '历史' : '待处理'
+  // settings 视图不渲染任务列表；这里非历史即待处理
+  const view: 'queue' | 'history' = state.view === 'history' ? 'history' : 'queue'
+  const title = view === 'history' ? '历史' : '待处理'
 
-  const clearBtn = makeClearButton(reloadTasks)
-  clearBtn.disabled = state.queue.length + state.history.length === 0
+  // 一键清理按当前 tab 独立：待处理 tab 只清 queue 状态，历史 tab 只清 history 状态
+  const clearBtn = makeClearButton(reloadTasks, view)
+  clearBtn.disabled = viewTotal(view) === 0
   const readAllBtn = makeReadAllButton(reloadTasks)
   readAllBtn.disabled = unreadCount() === 0
 
@@ -277,9 +280,13 @@ function makeReadAllButton(reloadTasks: ReloadTasks): HTMLButtonElement {
   return btn
 }
 
-/* 一键清理：第一次点击进入确认态，3.2s 内再次点击才执行，避免误删 */
-function makeClearButton(reloadTasks: ReloadTasks): HTMLButtonElement {
-  const btn = h('button', 'btn danger clear-btn', [svgIcon('trash'), '一键清理'])
+/* 一键清理：按 tab 独立（scope=queue/history）。第一次点击进入确认态，3.2s 内再次点击才执行，避免误删 */
+function makeClearButton(reloadTasks: ReloadTasks, scope: 'queue' | 'history'): HTMLButtonElement {
+  const isQueue = scope === 'queue'
+  const label = isQueue ? '清理待处理' : '清理历史'
+  const unit = isQueue ? '个待处理任务' : '条历史记录'
+  const btn = h('button', 'btn danger clear-btn', [svgIcon('trash'), label])
+  btn.title = isQueue ? '清空全部待处理任务（执行中/等待输入/已完成/失败）' : '清空全部历史记录（已查看/已忽略）'
   let armed = false
   let timer = 0
 
@@ -288,26 +295,26 @@ function makeClearButton(reloadTasks: ReloadTasks): HTMLButtonElement {
     window.clearTimeout(timer)
     timer = 0
     btn.classList.remove('armed')
-    btn.replaceChildren(svgIcon('trash'), '一键清理')
+    btn.replaceChildren(svgIcon('trash'), label)
   }
 
   btn.onclick = async () => {
     if (!armed) {
       window.clearTimeout(timer) // clear any stale timer from previous renders
-      const total = viewTotal('queue') + viewTotal('history')
+      const total = viewTotal(scope)
       armed = true
       btn.classList.add('armed')
-      btn.replaceChildren(svgIcon('trash'), `确认清空全部 ${total} 个任务？`)
+      btn.replaceChildren(svgIcon('trash'), `确认清空 ${total} ${unit}？`)
       timer = window.setTimeout(reset, 3200)
       return
     }
     reset()
     btn.disabled = true
     try {
-      const deleted = await window.aihub.clearTasks()
+      const deleted = await window.aihub.clearTasks(scope)
       state.selectedTaskId = null
       const refreshed = await reloadTasks()
-      actionToast(`已清空 ${deleted} 个任务`, refreshed)
+      actionToast(`已清空 ${deleted} ${unit}`, refreshed)
     } catch {
       showToast('清理失败，请确认事件服务已连接', 'var(--st-fail)')
     } finally {

@@ -58,7 +58,7 @@ export class BackendManager {
       } else {
         if (this.status === 'online') this.setStatus('offline')
         // 后端中途退出也要能再次拉起，用冷却时间避免高频重启
-        if (Date.now() - this.lastSpawnAt > RESPAWN_COOLDOWN_MS) {
+        if (!this.child && Date.now() - this.lastSpawnAt > RESPAWN_COOLDOWN_MS) {
           this.lastSpawnAt = Date.now()
           this.trySpawnBackend()
         }
@@ -87,11 +87,8 @@ export class BackendManager {
       return
     }
     try {
-      // 覆盖前先杀掉旧实例，避免重复拉起时遗留孤儿进程（M15）
-      if (this.child) {
-        this.child.kill()
-        this.child = null
-      }
+      // 已有子进程时等待其健康检查或退出，避免启动较慢时每 30 秒重复拉起。
+      if (this.child) return
       const child = spawn(BACKEND_CMD.exe, BACKEND_CMD.args, {
         cwd: BACKEND_CWD,
         stdio: 'ignore',
@@ -102,10 +99,18 @@ export class BackendManager {
       child.unref()
       child.on('error', (err) => {
         console.warn('[backend] 启动失败:', err.message)
+        if (this.child === child) this.child = null
         // 通知 renderer，避免用户一直停留在 "connecting"（LOW：spawn 错误仅 console.warn）
         this.setStatus('offline')
       })
-      console.log('[backend] 已拉起本地事件服务')
+      child.once('exit', (code, signal) => {
+        if (this.child !== child) return
+        this.child = null
+        if (this.stopped) return
+        console.warn(`[backend] 本地事件服务已退出: code=${code ?? '-'} signal=${signal ?? '-'}`)
+        this.setStatus('offline')
+      })
+      console.log('[backend] 后端进程已启动，等待健康检查')
     } catch (err) {
       console.warn('[backend] 启动失败:', err)
       this.setStatus('offline')

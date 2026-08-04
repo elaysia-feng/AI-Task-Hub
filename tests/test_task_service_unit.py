@@ -49,10 +49,16 @@ class FakeTaskRepository:
     def delete(self, task_id):
         return self.tasks.pop(task_id, None) is not None
 
-    def clear(self):
-        count = len(self.tasks)
-        self.tasks.clear()
-        return count
+    def clear(self, statuses=None):
+        """与真实仓库一致：statuses 为 None 全清，否则只删指定状态。"""
+        if statuses is None:
+            count = len(self.tasks)
+            self.tasks.clear()
+            return count
+        ids = [tid for tid, t in self.tasks.items() if t.status in statuses]
+        for tid in ids:
+            self.tasks.pop(tid)
+        return len(ids)
 
     def lock_many(self, task_ids):
         """No-op in fake; records call for assertion."""

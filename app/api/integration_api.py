@@ -9,6 +9,7 @@ import json
 import logging
 import time
 from pathlib import Path
+from threading import Lock
 from typing import Any
 
 import tomlkit
@@ -36,6 +37,10 @@ HEARTBEAT_TTL_SEC = 10 * 60
 
 _CLAUDE_HOOK_MARKER = "claude_adapter.py"
 _CODEX_CHAIN_MARKER = "notify_chain.py"
+_CODEX_PROCESS_CACHE_TTL_SEC = 15.0
+_codex_process_cache_at = 0.0
+_codex_process_cache: list[dict[str, Any]] = []
+_codex_process_lock = Lock()
 
 
 def _venv_python() -> str:
@@ -55,22 +60,50 @@ def _venv_python() -> str:
     return text
 
 
+def _scan_codex_processes(psutil: Any) -> list[dict[str, Any]]:
+    """只读取 Codex.exe 和 node.exe 候选进程，避免遍历时查询所有进程命令行。"""
+    found: list[dict[str, Any]] = []
+    for proc in psutil.process_iter(["name"]):
+        try:
+            name = (proc.info.get("name") or "").lower()
+            is_codex_exe = "codex" in name
+            if not is_codex_exe and name not in {"node", "node.exe"}:
+                continue
+            cmdline = [] if is_codex_exe else proc.cmdline()
+            if not is_codex_exe and "codex" not in " ".join(cmdline).lower():
+                continue
+            found.append({
+                "pid": proc.pid,
+                "name": proc.info.get("name"),
+                "createTime": proc.create_time(),
+            })
+        except (
+            psutil.NoSuchProcess,
+            psutil.AccessDenied,
+            getattr(psutil, "ZombieProcess", psutil.NoSuchProcess),
+        ):
+            continue
+    return found
+
+
 def _codex_processes() -> list[dict[str, Any]]:
-    """本机 codex 相关进程（CLI node 进程与桌面 Codex.exe），psutil 缺失时返回空。"""
+    """本机 Codex 相关进程；短时缓存避免设置页刷新时重复扫描 Windows 进程。"""
+    global _codex_process_cache_at, _codex_process_cache
     try:
         import psutil
     except ImportError:
         return []
-    found: list[dict[str, Any]] = []
-    for proc in psutil.process_iter(["name", "cmdline", "create_time"]):
-        try:
-            info = proc.info
-            haystack = " ".join([info.get("name") or "", *(info.get("cmdline") or [])]).lower()
-            if "codex" in haystack:
-                found.append({"pid": proc.pid, "name": info.get("name"), "createTime": info.get("create_time")})
-        except (psutil.NoSuchProcess, psutil.AccessDenied):
-            continue
-    return found
+
+    now = time.monotonic()
+    if now - _codex_process_cache_at < _CODEX_PROCESS_CACHE_TTL_SEC:
+        return list(_codex_process_cache)
+    with _codex_process_lock:
+        now = time.monotonic()
+        if now - _codex_process_cache_at < _CODEX_PROCESS_CACHE_TTL_SEC:
+            return list(_codex_process_cache)
+        _codex_process_cache = _scan_codex_processes(psutil)
+        _codex_process_cache_at = now
+        return list(_codex_process_cache)
 
 
 # ---------- Claude Code ----------
@@ -219,16 +252,16 @@ def _chatgpt_online() -> dict[str, Any]:
 
 @router.get("/status")
 def integrations_status() -> dict[str, Any]:
+    codex = codex_stale_check()
     return {
         "claudeCode": {
             "installed": _claude_installed(),
             "settingsPath": str(CLAUDE_SETTINGS),
         },
         "codex": {
-            "installed": _codex_installed(),
             "configPath": str(CODEX_CONFIG),
             "forwardTarget": CODEX_FORWARD_TARGET.exists(),
-            **codex_stale_check(),
+            **codex,
         },
         "chatgpt": {
             **_chatgpt_online(),

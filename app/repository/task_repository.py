@@ -180,7 +180,18 @@ class TaskRepository:
         cursor = self._db.execute("DELETE FROM task WHERE id = %s", (task_id,))
         return cursor.rowcount > 0
 
-    def clear(self) -> int:
-        """清空全部任务（事件流水经外键 ON DELETE CASCADE 级联删除），返回删除行数。"""
-        cursor = self._db.execute("DELETE FROM task")
+    def clear(self, statuses: Optional[tuple[str, ...]] = None) -> int:
+        """清空任务，事件流水经外键 ON DELETE CASCADE 级联删除。
+
+        statuses 为 None 时清空全部；否则只删指定状态（供按 tab 独立清理：
+        queue=待处理四种状态，history=已查看/已忽略）。返回删除行数。
+        """
+        if statuses:
+            placeholders = ",".join("%s" for _ in statuses)
+            cursor = self._db.execute(
+                f"DELETE FROM task WHERE status IN ({placeholders})",
+                tuple(statuses),
+            )
+        else:
+            cursor = self._db.execute("DELETE FROM task")
         return cursor.rowcount

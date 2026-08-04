@@ -9,6 +9,7 @@ import {
   clearWallpaper,
   getWallpaperState,
   pickWallpaper,
+  setWallpaperPreset,
   setWallpaperPrefs,
   showWallpaperDialog,
 } from './wallpaper'
@@ -20,7 +21,7 @@ import {
 } from './icon-picker'
 import type { BackendManager } from './backend'
 import type { UpdateManager } from './updater'
-import type { TaskStatus, WallpaperPrefs } from '../shared/types'
+import type { TaskClearScope, TaskStatus, WallpaperPrefs } from '../shared/types'
 
 // Allowed path prefixes for shell:open-path (user-controlled directories only)
 const ALLOWED_OPEN_PREFIXES = [
@@ -79,7 +80,7 @@ export function registerIpcHandlers(
 
   ipcMain.handle('tasks:ignore', (_event, id: number) => apiClient.markIgnored(id))
   ipcMain.handle('tasks:delete', (_event, id: number) => apiClient.deleteTask(id))
-  ipcMain.handle('tasks:clear', () => apiClient.clearTasks())
+  ipcMain.handle('tasks:clear', (_event, scope?: TaskClearScope) => apiClient.clearTasks(scope))
   ipcMain.handle('tasks:read-all', () => apiClient.readAllTasks())
   ipcMain.handle('backend:status', () => backend.current)
 
@@ -87,7 +88,15 @@ export function registerIpcHandlers(
   ipcMain.on('update:install', () => updater.quitAndInstall())
 
   ipcMain.handle('server:status', () => apiClient.getServerStatus())
-  ipcMain.handle('integrations:status', () => apiClient.getIntegrations())
+  ipcMain.handle('integrations:status', async () => {
+    try {
+      return await apiClient.getIntegrations()
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err)
+      console.warn(`[integrations] 状态检测失败：${message}`)
+      return null
+    }
+  })
   ipcMain.handle('integrations:install-claude', () => apiClient.installClaude())
   ipcMain.handle('integrations:install-codex', () => apiClient.installCodex())
   ipcMain.handle('tasks:events', (_event, taskId: number) => {
@@ -104,6 +113,9 @@ export function registerIpcHandlers(
 
   ipcMain.handle('wallpaper:get', () => getWallpaperState())
   ipcMain.handle('wallpaper:pick', () => pickWallpaper(getWindow()))
+  ipcMain.handle('wallpaper:set-preset', (_event, presetId: string) =>
+    setWallpaperPreset(typeof presetId === 'string' ? presetId : ''),
+  )
   ipcMain.handle('wallpaper:clear', () => clearWallpaper())
   ipcMain.handle('wallpaper:set-prefs', (_event, prefs: Partial<WallpaperPrefs>) =>
     setWallpaperPrefs(prefs),

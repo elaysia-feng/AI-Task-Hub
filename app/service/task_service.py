@@ -190,6 +190,6 @@ class TaskService:
     def delete_task(self, task_id: int) -> bool:
         return self._tasks.delete(task_id)
 
-    def clear_all(self) -> int:
-        """一键清理：删除全部任务，返回删除数量。"""
-        return self._tasks.clear()
+    def clear_all(self, statuses: Optional[tuple[str, ...]] = None) -> int:
+        """一键清理：statuses 为 None 删全部，否则只删指定状态，返回删除数量。"""
+        return self._tasks.clear(statuses)

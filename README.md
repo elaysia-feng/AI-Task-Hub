@@ -1,197 +1,169 @@
-# AI Task Hub
+<p align="center">
+  <img src="desktop/resources/icon.png" width="104" alt="AI Task Hub 图标">
+</p>
 
-> 多 AI 平台的本地任务中心：ChatGPT 网页 / Claude Code / Codex CLI 的任务事件统一汇入桌面队列，实时通知、一键打开对话、一键已读清理。
+<h1 align="center">AI Task Hub</h1>
 
-[![CI](https://github.com/elaysia-feng/AI-Task-Hub/actions/workflows/ci.yml/badge.svg)](https://github.com/elaysia-feng/AI-Task-Hub/actions/workflows/ci.yml)
+<p align="center">
+  把 ChatGPT、Claude Code 与 Codex 的异步任务，收进一个漂亮的本地收件箱。
+</p>
 
-## 环境要求
+<p align="center">
+  <a href="https://github.com/elaysia-feng/AI-Task-Hub/actions/workflows/ci.yml"><img src="https://github.com/elaysia-feng/AI-Task-Hub/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
+  <img src="https://img.shields.io/badge/platform-Windows-2563EB?logo=windows11&logoColor=white" alt="Windows">
+  <img src="https://img.shields.io/badge/Electron-43-47848F?logo=electron&logoColor=white" alt="Electron 43">
+  <img src="https://img.shields.io/badge/FastAPI-local-009688?logo=fastapi&logoColor=white" alt="FastAPI">
+  <img src="https://img.shields.io/badge/license-MIT-E76F51" alt="MIT License">
+</p>
+
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="docs/images/app-settings-dark.png">
+    <img src="docs/images/app-settings-light.png" width="100%" alt="AI Task Hub 设置页实机截图">
+  </picture>
+</p>
+
+<p align="center"><sub>真实 Electron 窗口 · 11 套角色主题 · Light / Dark 自动适配 · 支持本地照片</sub></p>
+
+## 它解决什么
+
+AI 任务跑久了，最容易错过的不是结果，而是“等待输入”“已经完成”“执行失败”这些关键节点。AI Task Hub 在本机把多个平台的事件统一成一条任务时间线，并通过桌面队列、悬浮球、托盘和 Windows 系统通知及时提醒你。
+
+| 任务收件箱 | 原生通知 | 个性化外观 |
+|---|---|---|
+| ChatGPT、Claude Code、Codex 汇入同一队列 | 完成、失败、等待输入时通知，点击直达任务 | 11 套头像与 22 张 Light / Dark 壁纸，也可选择本地照片 |
+| 搜索、来源筛选、状态筛选、排序 | 当前角色头像同步到通知、窗口与托盘 | 模糊、暗角、面板透明度可独立调节 |
+
+## 界面一览
+
+<table>
+  <tr>
+    <td width="50%"><img src="docs/images/app-settings-light.png" alt="AI Task Hub Light 模式"></td>
+    <td width="50%"><img src="docs/images/app-settings-dark.png" alt="AI Task Hub Dark 模式"></td>
+  </tr>
+  <tr>
+    <td align="center"><sub>Light：通透玻璃面板与明亮背景</sub></td>
+    <td align="center"><sub>Dark：低亮度背景与高对比内容层</sub></td>
+  </tr>
+</table>
+
+内置主题包括：AI 看板娘、绫波丽、海老塚智、伊蕾娜、若叶睦、丰川祥子、平泽唯、秋山澪、田井中律、琴吹紬和中野梓。每套主题都提供独立头像以及 Light / Dark 背景；也可以用自己的照片替换壁纸和应用头像。
+
+> 角色主题为非官方同人风格视觉预设，与原作版权方无关联。公开分发前请自行确认素材使用范围。
+
+## 核心能力
+
+- **统一任务队列**：WebSocket 实时接收多平台事件，保留完整生命周期时间线。
+- **Windows 系统通知**：使用当前应用头像、平台名称与任务摘要；点击通知或操作按钮打开任务中心。
+- **悬浮球与托盘**：关闭主窗口后继续后台工作，未读状态随时可见。
+- **快速定位**：支持状态、来源、关键词、排序组合筛选；`Ctrl+K` 或 `/` 聚焦搜索。
+- **一键接入**：设置页检测并配置 Claude Code hooks 与 Codex notify 链路。
+- **本地优先**：FastAPI 与 MySQL 均运行在本机，平台适配器只向本地事件服务上报。
+- **运行自愈**：自动拉起后端、重连 WebSocket、检查 Electron 运行时并保留崩溃转储。
+- **自动更新**：安装版定时检查 GitHub Releases，下载后可重启安装。
+
+## 快速开始
+
+### 环境
 
 | 依赖 | 版本 | 说明 |
-|------|------|------|
-| Windows | 10 / 11 | 仅支持 Windows |
-| Node.js | 22+ | [下载](https://nodejs.org/) |
-| Python | 3.12+ | [下载](https://www.python.org/) 或通过 `uv` 管理 |
-| MySQL | 8.0+ | [下载](https://dev.mysql.com/downloads/) |
-| NSIS | 3.x | **仅打包时需要**，[下载](https://nsis.sourceforge.io/Download) 或 `winget install NSIS.NSIS` |
+|---|---|---|
+| Windows | 10 / 11 | 当前仅支持 Windows |
+| Node.js | 22+ | 桌面端与构建工具 |
+| Python | 3.12+ | 本地 FastAPI 服务 |
+| MySQL | 8.0+ | 任务与事件持久化 |
+| NSIS | 3.x | 仅生成安装包时需要 |
 
----
-
-## 快速开始（开发模式）
+### 开发模式
 
 ```powershell
-# 1. 克隆并安装依赖
 git clone https://github.com/elaysia-feng/AI-Task-Hub.git
 cd AI-Task-Hub
 
-# 2. 配置 Python 环境 + 数据库
+# Python 与数据库配置
 uv venv
 uv pip install -r requirements.txt
-copy .env.example .env
-# 编辑 .env，填入你的 MySQL 连接信息（库名建议 ai_task_hub）
+Copy-Item .env.example .env
+# 编辑 .env，填写 MySQL 连接信息
 
-# 3. 启动桌面端
+# 启动 Electron；后端会被自动探测并拉起
 cd desktop
 npm install
 npm run dev
 ```
 
-一条 `npm run dev` 会自动：
-- 检查并补装 Electron 运行时
-- 启动 electron-vite 热更新开发服务
-- 探测并拉起本地 Python 后端
+启动后，后端健康检查位于 `http://127.0.0.1:17891/api/health`。关闭主窗口会收成悬浮球；彻底退出请在托盘图标菜单中选择 **退出**。
 
-关闭窗口会收成右下角**悬浮球**（不是退出），彻底退出请：托盘图标右键 → **退出**。
+只启动后端：
 
-> 如果只想单独跑后端：`cd ..` → `.\.venv\Scripts\python.exe -m app.main`，然后浏览器打开 `http://127.0.0.1:17891/api/health`。
+```powershell
+.\.venv\Scripts\python.exe -m app.main
+```
 
----
+## 接入平台
 
-## 功能
+| 平台 | 接入方式 | 说明 |
+|---|---|---|
+| ChatGPT | 加载 `adapters/chatgpt-extension` 浏览器扩展 | 捕获网页任务状态并上报本机 |
+| Claude Code | 设置页点击接入 | 自动配置 hooks，保留现有设置 |
+| Codex | 设置页点击接入 | 使用 `notify_chain.py` 上报后再转发现有 notify |
 
-- **统一队列**：ChatGPT / Claude Code / Codex CLI 的事件实时汇入桌面队列（WebSocket 推送）
-- **原生通知**：Windows 通知 + 托盘未读计数，点击直达对话现场
-- **悬浮球**：关闭窗口收为右下角小球，悬停看状态，拖动可移动
-- **本地壁纸**：本机图片作背景，调节模糊 / 暗角 / 面板透明度
-- **接入向导**：设置页一键接入 Claude Code（hooks）与 Codex（notify 链式转发）
-- **事件时间线**：每个任务可展开完整生命周期事件与原始载荷
-- **快速筛选**：按状态 / 来源 / 关键词组合过滤，支持排序
-- **键盘操作**：`Ctrl+K` / `/` 聚焦搜索，`Esc` 关闭详情
-- **自动更新**：打包版每 4 小时检查 GitHub Releases，下载后一键重启安装
-- **崩溃自愈**：渲染进程崩溃自动重载，崩溃转储本地留存便于排障
+Codex 只支持一个 notify 命令，因此接入器会把旧命令保存到 `forward_target.json` 并继续链式转发。Codex runtime 路径变化后，适配器会重新解析可执行文件，避免升级后静默失效。
 
-## 架构
+## 工作原理
 
 ```mermaid
 flowchart LR
     subgraph AD["平台适配器"]
-        CG["ChatGPT 网页 + Chrome 扩展"]
-        CC["Claude Code + hooks 适配器"]
-        CX["Codex CLI + notify 链式适配器"]
-    end
-    subgraph BE["本地后端 FastAPI"]
-        API["POST /api/events<br/>统一事件入口"]
-        WS["/ws/tasks<br/>WebSocket 推送"]
-        DB[("MySQL")]
-    end
-    subgraph DT["Electron 桌面端"]
-        Q["队列 / 历史 / 详情"]
-        O["悬浮球 + 托盘通知"]
+        CG["ChatGPT 扩展"]
+        CC["Claude Code hooks"]
+        CX["Codex notify"]
     end
 
-    CG & CC & CX -->|统一事件协议| API
+    subgraph BE["本地 FastAPI"]
+        API["POST /api/events"]
+        WS["/ws/tasks"]
+        DB[("MySQL")]
+    end
+
+    subgraph DT["Electron 桌面端"]
+        Q["待处理 / 历史 / 详情"]
+        N["系统通知"]
+        O["悬浮球 / 托盘"]
+    end
+
+    CG & CC & CX --> API
     API --> DB
     API --> WS
     WS --> Q
-    Q -->|查询 / 已读 / 忽略| API
+    Q --> N
     Q --> O
 ```
 
-- **事件协议**：[`shared/event_schema.json`](shared/event_schema.json)
-- **幂等**：`(source, externalTaskId)` 唯一约束 + generated column 折叠 NULL，重复事件合并（含平台侧无会话 ID 的场景）
-- **状态机**（事件驱动，`VIEWED` / `IGNORED` 为用户操作终态）：
+- 事件协议：[`shared/event_schema.json`](shared/event_schema.json)
+- 幂等规则：`(source, externalTaskId)` 唯一约束，重复事件合并。
+- 用户终态：完成或失败任务可以标记为 `VIEWED` 或 `IGNORED`。
 
-```mermaid
-stateDiagram-v2
-    [*] --> RUNNING
-    RUNNING --> NEEDS_INPUT
-    RUNNING --> COMPLETED_UNREAD
-    RUNNING --> FAILED_UNREAD
-    NEEDS_INPUT --> COMPLETED_UNREAD
-    NEEDS_INPUT --> FAILED_UNREAD
-    COMPLETED_UNREAD --> VIEWED
-    COMPLETED_UNREAD --> IGNORED
-    FAILED_UNREAD --> VIEWED
-    FAILED_UNREAD --> IGNORED
-    VIEWED --> [*]
-    IGNORED --> [*]
-```
-
-### Codex 通知链路（链式转发）
-
-Codex 只支持单个 notify 命令，接入时将其改写为本仓库的 `notify_chain.py`，原命令存入 `forward_target.json` 继续转发。Codex 升级导致 runtime hash 变化时，链式适配器会按相对后缀自动重解析可执行文件（自愈），避免通知静默丢失。
-
-```mermaid
-sequenceDiagram
-    participant C as Codex CLI
-    participant N as notify_chain.py
-    participant A as FastAPI /api/events
-    participant M as MySQL
-    participant F as 原 notify 命令
-
-    C->>N: 事件载荷 JSON
-    N->>A: POST /api/events
-    A->>M: 入库（幂等合并）
-    A-->>N: 200 ok
-    alt 上报成功
-        N->>F: 转发原始命令（runtime hash 失效时自动自愈）
-    else 上报失败
-        Note over N: 跳过转发，避免双写不一致
-    end
-```
-
----
-
-## 本地打包 EXE 安装包
-
-### 方式 A：命令行（推荐）
+## 打包 Windows 应用
 
 ```powershell
 cd desktop
 npm run dist:local
 ```
 
-这条命令会自动：
-1. 检查 Electron 运行时（缺失则补装）
-2. 检查 NSIS（缺失则给出安装指引，未安装请先 `winget install NSIS.NSIS`）
-3. 检查后端 exe（缺失则**自动调用 PyInstaller 打包**）
-4. 编译前端 + 生成安装包
+脚本会检查 Electron、NSIS 和后端可执行文件，并在缺少后端 exe 时自动调用 PyInstaller。产物位于 `desktop\dist\`：
 
-产物在 `desktop\dist\`：
+| 产物 | 用途 |
+|---|---|
+| `AI Task Hub Setup x.y.z.exe` | NSIS 安装向导 |
+| `AI-Task-Hub-Portable-x.y.z.exe` | 免安装便携版 |
+| `win-unpacked\AI Task Hub.exe` | 解压后直接运行 |
 
-| 文件 | 用途 |
-|------|------|
-| `AI Task Hub Setup x.y.z.exe` | NSIS 安装向导，双击安装 |
-| `AI-Task-Hub-Portable-x.y.z.exe` | 免安装便携版，双击即用 |
-| `win-unpacked\AI Task Hub.exe` | 解压版，直接运行 |
+开发版也可以在 **设置 → 应用更新 / 打包 → 生成 exe 安装包** 中执行同一流程。安装版不包含源码和打包工具，因此不会开放这个入口。
 
-### 方式 B：开发版界面内一键打包
+## 配置
 
-先以**开发版**启动（源码目录 `cd desktop` → `npm run dev`），然后在 **设置 → 应用更新 / 打包 → 生成 exe 安装包**。会自动检测 NSIS、Python、后端 exe，缺什么给什么提示。
-
-> **注意**：方式 B 与方式 A 的先决条件**完全一样**——都需要源码仓库（`packaging/`、`.venv/`、`desktop/package.json` 等）。它只是把「命令行打包」换成界面按钮，并不能省掉环境准备。
->
-> **安装版（打包后安装的应用）内没有此功能**：打包进 `app.asar` 后上述源码文件不可用，按钮会被禁用并提示改到源码仓库打包。
-
-### 双击 exe "没反应"？
-
-应用是**单实例**的。如果已有实例在跑（托盘图标 / `npm run dev`），新进程会直接退出。请先退出所有已有实例再双击。
-
-若 Windows 提示"已保护你的电脑"，点 **更多信息 → 仍要运行**。
-
----
-
-## 测试
-
-```powershell
-# 后端测试
-pytest
-
-# 桌面端测试
-cd desktop
-npm test
-
-# 端到端冒烟
-cd ..
-.\.venv\Scripts\python.exe scripts\e2e_smoke.py
-```
-
----
-
-## 数据库配置
-
-**开发版**：复制 `.env.example` → `.env`，填入连接信息（`.env` 已被 gitignore，不会误提交）。
-
-**安装版**：在 `%APPDATA%\AI Task Hub\config.env` 写入：
+开发版复制 `.env.example` 为 `.env`。安装版在 `%APPDATA%\AI Task Hub\config.env` 中配置：
 
 ```env
 AIHUB_MYSQL_HOST=127.0.0.1
@@ -199,55 +171,51 @@ AIHUB_MYSQL_PORT=3306
 AIHUB_MYSQL_USER=root
 AIHUB_MYSQL_PASSWORD=你的密码
 AIHUB_MYSQL_DB=ai_task_hub
-# 测试库（pytest 使用，可选，默认 <主库>_test）
 AIHUB_MYSQL_TEST_DB=ai_task_hub_test
 ```
 
-**端口**：后端端口固定 `17891`；`AIHUB_PORT` 仅供冒烟测试并行实例时覆盖**适配器上报端口**（各平台适配器默认 `17891`）。
+默认后端端口为 `17891`。
 
----
-
-## 目录结构
-
-```
-app/            # FastAPI 事件服务（api/service/repository/database 分层）
-adapters/       # 平台适配器：claude-code hooks / codex notify / chatgpt 扩展
-desktop/        # Electron + TypeScript 桌面端（main/preload/renderer）
-packaging/      # PyInstaller spec + app.ico
-scripts/        # e2e 冒烟、DB 诊断/迁移、Codex 模拟器
-shared/         # 事件协议 schema 与共享常量
-tests/          # pytest（状态机 / API / 集成接入 / 编码防回归）
-```
-
----
-
-## 发布
+## 验证
 
 ```powershell
-git tag v0.1.8
-git push origin v0.1.8
+# 后端
+.\.venv\Scripts\python.exe -m pytest -q
+
+# 桌面端
+cd desktop
+npm test
+npm run typecheck
+npm run build
+
+# 端到端冒烟
+cd ..
+.\.venv\Scripts\python.exe scripts\e2e_smoke.py
 ```
 
-打 tag 后 GitHub Actions 自动构建并发布 Release。本地发版前请先跑通 `npm run dist:local` 验证。
+## 项目结构
 
----
+```text
+app/            FastAPI API、服务、仓储与数据库
+adapters/       ChatGPT、Claude Code、Codex 平台适配器
+desktop/        Electron 主进程、preload 与 renderer
+docs/images/    README 实机截图
+packaging/      PyInstaller 配置与 Windows 图标
+scripts/        冒烟、数据库诊断与辅助脚本
+shared/         统一事件协议
+tests/          后端与集成测试
+```
 
 ## 常见问题
 
-| 症状 | 解决方法 |
-|------|---------|
-| 开发怎么启动？ | `cd desktop` → `npm run dev`（见快速开始） |
-| 打包报错 "makensis" 或 NSIS | 执行 `winget install NSIS.NSIS` 安装 NSIS |
-| 打包报错找不到 aihub-backend.exe | 已自动化，重试 `npm run dist:local`（会自动打包后端） |
-| 打包结果只有 .7z 文件，没有 .exe | NSIS 未在 PATH 中。`makensis -VERSION` 检查；安装后重新打开终端 |
-| 打包 exe 双击没反应 | 先退出托盘里的已有实例，再双击 |
-| 打包日志显示乱码 | 已修复（自动处理 GBK/UTF-8 编码），拉最新代码即可 |
-| Codex 事件不上报 | Codex 只在启动时读配置；接入后需重启所有 Codex 进程 |
-| Codex 升级后通知消失 | 已自动自愈：runtime hash 变化会重新解析可执行文件；仍失败请重新接入 |
-| ChatGPT 无通知 | 确认扩展已安装且浏览器在运行 |
-| 图标仍是 Python 图标 | `pwsh desktop\scripts\make-icon.ps1` 重新生成图标后重打 |
-
----
+| 症状 | 处理方式 |
+|---|---|
+| 双击 exe 没反应 | 应用是单实例；先从托盘退出已有实例 |
+| Windows 阻止首次运行 | 选择 **更多信息 → 仍要运行**，或给发布产物签名 |
+| 报错找不到 `makensis` | 安装 NSIS：`winget install NSIS.NSIS`，然后重开终端 |
+| Codex 接入后没有事件 | Codex 只在启动时读取配置；退出并重启所有 Codex 进程 |
+| ChatGPT 没有通知 | 确认扩展已加载、浏览器仍在运行、本地健康检查正常 |
+| 端口 `17891` 被拒绝 | 等待自动健康检查完成；仍失败时单独启动后端查看具体日志 |
 
 ## License
 

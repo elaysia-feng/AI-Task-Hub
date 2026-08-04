@@ -1,7 +1,7 @@
 import type { UserIconState } from '../../../shared/types'
 
 /**
- * 应用图标渲染端工具：把主进程推送的图标状态应用到悬浮球球面。
+ * 应用图标渲染端工具：把主进程推送的图标状态应用到标题栏与悬浮球球面。
  *
  * 时序安全：图标状态在 bootstrap 拉取（或 onIconChanged 推送），球可能稍后才挂载
  * （mountOrb 只在 orb 模式激活时执行）。因此这里缓存最近一次状态，applyIconToBall
@@ -27,6 +27,13 @@ let cachedState: UserIconState | null = null
 /** 记录最新状态并应用到已挂载的球（未挂载则等 mountOrb 时经 applyIconToBall 应用） */
 export function applyIcon(state: UserIconState): void {
   cachedState = state
+  const logo = document.querySelector('.titlebar .logo') as HTMLElement | null
+  if (logo) {
+    const { face, size } = faceStyleFor(state)
+    logo.style.setProperty('--titlebar-icon', face)
+    logo.style.setProperty('--titlebar-icon-size', size)
+    logo.classList.toggle('has-image', face !== 'none')
+  }
   const ball = document.querySelector('.orb-ball') as HTMLElement | null
   if (ball) applyIconToBall(ball)
 }

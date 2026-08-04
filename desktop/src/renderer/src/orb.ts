@@ -39,7 +39,7 @@ async function refreshWallpaper(): Promise<void> {
 function updateWallpaperToggle(): void {
   const toggle = document.querySelector('.orb-bg-toggle') as HTMLElement | null
   if (!toggle) return
-  const hasWallpaper = wallpaperState?.hasImage && wallpaperState?.dataUrl
+  const hasWallpaper = wallpaperState?.hasImage
   toggle.classList.toggle('active', !!hasWallpaper)
   toggle.textContent = hasWallpaper ? '🌄 已设' : '🌄 壁纸'
   toggle.title = hasWallpaper ? '更换 / 清除壁纸' : '选择一张桌面壁纸'
@@ -302,7 +302,7 @@ export function mountOrb(): void {
   bgToggle.addEventListener('click', async (e) => {
     e.stopPropagation()
     try {
-      const hasWallpaper = wallpaperState?.hasImage && wallpaperState?.dataUrl
+      const hasWallpaper = wallpaperState?.hasImage
       let next: WallpaperState | null = null
       if (hasWallpaper) {
         const action = await window.aihub.showWallpaperDialog()

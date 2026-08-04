@@ -233,15 +233,15 @@ export async function buildExeWithConfirm(win: BrowserWindow | null): Promise<Bu
     }
   }
   // ---- 确认 ----
-  const customIcon = getUserIconSourcePath()
+  const selectedIcon = getUserIconSourcePath()
   const detailLines = [
     '将依次：检查工具链 → 打包后端 → 编译前端 → 生成安装包（约几分钟）。',
     '完成后自动打开 desktop/dist 目录。',
   ]
-  if (customIcon) {
+  if (selectedIcon) {
     detailLines.push(
       '',
-      '将用当前自定义图标重新生成安装包图标（会覆盖 resources/icon.png、tray.png、icon.ico 与 packaging/app.ico；重跑 desktop/scripts/make-icon.ps1 可恢复默认）。',
+      '将用当前所选图标重新生成安装包图标（会覆盖 resources/icon.png、tray.png、icon.ico 与 packaging/app.ico；重跑 desktop/scripts/make-icon.ps1 可恢复默认）。',
     )
   }
   detailLines.push('', '注意：请先退出正在运行的 AI Task Hub（含托盘 / npm run dev）。')
@@ -341,12 +341,12 @@ export async function buildExeWithConfirm(win: BrowserWindow | null): Promise<Bu
     }
   }
 
-  // ---- Step 2.5: 用户自定义图标 → 重生成安装包图标（非致命，失败沿用现有图标） ----
-  const customIcon2 = getUserIconSourcePath()
-  if (customIcon2) {
+  // ---- Step 2.5: 当前所选图标 → 重生成安装包图标（非致命，失败沿用现有图标） ----
+  const selectedIcon2 = getUserIconSourcePath()
+  if (selectedIcon2) {
     win?.webContents.send('packaging:status', {
       state: 'running',
-      message: '正在用自定义图标重生成安装包图标…',
+      message: '正在用当前图标重生成安装包图标…',
     })
     const iconResult = await runCommand(
       'pwsh',
@@ -357,14 +357,14 @@ export async function buildExeWithConfirm(win: BrowserWindow | null): Promise<Bu
         '-File',
         path.join(desktopRoot(), 'scripts', 'make-icon.ps1'),
         '-IconSource',
-        customIcon2,
+        selectedIcon2,
       ],
       desktopRoot(),
     )
     if (iconResult.code !== 0) {
       win?.webContents.send('packaging:status', {
         state: 'running',
-        message: `自定义图标重生成失败，沿用现有图标：${tail(iconResult.log)}`,
+        message: `当前图标重生成失败，沿用现有图标：${tail(iconResult.log)}`,
       })
     }
   }

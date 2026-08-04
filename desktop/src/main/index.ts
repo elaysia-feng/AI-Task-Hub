@@ -1,3 +1,4 @@
+import fs from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { app, BrowserWindow, crashReporter, Notification, shell } from 'electron'
@@ -30,6 +31,27 @@ import {
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 
+/**
+ * Chromium 缓存不应放在 Roaming userData：该目录可能被同步软件或并发开发实例占用，
+ * 进而触发 Cache / GPUCache 的 WinError 5。业务偏好仍留在 userData，只迁移浏览器会话数据。
+ */
+function configureChromiumSessionData(): void {
+  const appDirName = app.isPackaged ? 'AI Task Hub' : 'ai-task-hub-desktop'
+  const localBase = process.env.LOCALAPPDATA?.trim() || app.getPath('temp')
+  const sessionDataDir = path.join(localBase, appDirName, 'Chromium')
+  try {
+    fs.mkdirSync(sessionDataDir, { recursive: true })
+    const legacyLocalStorage = path.join(app.getPath('userData'), 'Local Storage')
+    const localStorage = path.join(sessionDataDir, 'Local Storage')
+    if (fs.existsSync(legacyLocalStorage) && !fs.existsSync(localStorage)) {
+      fs.cpSync(legacyLocalStorage, localStorage, { recursive: true })
+    }
+    app.setPath('sessionData', sessionDataDir)
+  } catch (err) {
+    console.warn('[main] Chromium 会话目录迁移失败，继续使用默认目录:', err)
+  }
+}
+
 // Global exception handlers to prevent silent crashes
 process.on('uncaughtException', (err) => {
   console.error('[main] Uncaught exception:', err)
@@ -50,6 +72,7 @@ if (!gotLock) {
   // 已有实例在跑：把焦点交给旧进程后退出（看起来像「双击没反应」就是这个）
   app.quit()
 } else {
+  configureChromiumSessionData()
   app.on('second-instance', () => {
     focusMainWindow()
   })
@@ -170,6 +193,8 @@ app.whenReady().then(() => {
 
   backend.onStatusChange((status) => {
     mainWindow?.webContents.send('backend:status', status)
+    if (status === 'online') socket.connect()
+    else socket.close()
   })
   backend.start()
 
@@ -179,14 +204,11 @@ app.whenReady().then(() => {
       notifyTaskChanged(
         msg.task,
         msg.eventType,
-        () => Boolean(mainWindow?.isVisible() && mainWindow.isFocused() && !isOrbMode()),
         showMainWindow,
       )
     }
     refreshTrayUnread()
   })
-  socket.connect()
-
   const trayHandle = createTray({
     onShow: showMainWindow,
     onQuit: () => {

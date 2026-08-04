@@ -21,6 +21,9 @@ export class TaskSocket {
 
   connect(): void {
     this.closedByUser = false
+    if (this.ws && (this.ws.readyState === WebSocket.CONNECTING || this.ws.readyState === WebSocket.OPEN)) {
+      return
+    }
     // 清掉任何尚未触发的重连定时器，保证同一时刻至多一个连接在途（LOW）
     if (this.reconnectTimer) {
       clearTimeout(this.reconnectTimer)
@@ -41,11 +44,15 @@ export class TaskSocket {
         // 忽略无法解析的消息
       }
     }
+    this.ws.onopen = () => {
+      this.reconnectAttempts = 0
+    }
     this.ws.onclose = () => {
+      this.ws = null
       if (!this.closedByUser) this.scheduleReconnect()
     }
-    this.ws.onerror = (event) => {
-      console.error('[ws-client] WebSocket error:', event)
+    this.ws.onerror = () => {
+      // 后端切换期间的连接失败由 onclose 统一重连，不重复输出无诊断价值的 ErrorEvent
       this.ws?.close()
     }
   }
@@ -75,5 +82,6 @@ export class TaskSocket {
       this.reconnectTimer = null
     }
     this.ws?.close()
+    this.ws = null
   }
 }

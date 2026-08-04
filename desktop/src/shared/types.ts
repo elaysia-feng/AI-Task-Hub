@@ -10,6 +10,9 @@ export type TaskStatus =
 
 export type TaskSource = 'CHATGPT' | 'CLAUDE_CODE' | 'CODEX' | 'OTHER'
 
+/** 一键清理作用域：queue=只清待处理，history=只清历史，all=全部 */
+export type TaskClearScope = 'queue' | 'history' | 'all'
+
 export interface HubTask {
   id: number
   source: TaskSource
@@ -120,13 +123,30 @@ export interface WallpaperPrefs {
   opacity: number
 }
 
-export interface WallpaperState {
-  hasImage: boolean
-  dataUrl: string | null
-  prefs: WallpaperPrefs
+export type WallpaperSelection =
+  | { source: 'none' }
+  | { source: 'custom' }
+  | { source: 'preset'; presetId: string }
+
+export interface WallpaperPresetMeta {
+  id: string
+  name: string
+  /** 相对 resources/ 的 Light / Dark 背景图路径 */
+  lightFile: string
+  darkFile: string
+  previewDataUrl?: string | null
 }
 
-/** 应用图标偏好：内置预设（粉发少女默认）或本地自定义图片 */
+export interface WallpaperState {
+  hasImage: boolean
+  dataUrlLight: string | null
+  dataUrlDark: string | null
+  prefs: WallpaperPrefs
+  selection: WallpaperSelection
+  presets: WallpaperPresetMeta[]
+}
+
+/** 应用图标偏好：内置角色预设（AI 看板娘默认）或本地自定义图片 */
 export type UserIconPrefs =
   | { source: 'preset'; presetId: string }
   | { source: 'custom' }
@@ -134,8 +154,9 @@ export type UserIconPrefs =
 export interface UserIconPresetMeta {
   id: string
   name: string
-  /** 相对 resources/ 的路径（默认 anime-head.png，扩展放 presets/xxx.png） */
+  /** 相对 resources/ 的路径（内置图标统一放在 presets/） */
   file: string
+  previewDataUrl?: string | null
 }
 
 export interface UserIconState {
@@ -154,7 +175,7 @@ export interface AihubApi {
   openTask(id: number): Promise<void>
   ignoreTask(id: number): Promise<void>
   deleteTask(id: number): Promise<void>
-  clearTasks(): Promise<number>
+  clearTasks(scope?: TaskClearScope): Promise<number>
   readAllTasks(): Promise<number>
   getBackendStatus(): Promise<BackendStatus>
   onTaskChanged(cb: (msg: ServerMessage) => void): () => void
@@ -163,13 +184,14 @@ export interface AihubApi {
   installUpdate(): void
   onUpdateStatus(cb: (state: UpdateState) => void): () => void
   getServerStatus(): Promise<ServerStatus>
-  getIntegrations(): Promise<IntegrationsStatus>
+  getIntegrations(): Promise<IntegrationsStatus | null>
   installClaude(): Promise<InstallResult>
   installCodex(): Promise<InstallResult>
   getTaskEvents(taskId: number): Promise<TaskEventRecord[]>
   openPath(target: string): Promise<void>
   getWallpaper(): Promise<WallpaperState>
   pickWallpaper(): Promise<WallpaperState>
+  setWallpaperPreset(presetId: string): Promise<WallpaperState>
   clearWallpaper(): Promise<WallpaperState>
   setWallpaperPrefs(prefs: Partial<WallpaperPrefs>): Promise<WallpaperState>
   showWallpaperDialog(): Promise<'pick' | 'clear' | 'cancel'>

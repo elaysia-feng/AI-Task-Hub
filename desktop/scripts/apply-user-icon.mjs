@@ -2,7 +2,7 @@
 //
 // 若用户设置过自定义应用图标（{userData}/icon/current.<ext>），则用该源图重跑
 // make-icon.ps1，让打包出的 exe / 安装包也使用自定义图标（覆盖 resources/icon.png、
-// tray.png、icon.ico 与 packaging/app.ico）。未设置自定义图标时 no-op（默认女头）。
+// tray.png、icon.ico 与 packaging/app.ico）。未设置自定义图标时 no-op（默认看板娘）。
 //
 // 说明：
 //   - userData 目录：打包版为 %APPDATA%\AI Task Hub，dev 版为 %APPDATA%\ai-task-hub-desktop，

@@ -78,6 +78,40 @@ def test_clear_all_tasks(client):
     assert client.get(f"/api/tasks/{task_id}/events").status_code == 404
 
 
+def test_clear_tasks_by_scope(client):
+    """按 tab 独立清理：scope=queue 只清待处理，scope=history 只清历史，互不影响。"""
+    # 一个待处理任务（COMPLETED_UNREAD）
+    res = client.post("/api/events", json=EVENT_PAYLOAD)
+    assert res.status_code == 201
+    queue_task_id = res.json()["taskId"]
+
+    # 一个待处理任务先标记已读 → 历史（VIEWED）
+    client.post(
+        "/api/events",
+        json={**EVENT_PAYLOAD, "externalTaskId": "session-scope-hist", "eventType": "TASK_FAILED"},
+    )
+    tasks = client.get("/api/tasks?view=queue").json()["tasks"]
+    hist_id = next(t["id"] for t in tasks if t["status"] == "FAILED_UNREAD")
+    assert client.post(f"/api/tasks/{hist_id}/view").status_code == 200
+
+    # 清理待处理 → 只删 queue，历史保留
+    res = client.delete("/api/tasks?confirm=true&scope=queue")
+    assert res.status_code == 200
+    assert res.json()["deleted"] == 1
+    assert client.get(f"/api/tasks/{queue_task_id}").status_code == 404
+    assert client.get(f"/api/tasks/{hist_id}").status_code == 200
+
+    # 清理历史 → 只删历史
+    res = client.delete("/api/tasks?confirm=true&scope=history")
+    assert res.status_code == 200
+    assert res.json()["deleted"] == 1
+    assert client.get(f"/api/tasks/{hist_id}").status_code == 404
+
+    # 未知 scope → 400；漏 confirm → 400
+    assert client.delete("/api/tasks?confirm=true&scope=xxx").status_code == 400
+    assert client.delete("/api/tasks?scope=queue").status_code == 400
+
+
 def test_websocket_broadcasts_tasks_cleared(client):
     client.post("/api/events", json=EVENT_PAYLOAD)
     with client.websocket_connect("/ws/tasks") as ws:

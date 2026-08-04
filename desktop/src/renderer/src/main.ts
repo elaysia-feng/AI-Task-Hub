@@ -13,7 +13,7 @@ import {
 import { h, showToast, svgIcon, type IconName } from './ui/dom'
 import { renderTasksView } from './ui/tasks'
 import { renderSettingsView } from './ui/settings'
-import { applyWallpaper } from './ui/wallpaper'
+import { applyWallpaper, refreshWallpaperTheme } from './ui/wallpaper'
 import { applyIcon } from './ui/icon'
 import { applyUiMode } from './orb'
 
@@ -30,6 +30,7 @@ function currentTheme(): Theme {
 
 function applyTheme(theme: Theme): void {
   document.documentElement.dataset.theme = theme
+  refreshWallpaperTheme()
   if (themeToggleBtn) {
     themeToggleBtn.replaceChildren(svgIcon(theme === 'dark' ? 'sun' : 'moon'))
     themeToggleBtn.title = theme === 'dark' ? '切换到浅色模式' : '切换到深色模式'
@@ -97,8 +98,23 @@ function renderShell(): void {
   themeToggleBtn.setAttribute('aria-label', '切换明暗主题')
   themeToggleBtn.onclick = toggleTheme
 
+  const logoBtn = h('button', 'logo', [svgIcon('logo')])
+  logoBtn.type = 'button'
+  logoBtn.title = '选择应用图标'
+  logoBtn.setAttribute('aria-label', '选择应用图标')
+  logoBtn.onclick = async () => {
+    logoBtn.disabled = true
+    try {
+      applyIcon(await window.aihub.pickUserIcon())
+    } catch (err) {
+      showToast(err instanceof Error ? err.message : '选择图标失败', 'var(--st-fail)')
+    } finally {
+      logoBtn.disabled = false
+    }
+  }
+
   const titlebar = h('header', 'titlebar', [
-    h('div', 'logo', [svgIcon('logo')]),
+    logoBtn,
     h('span', 'app-name', ['AI Task Hub']),
     h('span', 'app-sub', ['多 AI 平台任务中心']),
     h('div', 'drag-fill'),
@@ -287,7 +303,11 @@ async function bootstrap(): Promise<void> {
 
   state.backend = await window.aihub.getBackendStatus()
   updateBackendPill()
-  await reload()
+  if (state.backend === 'online') await reload()
+  else {
+    state.taskLoadState = 'error'
+    emit()
+  }
 
   window.aihub.onUiMode((mode) => {
     applyUiMode(mode)

@@ -3,6 +3,7 @@ import type {
   AihubApi,
   BackendStatus,
   ServerMessage,
+  TaskClearScope,
   UpdateState,
   UserIconState,
   WallpaperPrefs,
@@ -15,7 +16,7 @@ const api: AihubApi = {
   openTask: (id) => ipcRenderer.invoke('tasks:open', id),
   ignoreTask: (id) => ipcRenderer.invoke('tasks:ignore', id),
   deleteTask: (id) => ipcRenderer.invoke('tasks:delete', id),
-  clearTasks: () => ipcRenderer.invoke('tasks:clear'),
+  clearTasks: (scope?: TaskClearScope) => ipcRenderer.invoke('tasks:clear', scope),
   readAllTasks: () => ipcRenderer.invoke('tasks:read-all'),
   getBackendStatus: () => ipcRenderer.invoke('backend:status'),
 
@@ -48,6 +49,7 @@ const api: AihubApi = {
 
   getWallpaper: () => ipcRenderer.invoke('wallpaper:get'),
   pickWallpaper: () => ipcRenderer.invoke('wallpaper:pick'),
+  setWallpaperPreset: (presetId) => ipcRenderer.invoke('wallpaper:set-preset', presetId),
   clearWallpaper: () => ipcRenderer.invoke('wallpaper:clear'),
   setWallpaperPrefs: (prefs) => {
     const allowed = ['blur', 'dim', 'opacity'] as const

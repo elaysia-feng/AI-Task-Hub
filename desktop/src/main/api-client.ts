@@ -4,6 +4,7 @@ import type {
   InstallResult,
   IntegrationsStatus,
   ServerStatus,
+  TaskClearScope,
   TaskEventRecord,
   TaskListResult,
   TaskStatus,
@@ -11,11 +12,12 @@ import type {
 } from '../shared/types'
 
 const TIMEOUT_MS = 3000
+const INTEGRATIONS_TIMEOUT_MS = 10000
 
-async function request<T>(path: string, init?: RequestInit): Promise<T> {
+async function request<T>(path: string, init?: RequestInit, timeoutMs = TIMEOUT_MS): Promise<T> {
   const res = await fetch(`${API_BASE}${path}`, {
     ...init,
-    signal: AbortSignal.timeout(TIMEOUT_MS),
+    signal: AbortSignal.timeout(timeoutMs),
     headers: { 'Content-Type': 'application/json', ...init?.headers },
   })
   if (!res.ok) throw new Error(`${init?.method ?? 'GET'} ${path} → ${res.status}`)
@@ -53,11 +55,13 @@ export const apiClient = {
     return request(`/api/tasks/${id}`, { method: 'DELETE' })
   },
 
-  async clearTasks(): Promise<number> {
+  async clearTasks(scope: TaskClearScope = 'all'): Promise<number> {
     // 后端自 303f6b6 起要求 confirm=true 防误删；漏带会 400（一键清理「用不了」的根因）
-    const data = await request<{ success: boolean; deleted: number }>('/api/tasks?confirm=true', {
-      method: 'DELETE',
-    })
+    // scope=queue/history 按 tab 独立清理（后端 0839… 起支持），默认 all 全清
+    const data = await request<{ success: boolean; deleted: number }>(
+      `/api/tasks?confirm=true&scope=${scope}`,
+      { method: 'DELETE' },
+    )
     return data.deleted
   },
 
@@ -76,7 +80,8 @@ export const apiClient = {
   },
 
   getIntegrations(): Promise<IntegrationsStatus> {
-    return request('/api/integrations/status')
+    // Windows 首次进程体检可能略慢，单独放宽；普通任务 API 仍维持 3 秒超时。
+    return request('/api/integrations/status', undefined, INTEGRATIONS_TIMEOUT_MS)
   },
 
   installClaude(): Promise<InstallResult> {
