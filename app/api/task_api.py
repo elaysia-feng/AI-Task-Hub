@@ -7,6 +7,7 @@ logger = logging.getLogger(__name__)
 
 from app.model.task import Task
 from app.api.websocket_api import ws_manager
+from shared.constants import ALL_STATUSES
 
 router = APIRouter(prefix="/api/tasks")
 
@@ -18,12 +19,38 @@ def _dump(task: Task) -> dict:
 @router.get("")
 async def list_tasks(
     request: Request,
+    status: Optional[str] = Query(None, description="按单个状态分页（每种类一条独立分页流）"),
     view: Literal["queue", "history"] = Query("queue"),
+    limit: int = Query(200, ge=1, le=500),
+    offset: int = Query(0, ge=0),
 ) -> dict:
-    """任务列表：view=queue 队列（进行中/待输入/完成未读/失败未读）；view=history 历史（已读/忽略）。"""
+    """任务列表分页查询。
+
+    - status=单状态：每个种类（状态）一条独立分页流，互不影响 offset/hasMore。
+    - view=queue/history：兼容旧调用方与冒烟脚本的合并视图。
+    返回 hasMore 供前端翻页；limit 上限 500，防止历史无限增长时一次载入全表。
+    """
     task_service = request.app.state.task_service
-    tasks = task_service.get_queue() if view == "queue" else task_service.get_history()
-    return {"tasks": [_dump(t) for t in tasks]}
+    if status is not None:
+        if status not in ALL_STATUSES:
+            raise HTTPException(status_code=422, detail=f"未知任务状态: {status}")
+        tasks, has_more = task_service.list_by_status(status, limit, offset)
+        return {"tasks": [_dump(t) for t in tasks], "hasMore": has_more}
+    tasks, has_more = (
+        task_service.get_queue(limit, offset)
+        if view == "queue"
+        else task_service.get_history(limit, offset)
+    )
+    return {"tasks": [_dump(t) for t in tasks], "hasMore": has_more}
+
+
+@router.get("/summary")
+async def task_summary(request: Request) -> dict:
+    """各状态任务总数（GROUP BY 一条查询），供状态 chip/标题显示准确计数。
+
+    必须注册在 /{task_id} 之前：GET /api/tasks/summary 会被 int 类型路径参数吞掉。
+    """
+    return {"counts": request.app.state.task_service.status_summary()}
 
 
 @router.get("/{task_id}")

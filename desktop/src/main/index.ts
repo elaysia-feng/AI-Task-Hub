@@ -22,6 +22,11 @@ import { UpdateManager } from './updater'
 import { TaskSocket } from './ws-client'
 import { RESOURCES_DIR } from './config'
 import { killAllTrackedChildren } from './launcher'
+import {
+  applyPersistedIcon,
+  bindIconWindow,
+  setTrayHandle,
+} from './icon-picker'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 
@@ -54,6 +59,8 @@ function focusMainWindow(): void {
   if (!mainWindow || mainWindow.isDestroyed()) {
     mainWindow = createMainWindow()
     bindOrbWindow(() => mainWindow)
+    bindIconWindow(() => mainWindow)
+    applyPersistedIcon()
   }
   enterPanelMode()
   const win = mainWindow
@@ -149,6 +156,7 @@ app.whenReady().then(() => {
 
   mainWindow = createMainWindow()
   bindOrbWindow(() => mainWindow)
+  bindIconWindow(() => mainWindow)
 
   registerIpcHandlers(() => mainWindow, backend, updater, {
     enterOrb: enterOrbMode,
@@ -188,6 +196,8 @@ app.whenReady().then(() => {
     onInstallUpdate: () => updater.quitAndInstall(),
     onToggleOrb: toggleOrbVisibility,
   })
+  setTrayHandle(trayHandle)
+  applyPersistedIcon()
 
   let trayRefreshTimer: NodeJS.Timeout | null = null
   const refreshTrayUnread = (): void => {
@@ -216,6 +226,8 @@ app.whenReady().then(() => {
     if (BrowserWindow.getAllWindows().length === 0) {
       mainWindow = createMainWindow()
       bindOrbWindow(() => mainWindow)
+      bindIconWindow(() => mainWindow)
+      applyPersistedIcon()
     } else {
       showMainWindow()
     }
@@ -232,10 +244,11 @@ app.on('before-quit', () => {
 
 async function updateTrayTooltip(trayHandle: TrayHandle): Promise<void> {
   try {
-    const queue = await apiClient.listTasks('queue')
-    const running = queue.filter((t) => t.status === 'RUNNING').length
-    const unread = queue.filter((t) => t.status === 'COMPLETED_UNREAD' || t.status === 'FAILED_UNREAD').length
-    const needsInput = queue.filter((t) => t.status === 'NEEDS_INPUT').length
+    // summary 一条请求拿全 6 种状态准确计数，托盘 tooltip 不随分页截断
+    const counts = await apiClient.getTasksSummary()
+    const running = counts.RUNNING ?? 0
+    const unread = (counts.COMPLETED_UNREAD ?? 0) + (counts.FAILED_UNREAD ?? 0)
+    const needsInput = counts.NEEDS_INPUT ?? 0
     const parts: string[] = []
     if (running) parts.push(`${running} 执行中`)
     if (unread) parts.push(`${unread} 未读`)

@@ -5,7 +5,9 @@ import type {
   IntegrationsStatus,
   ServerStatus,
   TaskEventRecord,
-  TaskView,
+  TaskListResult,
+  TaskStatus,
+  TaskStatusSummary,
 } from '../shared/types'
 
 const TIMEOUT_MS = 3000
@@ -21,9 +23,17 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
 }
 
 export const apiClient = {
-  async listTasks(view: TaskView): Promise<HubTask[]> {
-    const data = await request<{ tasks: HubTask[] }>(`/api/tasks?view=${view}`)
-    return data.tasks
+  async listTasksByStatus(status: TaskStatus, limit?: number, offset?: number): Promise<TaskListResult> {
+    const params = new URLSearchParams({ status })
+    if (limit !== undefined) params.set('limit', String(limit))
+    if (offset !== undefined) params.set('offset', String(offset))
+    const data = await request<{ tasks: HubTask[]; hasMore: boolean }>(`/api/tasks?${params}`)
+    return { tasks: data.tasks, hasMore: data.hasMore }
+  },
+
+  async getTasksSummary(): Promise<TaskStatusSummary> {
+    const data = await request<{ counts: TaskStatusSummary }>('/api/tasks/summary')
+    return data.counts
   },
 
   async getTask(id: number): Promise<HubTask> {

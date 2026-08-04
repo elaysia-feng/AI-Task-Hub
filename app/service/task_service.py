@@ -6,7 +6,7 @@ from app.model.task import Task, TaskStatus
 from app.repository.event_repository import EventRepository
 from app.repository.task_repository import TaskRepository
 from app.utils import now, to_local_naive
-from shared.constants import HISTORY_STATUSES, QUEUE_STATUSES, UNREAD_STATUSES
+from shared.constants import ALL_STATUSES, HISTORY_STATUSES, QUEUE_STATUSES, UNREAD_STATUSES
 
 logger = logging.getLogger(__name__)
 
@@ -118,11 +118,20 @@ class TaskService:
         ):
             task.viewed_at = None  # 重新进入活跃态 → 清除已读标记
 
-    def get_queue(self) -> list[Task]:
-        return self._tasks.list_by_statuses(QUEUE_STATUSES)
+    def list_by_status(self, status: str, limit: int = 200, offset: int = 0) -> tuple[list[Task], bool]:
+        """按单个状态分页：每个种类一条独立分页流。"""
+        return self._tasks.list_by_status(status, limit=limit, offset=offset)
 
-    def get_history(self) -> list[Task]:
-        return self._tasks.list_by_statuses(HISTORY_STATUSES)
+    def status_summary(self) -> dict[str, int]:
+        """各状态任务总数（缺失状态补 0），供状态 chip/标题显示准确计数。"""
+        counts = self._tasks.count_by_status()
+        return {status: counts.get(status, 0) for status in ALL_STATUSES}
+
+    def get_queue(self, limit: int = 200, offset: int = 0) -> tuple[list[Task], bool]:
+        return self._tasks.list_by_statuses(QUEUE_STATUSES, limit=limit, offset=offset)
+
+    def get_history(self, limit: int = 200, offset: int = 0) -> tuple[list[Task], bool]:
+        return self._tasks.list_by_statuses(HISTORY_STATUSES, limit=limit, offset=offset)
 
     def get_task(self, task_id: int) -> Optional[Task]:
         return self._tasks.get_by_id(task_id)

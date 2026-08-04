@@ -38,12 +38,13 @@ class FakeTaskRepository:
             None,
         )
 
-    def list_by_statuses(self, statuses):
-        return [task for task in self.tasks.values() if task.status in statuses]
+    def list_by_statuses(self, statuses, limit=200, offset=0):
+        rows = [task for task in self.tasks.values() if task.status in statuses]
+        return rows, False  # 与真实实现一致：返回 (行, has_more)
 
     def list_by_statuses_for_update(self, statuses):
         """Returns same as list_by_statuses; fake is single-threaded so no lock needed."""
-        return self.list_by_statuses(statuses)
+        return [task for task in self.tasks.values() if task.status in statuses]
 
     def delete(self, task_id):
         return self.tasks.pop(task_id, None) is not None

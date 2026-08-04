@@ -22,7 +22,7 @@ class TestHandleEvent:
         assert task.id > 0  # MySQL 自增主键回填
         assert task.status == "COMPLETED_UNREAD"
         assert task.completed_at is not None
-        assert [t.id for t in task_service.get_queue()] == [task.id]
+        assert [t.id for t in task_service.get_queue()[0]] == [task.id]
 
     def test_dedup_by_source_and_external_id(self, task_service):
         started = task_service.handle_event(
@@ -35,12 +35,12 @@ class TestHandleEvent:
         assert completed.id == started.id  # 同一会话事件合并到同一任务
         assert completed.status == "COMPLETED_UNREAD"
         assert completed.title == "修复登录接口"  # 后续事件补全标题
-        assert len(task_service.get_queue()) == 1
+        assert len(task_service.get_queue()[0]) == 1
 
     def test_started_appears_in_queue_as_running(self, task_service):
         task = task_service.handle_event(make_event(eventType="TASK_STARTED", title="写 README"))
         assert task.status == "RUNNING"
-        queue = task_service.get_queue()
+        queue = task_service.get_queue()[0]
         assert [t.id for t in queue] == [task.id]
         assert queue[0].status == "RUNNING"
 
@@ -64,7 +64,7 @@ class TestHandleEvent:
 
         # 同源 + NULL external_task_id 折叠为同一占位 (source, '')，必须合并
         assert first.id == second.id
-        assert len(task_service.get_queue()) == 1
+        assert len(task_service.get_queue()[0]) == 1
 
     def test_event_without_external_id_different_sources_create_separate(self, task_service):
         """不同 source 的 NULL external_task_id 各自独立，不应跨源合并。"""
@@ -76,7 +76,7 @@ class TestHandleEvent:
         )
 
         assert codex_task.id != claude_task.id
-        assert len(task_service.get_queue()) == 2
+        assert len(task_service.get_queue()[0]) == 2
 
 
 class TestStatusFlow:
@@ -87,8 +87,8 @@ class TestStatusFlow:
 
         assert viewed.status == "VIEWED"
         assert viewed.viewed_at is not None
-        assert task_service.get_queue() == []
-        assert [t.id for t in task_service.get_history()] == [task.id]
+        assert task_service.get_queue()[0] == []
+        assert [t.id for t in task_service.get_history()[0]] == [task.id]
 
     def test_ignored_leaves_queue(self, task_service):
         task = task_service.handle_event(make_event())
@@ -96,7 +96,7 @@ class TestStatusFlow:
         ignored = task_service.mark_ignored(task.id)
 
         assert ignored.status == "IGNORED"
-        assert task_service.get_queue() == []
+        assert task_service.get_queue()[0] == []
 
     def test_new_completion_resurfaces_viewed_task(self, task_service):
         task = task_service.handle_event(make_event())
@@ -106,7 +106,7 @@ class TestStatusFlow:
 
         assert resurfaced.status == "COMPLETED_UNREAD"
         assert resurfaced.viewed_at is None
-        assert [t.id for t in task_service.get_queue()] == [task.id]
+        assert [t.id for t in task_service.get_queue()[0]] == [task.id]
 
     def test_mark_missing_task_returns_none(self, task_service):
         assert task_service.mark_viewed(999999) is None

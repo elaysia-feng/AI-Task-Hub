@@ -1,9 +1,9 @@
 import './orb.css'
 import type { HubTask, TaskStatus, WallpaperState } from '../../shared/types'
 import { SOURCE_LABELS, STATUS_LABELS, displayTitle } from '../../shared/labels'
-import { state, subscribe } from './state'
+import { QUEUE_STATUSES, state, subscribe } from './state'
 import { applyWallpaper } from './ui/wallpaper'
-import animeHeadUrl from './assets/anime-head.png'
+import { applyIconToBall } from './ui/icon'
 
 const STATUS_COLOR: Record<string, string> = {
   RUNNING: '#38bdf8',
@@ -60,9 +60,9 @@ export function mountOrb(): void {
   ball.className = 'orb-ball'
   ball.type = 'button'
   ball.title = '拖动移动 · 点击打开面板 · 悬停查看任务'
-  // 二次元女头作为球体主体：通过 CSS 变量注入 URL，玻璃高光叠加层留在 orb.css 里
-  ball.style.setProperty('--orb-face', `url("${animeHeadUrl}")`)
   ball.innerHTML = `<span class="orb-ring"></span><span class="orb-count hidden">0</span>`
+  // 图标来自设置（预设/本地图），经 ui/icon 缓存注入球面 CSS 变量
+  applyIconToBall(ball)
 
   const panel = document.createElement('div')
   panel.className = 'orb-panel'
@@ -101,7 +101,12 @@ export function mountOrb(): void {
     if (expanded === next) return
     expanded = next
     root!.classList.toggle('expanded', next)
-    void window.aihub.setOrbPanelExpanded(next)
+    void window.aihub.setOrbPanelExpanded(next).then((dir) => {
+      if (!root!.isConnected) return
+      // 展开方向供 CSS 布局（球在右上 / 面板向下）；收起时清除
+      if (dir) root!.dataset.expand = dir
+      else delete root!.dataset.expand
+    })
   }
 
   const scheduleCollapse = (): void => {
@@ -192,7 +197,11 @@ export function mountOrb(): void {
 
   const reload = async (): Promise<void> => {
     try {
-      queue = await window.aihub.getQueue()
+      // 按种类独立分页：悬浮球只取 4 种队列状态首页，互不影响
+      const pages = await Promise.all(
+        QUEUE_STATUSES.map((status) => window.aihub.getTaskPage(status, 100, 0)),
+      )
+      queue = pages.flatMap((page) => page.tasks)
     } catch {
       queue = []
     }

@@ -2,11 +2,13 @@
 
 import type { HubTask, TaskSource, TaskStatus } from '../../../shared/types'
 import { EVENT_LABELS, SOURCE_LABELS, STATUS_LABELS, displayTitle } from '../../../shared/labels'
-import { emit, filteredTasks, state } from '../state'
+import { HISTORY_STATUSES, QUEUE_STATUSES, emit, filteredTasks, state } from '../state'
 import { h, showToast, svgIcon, type IconName } from './dom'
 import { formatRelativeTime } from '../time'
 
 type ReloadTasks = () => Promise<boolean>
+/** 每种状态（种类）独立翻页：loadMore(status) 追加该状态下一页 */
+type LoadMore = (status: TaskStatus) => Promise<boolean>
 
 const QUEUE_SECTIONS: Array<{ status: TaskStatus; title: string; color: string }> = [
   { status: 'RUNNING', title: '执行中', color: 'var(--st-run)' },
@@ -14,6 +16,22 @@ const QUEUE_SECTIONS: Array<{ status: TaskStatus; title: string; color: string }
   { status: 'COMPLETED_UNREAD', title: '已完成', color: 'var(--st-done)' },
   { status: 'FAILED_UNREAD', title: '失败', color: 'var(--st-fail)' },
 ]
+
+const HISTORY_SECTIONS: Array<{ status: TaskStatus; title: string; color: string }> = [
+  { status: 'VIEWED', title: '已查看', color: 'var(--st-done)' },
+  { status: 'IGNORED', title: '已忽略', color: 'var(--text-muted)' },
+]
+
+/** 某状态服务端准确总数（summary），缺失时退回已加载数 */
+function statusCount(status: TaskStatus): number {
+  return state.statusCounts[status] ?? 0
+}
+
+/** 某视图下全部状态的准确总数 */
+function viewTotal(view: 'queue' | 'history'): number {
+  const statuses = view === 'history' ? HISTORY_STATUSES : QUEUE_STATUSES
+  return statuses.reduce((sum, s) => sum + statusCount(s), 0)
+}
 
 const SOURCE_OPTIONS: Array<{ value: TaskSource | 'all'; label: string }> = [
   { value: 'all', label: '全部来源' },
@@ -38,7 +56,7 @@ const VIEW_STATUS_OPTIONS: Record<'queue' | 'history', Array<{ value: TaskStatus
   ],
 }
 
-export function renderTasksView(container: HTMLElement, reloadTasks: ReloadTasks): void {
+export function renderTasksView(container: HTMLElement, reloadTasks: ReloadTasks, loadMore: LoadMore): void {
   const title = state.view === 'history' ? '历史' : '待处理'
 
   const clearBtn = makeClearButton(reloadTasks)
@@ -86,8 +104,8 @@ export function renderTasksView(container: HTMLElement, reloadTasks: ReloadTasks
       ? visibleTasks.find((task) => task.id === state.selectedTaskId)
       : undefined
   const listArea = h('div', 'list-area')
-  if (state.view === 'queue') renderQueue(listArea, reloadTasks)
-  else renderHistory(listArea, reloadTasks)
+  if (state.view === 'queue') renderQueue(listArea, reloadTasks, loadMore)
+  else renderHistory(listArea, reloadTasks, loadMore)
 
   if (selected) {
     const body = h('div', 'tasks-split', [listArea, makeDetailPane(selected, reloadTasks)])
@@ -101,10 +119,9 @@ export function renderTasksView(container: HTMLElement, reloadTasks: ReloadTasks
 
 function makeStatusFilters(): HTMLElement {
   const view = state.view === 'history' ? 'history' : 'queue'
-  const tasks = view === 'history' ? state.history : state.queue
   const buttons = VIEW_STATUS_OPTIONS[view].map((option) => {
-    const count =
-      option.value === 'all' ? tasks.length : tasks.filter((task) => task.status === option.value).length
+    // 用服务端准确总数（summary），未翻完页前数字也不再跳动
+    const count = option.value === 'all' ? viewTotal(view) : statusCount(option.value)
     const button = h('button', 'filter-chip', [
       h('span', 'filter-chip-dot'),
       option.label,
@@ -218,17 +235,19 @@ function focusSearch(cursor: number): void {
 
 function summaryText(): string {
   if (state.view === 'history') {
-    return state.history.length ? `共 ${state.history.length} 条记录` : ''
+    const total = viewTotal('history')
+    return total ? `共 ${total} 条记录` : ''
   }
-  if (state.queue.length === 0) return ''
-  const needsInput = state.queue.filter((t) => t.status === 'NEEDS_INPUT').length
+  const total = viewTotal('queue')
+  if (total === 0) return ''
+  const needsInput = statusCount('NEEDS_INPUT')
   return needsInput > 0
-    ? `${state.queue.length} 个任务 · ${needsInput} 个等待你的输入`
-    : `${state.queue.length} 个任务待查看`
+    ? `${total} 个任务 · ${needsInput} 个等待你的输入`
+    : `${total} 个任务待查看`
 }
 
 function unreadCount(): number {
-  return state.queue.filter((t) => t.status === 'COMPLETED_UNREAD' || t.status === 'FAILED_UNREAD').length
+  return statusCount('COMPLETED_UNREAD') + statusCount('FAILED_UNREAD')
 }
 
 function actionToast(message: string, refreshed: boolean): void {
@@ -275,7 +294,7 @@ function makeClearButton(reloadTasks: ReloadTasks): HTMLButtonElement {
   btn.onclick = async () => {
     if (!armed) {
       window.clearTimeout(timer) // clear any stale timer from previous renders
-      const total = state.queue.length + state.history.length
+      const total = viewTotal('queue') + viewTotal('history')
       armed = true
       btn.classList.add('armed')
       btn.replaceChildren(svgIcon('trash'), `确认清空全部 ${total} 个任务？`)
@@ -300,7 +319,7 @@ function makeClearButton(reloadTasks: ReloadTasks): HTMLButtonElement {
 
 /* ---------- 列表 ---------- */
 
-function renderQueue(container: HTMLElement, reloadTasks: ReloadTasks): void {
+function renderQueue(container: HTMLElement, reloadTasks: ReloadTasks, loadMore: LoadMore): void {
   const tasks = filteredTasks()
   if (tasks.length === 0) {
     container.append(
@@ -311,24 +330,13 @@ function renderQueue(container: HTMLElement, reloadTasks: ReloadTasks): void {
     return
   }
 
+  // 每个种类（状态）独立分页：各区块自己的「加载更多」
   for (const section of QUEUE_SECTIONS) {
-    const sectionTasks = tasks.filter((t) => t.status === section.status)
-    if (sectionTasks.length === 0) continue
-
-    const dot = h('span', 'dot')
-    dot.style.background = section.color
-    dot.style.boxShadow = `0 0 6px ${section.color}`
-    container.append(
-      h('div', 'section-header', [dot, section.title, h('span', 'count', [String(sectionTasks.length)])]),
-    )
-
-    const grid = h('div', 'card-grid')
-    for (const task of sectionTasks) grid.append(queueCard(task, reloadTasks))
-    container.append(grid)
+    renderSection(container, section, tasks, reloadTasks, loadMore, queueCard)
   }
 }
 
-function renderHistory(container: HTMLElement, reloadTasks: ReloadTasks): void {
+function renderHistory(container: HTMLElement, reloadTasks: ReloadTasks, loadMore: LoadMore): void {
   const tasks = filteredTasks()
   if (tasks.length === 0) {
     container.append(
@@ -339,8 +347,7 @@ function renderHistory(container: HTMLElement, reloadTasks: ReloadTasks): void {
     return
   }
 
-  const grid = h('div', 'card-grid')
-  for (const task of tasks) {
+  const historyCard = (task: HubTask, reload: ReloadTasks): HTMLElement => {
     const deleteBtn = h('button', 'btn danger', [svgIcon('trash'), '删除'])
     deleteBtn.onclick = async (e) => {
       e.stopPropagation()
@@ -348,7 +355,7 @@ function renderHistory(container: HTMLElement, reloadTasks: ReloadTasks): void {
       try {
         await window.aihub.deleteTask(task.id)
         if (state.selectedTaskId === task.id) state.selectedTaskId = null
-        const refreshed = await reloadTasks()
+        const refreshed = await reload()
         actionToast('任务已删除', refreshed)
       } catch {
         showToast('删除失败，请确认事件服务已连接', 'var(--st-fail)')
@@ -356,9 +363,57 @@ function renderHistory(container: HTMLElement, reloadTasks: ReloadTasks): void {
         deleteBtn.disabled = false
       }
     }
-    grid.append(buildCard(task, [deleteBtn]))
+    return buildCard(task, [deleteBtn])
   }
+
+  // 历史也按状态分区：已查看 / 已忽略，各自独立翻页
+  for (const section of HISTORY_SECTIONS) {
+    renderSection(container, section, tasks, reloadTasks, loadMore, historyCard)
+  }
+}
+
+/** 渲染一个状态区块：标题（服务端准确计数）+ 卡片网格 + 该状态独立的「加载更多」 */
+function renderSection(
+  container: HTMLElement,
+  section: { status: TaskStatus; title: string; color: string },
+  tasks: HubTask[],
+  reloadTasks: ReloadTasks,
+  loadMore: LoadMore,
+  card: (task: HubTask, reloadTasks: ReloadTasks) => HTMLElement,
+): void {
+  const sectionTasks = tasks.filter((t) => t.status === section.status)
+  if (sectionTasks.length === 0) return
+
+  const dot = h('span', 'dot')
+  dot.style.background = section.color
+  dot.style.boxShadow = `0 0 6px ${section.color}`
+  container.append(
+    h('div', 'section-header', [dot, section.title, h('span', 'count', [String(statusCount(section.status))])]),
+  )
+
+  const grid = h('div', 'card-grid')
+  for (const task of sectionTasks) grid.append(card(task, reloadTasks))
   container.append(grid)
+
+  if (state.bucketHasMore[section.status]) container.append(makeLoadMoreButton(section.status, loadMore))
+}
+
+function makeLoadMoreButton(status: TaskStatus, loadMore: LoadMore): HTMLElement {
+  const btn = h('button', 'btn load-more-btn', ['加载更多'])
+  btn.title = '加载更多该分类任务'
+  btn.onclick = async () => {
+    btn.disabled = true
+    btn.textContent = '加载中…'
+    try {
+      const ok = await loadMore(status)
+      if (!ok) showToast('加载失败，请确认事件服务已连接', 'var(--st-fail)')
+    } finally {
+      if (!btn.isConnected) return // 翻页后整页重渲染，旧按钮已脱离 DOM
+      btn.disabled = false
+      btn.textContent = '加载更多'
+    }
+  }
+  return btn
 }
 
 function queueCard(task: HubTask, reloadTasks: ReloadTasks): HTMLElement {

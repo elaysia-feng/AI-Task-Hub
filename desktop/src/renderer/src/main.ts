@@ -1,11 +1,20 @@
 import './styles.css'
-import type { BackendStatus } from '../../shared/types'
+import type { BackendStatus, HubTask, TaskStatus } from '../../shared/types'
 import { SOURCE_LABELS, STATUS_LABELS, displayTitle } from '../../shared/labels'
-import { emit, state, subscribe } from './state'
+import {
+  ALL_STATUSES,
+  HISTORY_STATUSES,
+  QUEUE_STATUSES,
+  emit,
+  loadedTaskCount,
+  state,
+  subscribe,
+} from './state'
 import { h, showToast, svgIcon, type IconName } from './ui/dom'
 import { renderTasksView } from './ui/tasks'
 import { renderSettingsView } from './ui/settings'
 import { applyWallpaper } from './ui/wallpaper'
+import { applyIcon } from './ui/icon'
 import { applyUiMode } from './orb'
 
 /* ---------- 主题 ---------- */
@@ -138,7 +147,7 @@ function updateBackendPill(): void {
 function renderContent(): void {
   contentEl.textContent = ''
   if (state.view === 'settings') renderSettingsView(contentEl)
-  else renderTasksView(contentEl, reload)
+  else renderTasksView(contentEl, reload, loadMore)
 
   const count = state.queue.length
   if (queueBadge) {
@@ -149,6 +158,7 @@ function renderContent(): void {
 
 /* ---------- 数据 ---------- */
 
+const PAGE_SIZE = 100
 let reloadRequestId = 0
 
 async function reload(): Promise<boolean> {
@@ -158,12 +168,23 @@ async function reload(): Promise<boolean> {
     emit()
   }
   try {
-    const [queue, history] = await Promise.all([window.aihub.getQueue(), window.aihub.getHistory()])
+    // 按种类独立分页：summary + 6 种状态各拉第一页，互不影响 offset/hasMore。
+    // 每页上限 PAGE_SIZE，避免无限增长时一次载入全表（内存尖峰已修）。
+    const [summary, ...pages] = await Promise.all([
+      window.aihub.getTasksSummary(),
+      ...ALL_STATUSES.map((status) => window.aihub.getTaskPage(status, PAGE_SIZE, 0)),
+    ])
     if (requestId !== reloadRequestId) return true
-    state.queue = queue
-    state.history = history
+    state.statusCounts = summary
+    const byStatus = new Map<TaskStatus, HubTask[]>()
+    pages.forEach((page, i) => byStatus.set(ALL_STATUSES[i], page.tasks))
+    for (const status of ALL_STATUSES) {
+      state.bucketHasMore[status] = pages[ALL_STATUSES.indexOf(status)].hasMore
+    }
+    state.queue = QUEUE_STATUSES.flatMap((status) => byStatus.get(status) ?? [])
+    state.history = HISTORY_STATUSES.flatMap((status) => byStatus.get(status) ?? [])
     state.taskLoadState = 'ready'
-    const current = state.view === 'history' ? history : queue
+    const current = state.view === 'history' ? state.history : state.queue
     if (state.selectedTaskId !== null && !current.some((task) => task.id === state.selectedTaskId)) {
       state.selectedTaskId = null
     }
@@ -171,6 +192,28 @@ async function reload(): Promise<boolean> {
     if (requestId !== reloadRequestId) return true
     state.taskLoadState = 'error'
     emit()
+    return false
+  }
+  emit()
+  return true
+}
+
+/** 某种类（状态）「加载更多」：追加该状态下一页（offset=该状态已加载数）。
+ *  期间若发生新 reload（requestId 变化）则丢弃本次结果防竞态；
+ *  追加前按 id 去重，兜住并发下可能的重复返回。 */
+async function loadMore(status: TaskStatus): Promise<boolean> {
+  if (!state.bucketHasMore[status] || state.taskLoadState !== 'ready') return true
+  const requestId = reloadRequestId
+  try {
+    const page = await window.aihub.getTaskPage(status, PAGE_SIZE, loadedTaskCount(status))
+    if (requestId !== reloadRequestId) return true
+    const target = QUEUE_STATUSES.includes(status) ? 'queue' : 'history'
+    const existing = state[target]
+    const known = new Set(existing.map((task) => task.id))
+    const fresh = page.tasks.filter((task) => !known.has(task.id))
+    state[target] = [...existing, ...fresh]
+    state.bucketHasMore = { ...state.bucketHasMore, [status]: page.hasMore }
+  } catch {
     return false
   }
   emit()
@@ -231,6 +274,12 @@ async function bootstrap(): Promise<void> {
   } catch {
     // 主进程未就绪时忽略，设置页可重试
   }
+  try {
+    applyIcon(await window.aihub.getUserIcon())
+  } catch {
+    // 主进程未就绪时忽略，onIconChanged 兜底
+  }
+  window.aihub.onIconChanged((state) => applyIcon(state))
   updateBackendPill()
   subscribe(renderContent)
   bindKeyboardShortcuts()

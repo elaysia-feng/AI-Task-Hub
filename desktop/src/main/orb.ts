@@ -17,6 +17,8 @@ let getWindow: () => BrowserWindow | null = () => null
 let panelBounds: Electron.Rectangle | null = null
 let dragState: { sx: number; sy: number; wx: number; wy: number } | null = null
 let orbExpanded = false
+/** 面板展开方向：上方空间不足时改为向下展开（球贴窗口右上角） */
+let orbExpandDown = false
 
 export function bindOrbWindow(getter: () => BrowserWindow | null): void {
   getWindow = getter
@@ -83,6 +85,10 @@ function boundsFromBallAnchor(
 
 function currentBallAnchor(win: BrowserWindow): { right: number; bottom: number } {
   const b = win.getBounds()
+  if (orbExpanded && orbExpandDown) {
+    // 向下展开：球贴在窗口右上角，球底 ≈ 窗口顶 + ORB_SIZE
+    return { right: b.x + b.width, bottom: b.y + ORB_SIZE }
+  }
   return { right: b.x + b.width, bottom: b.y + b.height }
 }
 
@@ -100,11 +106,14 @@ export function enterOrbMode(): void {
 
   mode = 'orb'
   orbExpanded = false
+  orbExpandDown = false
   dragState = null
 
   win.setResizable(true)
   win.setMinimumSize(ORB_SIZE, ORB_SIZE)
   win.setMaximumSize(ORB_PANEL_W, ORB_PANEL_H)
+  // 收起态是透明小窗：关掉 Windows 方窗投影，避免 44×44 玻璃球拖着一块方形阴影
+  win.setHasShadow(false)
 
   const saved = loadOrbPos()
   const fallback = defaultOrbPos()
@@ -144,19 +153,25 @@ export function enterPanelMode(): void {
 
   if (mode === 'orb') {
     const b = win.getBounds()
-    // 存球的位置用窗口左上角（收起尺寸）
-    saveOrbPos(
-      orbExpanded ? b.x + b.width - ORB_SIZE : b.x,
-      orbExpanded ? b.y + b.height - ORB_SIZE : b.y,
-    )
+    // 存球的位置用窗口左上角（收起尺寸）；向下展开时球在右上角
+    if (orbExpanded) {
+      saveOrbPos(
+        b.x + b.width - ORB_SIZE,
+        orbExpandDown ? b.y : b.y + b.height - ORB_SIZE,
+      )
+    } else {
+      saveOrbPos(b.x, b.y)
+    }
   }
 
   mode = 'panel'
   orbExpanded = false
+  orbExpandDown = false
   dragState = null
 
   // 先允许缩放，再改 max/min/bounds（顺序很重要）
   win.setResizable(true)
+  win.setHasShadow(true)
   win.setAlwaysOnTop(false)
   win.setSkipTaskbar(false)
   win.setMaximumSize(10000, 10000)
@@ -199,20 +214,41 @@ function defaultCenteredPanel(): { x: number; y: number } {
   }
 }
 
-/** 悬停展开/收起任务面板（只在 orb 模式） */
-export function setOrbPanelExpanded(expanded: boolean): void {
+/**
+ * 悬停展开/收起任务面板（只在 orb 模式）。
+ * 展开时根据球上方空间自适应方向：上方不够而下方够 → 向下展开，否则向上。
+ * 返回展开方向（收起返回 null）。
+ */
+export function setOrbPanelExpanded(expanded: boolean): 'up' | 'down' | null {
   const win = getWindow()
-  if (!win || win.isDestroyed() || mode !== 'orb') return
-  if (orbExpanded === expanded) return
+  if (!win || win.isDestroyed() || mode !== 'orb') return null
+  if (orbExpanded === expanded) {
+    return orbExpanded ? (orbExpandDown ? 'down' : 'up') : null
+  }
 
   const anchor = currentBallAnchor(win)
+  if (expanded) {
+    const { workArea } = screen.getDisplayNearestPoint({ x: anchor.right, y: anchor.bottom })
+    const spaceAbove = anchor.bottom - workArea.y
+    const spaceBelow = workArea.y + workArea.height - anchor.bottom
+    orbExpandDown = spaceAbove < ORB_PANEL_H && spaceBelow >= ORB_PANEL_H
+  } else {
+    orbExpandDown = false
+  }
+
   orbExpanded = expanded
   const w = expanded ? ORB_PANEL_W : ORB_SIZE
   const h = expanded ? ORB_PANEL_H : ORB_SIZE
   // resizable=false 时 Windows 常忽略 setBounds，先临时放开再锁回
   win.setResizable(true)
-  win.setBounds(boundsFromBallAnchor(anchor.right, anchor.bottom, w, h))
+  if (expanded && orbExpandDown) {
+    // 向下展开：窗口顶对齐球顶（球贴窗口右上角），面板从球往下长，球不跳
+    win.setBounds(clampBounds(anchor.right - w, anchor.bottom - ORB_SIZE, w, h))
+  } else {
+    win.setBounds(boundsFromBallAnchor(anchor.right, anchor.bottom, w, h))
+  }
   win.setResizable(false)
+  return expanded ? (orbExpandDown ? 'down' : 'up') : null
 }
 
 export function isOrbMode(): boolean {

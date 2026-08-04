@@ -18,7 +18,7 @@
     "dist": "npm run build && electron-builder",
     "predist:publish": "npm run ensure:electron && npm run ensure:nsis && npm run ensure:backend",
     "dist:publish": "npm run build && electron-builder --publish always",
-    "predist:local": "npm run ensure:electron && npm run ensure:nsis && npm run ensure:backend",
+    "predist:local": "npm run ensure:electron && npm run ensure:nsis && npm run ensure:backend && node scripts/apply-user-icon.mjs",
     "dist:local": "npm run build && electron-builder",
     "ensure:backend": "node scripts/ensure-backend.mjs",
     "ensure:nsis": "node scripts/ensure-nsis.mjs"

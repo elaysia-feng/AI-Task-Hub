@@ -1,9 +1,17 @@
 import { contextBridge, ipcRenderer } from 'electron'
-import type { AihubApi, BackendStatus, ServerMessage, UpdateState, WallpaperPrefs } from '../shared/types'
+import type {
+  AihubApi,
+  BackendStatus,
+  ServerMessage,
+  UpdateState,
+  UserIconState,
+  WallpaperPrefs,
+} from '../shared/types'
 
 const api: AihubApi = {
-  getQueue: () => ipcRenderer.invoke('tasks:queue'),
-  getHistory: () => ipcRenderer.invoke('tasks:history'),
+  getTaskPage: (status, limit?: number, offset?: number) =>
+    ipcRenderer.invoke('tasks:page', status, limit, offset),
+  getTasksSummary: () => ipcRenderer.invoke('tasks:summary'),
   openTask: (id) => ipcRenderer.invoke('tasks:open', id),
   ignoreTask: (id) => ipcRenderer.invoke('tasks:ignore', id),
   deleteTask: (id) => ipcRenderer.invoke('tasks:delete', id),
@@ -54,6 +62,16 @@ const api: AihubApi = {
     return ipcRenderer.invoke('wallpaper:set-prefs', filtered)
   },
   showWallpaperDialog: () => ipcRenderer.invoke('wallpaper:dialog'),
+
+  getUserIcon: () => ipcRenderer.invoke('icon:get'),
+  pickUserIcon: () => ipcRenderer.invoke('icon:pick'),
+  setUserIconPreset: (presetId) => ipcRenderer.invoke('icon:set-preset', presetId),
+  resetUserIcon: () => ipcRenderer.invoke('icon:reset'),
+  onIconChanged: (cb) => {
+    const listener = (_event: Electron.IpcRendererEvent, state: UserIconState): void => cb(state)
+    ipcRenderer.on('icon:changed', listener)
+    return () => ipcRenderer.removeListener('icon:changed', listener)
+  },
 
   minimizeWindow: () => ipcRenderer.send('window:minimize'),
   closeWindow: () => ipcRenderer.send('window:close'),

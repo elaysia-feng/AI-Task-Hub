@@ -3,6 +3,7 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { app, BrowserWindow, Notification, dialog, shell } from 'electron'
+import { getUserIconSourcePath } from './icon-picker'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 
@@ -232,6 +233,20 @@ export async function buildExeWithConfirm(win: BrowserWindow | null): Promise<Bu
     }
   }
   // ---- 确认 ----
+  const customIcon = getUserIconSourcePath()
+  const detailLines = [
+    '将依次：检查工具链 → 打包后端 → 编译前端 → 生成安装包（约几分钟）。',
+    '完成后自动打开 desktop/dist 目录。',
+  ]
+  if (customIcon) {
+    detailLines.push(
+      '',
+      '将用当前自定义图标重新生成安装包图标（会覆盖 resources/icon.png、tray.png、icon.ico 与 packaging/app.ico；重跑 desktop/scripts/make-icon.ps1 可恢复默认）。',
+    )
+  }
+  detailLines.push('', '注意：请先退出正在运行的 AI Task Hub（含托盘 / npm run dev）。')
+  const detail = detailLines.join('\n')
+
   const confirm = win
     ? await dialog.showMessageBox(win, {
         type: 'question',
@@ -240,12 +255,7 @@ export async function buildExeWithConfirm(win: BrowserWindow | null): Promise<Bu
         cancelId: 0,
         title: '生成安装包',
         message: '确定生成 exe 安装包？',
-        detail: [
-          '将依次：检查工具链 → 打包后端 → 编译前端 → 生成安装包（约几分钟）。',
-          '完成后自动打开 desktop/dist 目录。',
-          '',
-          '注意：请先退出正在运行的 AI Task Hub（含托盘 / npm run dev）。',
-        ].join('\n'),
+        detail,
       })
     : await dialog.showMessageBox({
         type: 'question',
@@ -254,7 +264,7 @@ export async function buildExeWithConfirm(win: BrowserWindow | null): Promise<Bu
         cancelId: 0,
         title: '生成安装包',
         message: '确定生成 exe 安装包？',
-        detail: '将依次执行：检查工具链 → 打包后端 → 编译前端 → 生成安装包。',
+        detail,
       })
   if (confirm.response !== 1) {
     return { ok: false, cancelled: true, message: '已取消' }
@@ -328,6 +338,34 @@ export async function buildExeWithConfirm(win: BrowserWindow | null): Promise<Bu
       ok: false,
       message: backendErr,
       missing: isPythonMissing ? 'python' : 'backend',
+    }
+  }
+
+  // ---- Step 2.5: 用户自定义图标 → 重生成安装包图标（非致命，失败沿用现有图标） ----
+  const customIcon2 = getUserIconSourcePath()
+  if (customIcon2) {
+    win?.webContents.send('packaging:status', {
+      state: 'running',
+      message: '正在用自定义图标重生成安装包图标…',
+    })
+    const iconResult = await runCommand(
+      'pwsh',
+      [
+        '-NoProfile',
+        '-ExecutionPolicy',
+        'Bypass',
+        '-File',
+        path.join(desktopRoot(), 'scripts', 'make-icon.ps1'),
+        '-IconSource',
+        customIcon2,
+      ],
+      desktopRoot(),
+    )
+    if (iconResult.code !== 0) {
+      win?.webContents.send('packaging:status', {
+        state: 'running',
+        message: `自定义图标重生成失败，沿用现有图标：${tail(iconResult.log)}`,
+      })
     }
   }
 

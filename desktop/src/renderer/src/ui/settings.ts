@@ -1,6 +1,12 @@
 /* 设置视图：外观（壁纸）/ 接入集成 / 应用更新 / 诊断 */
 
-import type { IntegrationsStatus, ServerStatus, WallpaperPrefs, WallpaperState } from '../../../shared/types'
+import type {
+  IntegrationsStatus,
+  ServerStatus,
+  UserIconState,
+  WallpaperPrefs,
+  WallpaperState,
+} from '../../../shared/types'
 import { state } from '../state'
 import { h, showToast, svgIcon } from './dom'
 import { applyWallpaper } from './wallpaper'
@@ -126,6 +132,76 @@ function makeAppearanceSection(): HTMLElement {
       h('div', 'wallpaper-status', [
         '效果对齐编辑器壁纸：图要透得出来。面板越低越透；暗角只做轻压暗保证可读；模糊建议保持 0。',
       ]),
+    ]),
+    makeIconPanel(),
+  ])
+}
+
+/* ---------- 外观 / 应用图标 ---------- */
+
+function makeIconPanel(): HTMLElement {
+  const status = h('div', 'wallpaper-status', ['读取中…'])
+  const presetWrap = h('div', 'icon-preset-wrap')
+  const pickBtn = h('button', 'btn', ['选择本地图片…'])
+  const resetBtn = h('button', 'btn', ['恢复默认'])
+
+  const render = (s: UserIconState): void => {
+    presetWrap.replaceChildren(
+      ...s.presets.map((p) => {
+        const btn = h('button', 'btn icon-preset-btn', [p.name])
+        btn.dataset.presetId = p.id
+        btn.classList.toggle('primary', s.prefs.source === 'preset' && s.prefs.presetId === p.id)
+        btn.onclick = async () => {
+          try {
+            render(await window.aihub.setUserIconPreset(p.id))
+            showToast(`已切换图标：${p.name}`, 'var(--st-done)')
+          } catch (err) {
+            showToast(err instanceof Error ? err.message : '切换图标失败', 'var(--st-fail)')
+          }
+        }
+        return btn
+      }),
+    )
+    const defaultId = s.presets[0]?.id ?? 'default'
+    resetBtn.disabled = s.prefs.source === 'preset' && s.prefs.presetId === defaultId
+    status.textContent =
+      s.prefs.source === 'custom'
+        ? '已使用本地图片（悬浮球 / 窗口 / 托盘即时生效）'
+        : '已使用内置预设（悬浮球球面 / 窗口 / 托盘即时生效）'
+  }
+
+  pickBtn.onclick = async () => {
+    pickBtn.disabled = true
+    try {
+      const s = await window.aihub.pickUserIcon()
+      render(s)
+      showToast(s.prefs.source === 'custom' ? '图标已更新为本地图片' : '未选择图片', 'var(--st-done)')
+    } catch (err) {
+      showToast(err instanceof Error ? err.message : '选择图标失败', 'var(--st-fail)')
+    } finally {
+      pickBtn.disabled = false
+    }
+  }
+
+  resetBtn.onclick = async () => {
+    try {
+      const s = await window.aihub.resetUserIcon()
+      render(s)
+      showToast('已恢复默认图标', 'var(--st-done)')
+    } catch (err) {
+      showToast(err instanceof Error ? err.message : '恢复失败', 'var(--st-fail)')
+    }
+  }
+
+  void window.aihub.getUserIcon().then(render).catch(() => {
+    status.textContent = '无法读取图标配置'
+  })
+
+  return h('div', 'wallpaper-panel icon-panel', [
+    h('div', 'wallpaper-actions', [presetWrap]),
+    h('div', 'wallpaper-actions', [pickBtn, resetBtn, status]),
+    h('div', 'wallpaper-status', [
+      '图标应用到悬浮球球面、窗口/任务栏与托盘；重新打包安装包时也会更新安装包图标。',
     ]),
   ])
 }

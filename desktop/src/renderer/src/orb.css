@@ -44,12 +44,20 @@ html[data-mode='orb'] #orb-root {
   display: block;
 }
 
+/* 收起态圆裁切兜底：透明方窗内把根容器裁成正圆，杜绝方形壁纸/阴影外露 */
+html[data-mode='orb'] .orb-root:not(.expanded) {
+  border-radius: 50%;
+}
+
 html[data-mode='orb'] #app {
   display: none !important;
 }
 
-/* 壁纸在 orb 模式也保留，展开展示 */
-html[data-mode='orb'] #wallpaper {
+/* 壁纸在 orb 模式仅展开展示：收起态隐藏，避免 44×44 透明球露出一块方形壁纸底 */
+html[data-mode='orb'] body:not(:has(.orb-root.expanded)) #wallpaper {
+  display: none !important;
+}
+html[data-mode='orb'] body:has(.orb-root.expanded) #wallpaper {
   display: block !important;
 }
 
@@ -66,6 +74,8 @@ html[data-mode='orb'] #wallpaper {
   --tone: #df7654;
   --glow-alpha: 0;
   --orb-face: none;
+  /* 预设图放大裁角；本地自定义图由 ui/icon 覆写为 cover */
+  --orb-face-size: 125% auto;
 
   position: absolute;
   inset: 4px;
@@ -93,8 +103,8 @@ html[data-mode='orb'] #wallpaper {
       transparent 65%
     ),
     /* 女头主体（orb.ts 通过 --orb-face 注入 URL） */ var(--orb-face);
-  /* 女头层放大并居中，让脸在圆内更突出、同时裁掉四角白色背景 */
-  background-size: auto, auto, 125% auto;
+  /* 图标层放大并居中，让脸在圆内更突出、同时裁掉四角白色背景（自定义图 cover 铺满） */
+  background-size: auto, auto, var(--orb-face-size, 125% auto);
   background-position: 50% 22%, 50% 88%, center 50%;
   background-repeat: no-repeat;
 
@@ -127,6 +137,12 @@ html[data-mode='orb'] .orb-root.expanded .orb-ball {
   bottom: 6px;
   width: 36px;
   height: 36px;
+}
+
+/* 向下展开：球贴右上角，面板在球下方 */
+html[data-mode='orb'] .orb-root.expanded[data-expand='down'] .orb-ball {
+  top: 6px;
+  bottom: auto;
 }
 
 /* ───────── 悬停 / 展开态 ───────── */
@@ -224,14 +240,17 @@ html[data-mode='orb'] .orb-root.expanded .orb-ball {
   position: absolute;
   top: -4px;
   right: -4px;
-  min-width: 16px;
+  /* flex 双向居中让数字在红色小圈内完美居中，不再顶格 */
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 18px;
   height: 16px;
   padding: 0 4px;
   border-radius: 999px;
   font-size: 9.5px;
   font-weight: 700;
-  line-height: 16px;
-  text-align: center;
+  line-height: 1;
   color: #fff;
   background: #ef4444;
   border: 2px solid rgba(12, 14, 20, 0.9);
@@ -280,6 +299,16 @@ html[data-mode='orb'] .orb-root.expanded .orb-ball {
   pointer-events: auto;
   opacity: 1;
   transform: none;
+}
+
+/* 向下展开：面板从球下方往下长（入场从上方滑入） */
+html[data-mode='orb'] .orb-root.expanded[data-expand='down'] .orb-panel {
+  top: 50px;
+  bottom: auto;
+  transform-origin: top right;
+}
+html[data-mode='orb'] .orb-root:not(.expanded)[data-expand='down'] .orb-panel {
+  transform: translateY(-12px) scale(0.94);
 }
 
 /* ───────── 面板头部 ───────── */

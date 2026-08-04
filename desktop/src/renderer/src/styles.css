@@ -914,6 +914,14 @@ html[data-wallpaper='on'] .content-header h1 {
   color: #f87171;
 }
 
+/* 历史分页「加载更多」：通栏细按钮，弱化视觉权重 */
+.load-more-btn {
+  width: 100%;
+  margin-top: 12px;
+  border-style: dashed;
+  background: transparent;
+}
+
 /* 悬停时才展示操作按钮，保持卡片干净 */
 .card .card-actions {
   opacity: 0;
@@ -1532,6 +1540,20 @@ html[data-wallpaper='on'] .content-header h1 {
   text-align: right;
   font-variant-numeric: tabular-nums;
   color: var(--text-muted);
+}
+
+.icon-preset-wrap {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.icon-preset-btn {
+  font-size: 12px;
+}
+
+.icon-panel {
+  margin-top: 12px;
 }
 
 .int-grid {

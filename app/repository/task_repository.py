@@ -117,13 +117,43 @@ class TaskRepository:
         row = self._db.query_one(sql, (source, normalized))
         return Task.model_validate(row) if row else None
 
-    def list_by_statuses(self, statuses: tuple[str, ...]) -> list[Task]:
+    def list_by_status(
+        self, status: str, limit: int = 200, offset: int = 0
+    ) -> tuple[list[Task], bool]:
+        """按单个状态分页查询，返回 (行, 是否还有下一页)。
+
+        每个种类（状态）一条独立分页流：桌面端为 6 种状态各维护一套
+        offset/hasMore。用 `limit + 1` 探测是否有下一页，避免额外 COUNT；
+        `id DESC` 作稳定排序副键，同秒多条任务翻页时也不会错位/重复。
+        """
+        rows = self._db.query_all(
+            "SELECT * FROM task WHERE status = %s "
+            "ORDER BY created_at DESC, id DESC LIMIT %s OFFSET %s",
+            (status, limit + 1, offset),
+        )
+        has_more = len(rows) > limit
+        return [Task.model_validate(r) for r in rows[:limit]], has_more
+
+    def list_by_statuses(
+        self, statuses: tuple[str, ...], limit: int = 200, offset: int = 0
+    ) -> tuple[list[Task], bool]:
+        """按多个状态合并分页（兼容 view=queue/history 的旧调用方与冒烟脚本）。
+
+        仅用于合并视图；桌面端已改为按单状态分页（见 list_by_status）。
+        """
         placeholders = ",".join("%s" for _ in statuses)
         rows = self._db.query_all(
-            f"SELECT * FROM task WHERE status IN ({placeholders}) ORDER BY created_at DESC",
-            statuses,
+            f"SELECT * FROM task WHERE status IN ({placeholders}) "
+            "ORDER BY created_at DESC, id DESC LIMIT %s OFFSET %s",
+            (*statuses, limit + 1, offset),
         )
-        return [Task.model_validate(row) for row in rows]
+        has_more = len(rows) > limit
+        return [Task.model_validate(r) for r in rows[:limit]], has_more
+
+    def count_by_status(self) -> dict[str, int]:
+        """各状态任务总数（单条 GROUP BY 查询），供状态 chip/标题显示准确计数。"""
+        rows = self._db.query_all("SELECT status, COUNT(*) AS n FROM task GROUP BY status")
+        return {r["status"]: r["n"] for r in rows}
 
     def list_by_statuses_for_update(self, statuses: tuple[str, ...]) -> list[Task]:
         """事务内调用：对符合状态的行加 FOR UPDATE 行锁，消除 TOCTOU。"""

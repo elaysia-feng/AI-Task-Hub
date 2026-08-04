@@ -51,7 +51,14 @@ export type ServerMessage = TaskChangedMessage | TaskDeletedMessage | TasksClear
 
 export type BackendStatus = 'connecting' | 'online' | 'offline'
 
-export type TaskView = 'queue' | 'history'
+/** 各状态任务总数（summary 端点，服务端缺失状态补 0） */
+export type TaskStatusSummary = Record<TaskStatus, number>
+
+/** 任务列表分页结果：服务端返回 hasMore 供前端翻页，避免历史无限增长时一次载入全表 */
+export interface TaskListResult {
+  tasks: HubTask[]
+  hasMore: boolean
+}
 export type TaskLoadState = 'loading' | 'ready' | 'error'
 export type TaskSort = 'newest' | 'oldest'
 
@@ -119,10 +126,31 @@ export interface WallpaperState {
   prefs: WallpaperPrefs
 }
 
+/** 应用图标偏好：内置预设（粉发少女默认）或本地自定义图片 */
+export type UserIconPrefs =
+  | { source: 'preset'; presetId: string }
+  | { source: 'custom' }
+
+export interface UserIconPresetMeta {
+  id: string
+  name: string
+  /** 相对 resources/ 的路径（默认 anime-head.png，扩展放 presets/xxx.png） */
+  file: string
+}
+
+export interface UserIconState {
+  prefs: UserIconPrefs
+  /** 当前生效图标的数据 URL（预设或自定义图），异常时为 null */
+  dataUrl: string | null
+  presets: UserIconPresetMeta[]
+}
+
 /** preload 通过 contextBridge 暴露给渲染进程的 API（window.aihub） */
 export interface AihubApi {
-  getQueue(): Promise<HubTask[]>
-  getHistory(): Promise<HubTask[]>
+  /** 按单个状态（种类）分页拉取；每个状态一条独立分页流 */
+  getTaskPage(status: TaskStatus, limit?: number, offset?: number): Promise<TaskListResult>
+  /** 各状态任务总数，供状态 chip/标题显示准确计数 */
+  getTasksSummary(): Promise<TaskStatusSummary>
   openTask(id: number): Promise<void>
   ignoreTask(id: number): Promise<void>
   deleteTask(id: number): Promise<void>
@@ -145,14 +173,19 @@ export interface AihubApi {
   clearWallpaper(): Promise<WallpaperState>
   setWallpaperPrefs(prefs: Partial<WallpaperPrefs>): Promise<WallpaperState>
   showWallpaperDialog(): Promise<'pick' | 'clear' | 'cancel'>
+  getUserIcon(): Promise<UserIconState>
+  pickUserIcon(): Promise<UserIconState>
+  setUserIconPreset(presetId: string): Promise<UserIconState>
+  resetUserIcon(): Promise<UserIconState>
+  onIconChanged(cb: (state: UserIconState) => void): () => void
   minimizeWindow(): void
   closeWindow(): void
   /** 显示主面板 */
   showMainWindow(): void
   /** 收起为悬浮球（同一窗口） */
   collapseToOrb(): void
-  /** 小球模式：展开/收起悬停面板（改窗口尺寸） */
-  setOrbPanelExpanded(expanded: boolean): Promise<void>
+  /** 小球模式：展开/收起悬停面板（改窗口尺寸）；返回面板展开方向 */
+  setOrbPanelExpanded(expanded: boolean): Promise<'up' | 'down' | null>
   /** 悬浮球拖动 */
   startOrbDrag(screenX: number, screenY: number): void
   moveOrbDrag(screenX: number, screenY: number): void

@@ -12,9 +12,15 @@ import {
   setWallpaperPrefs,
   showWallpaperDialog,
 } from './wallpaper'
+import {
+  getUserIconState,
+  pickUserIcon,
+  resetUserIcon,
+  setUserIconPreset,
+} from './icon-picker'
 import type { BackendManager } from './backend'
 import type { UpdateManager } from './updater'
-import type { WallpaperPrefs } from '../shared/types'
+import type { TaskStatus, WallpaperPrefs } from '../shared/types'
 
 // Allowed path prefixes for shell:open-path (user-controlled directories only)
 const ALLOWED_OPEN_PREFIXES = [
@@ -38,7 +44,8 @@ function isAllowedOpenPath(input: string): boolean {
 export interface OrbIpc {
   enterOrb: () => void
   enterPanel: () => void
-  setPanelExpanded: (expanded: boolean) => void
+  /** 展开/收起悬停面板，返回展开方向（收起时返回 null） */
+  setPanelExpanded: (expanded: boolean) => 'up' | 'down' | null
   dragStart: (screenX: number, screenY: number) => void
   dragMove: (screenX: number, screenY: number) => void
   dragEnd: () => void
@@ -52,8 +59,10 @@ export function registerIpcHandlers(
   updater: UpdateManager,
   orb?: OrbIpc,
 ): void {
-  ipcMain.handle('tasks:queue', () => apiClient.listTasks('queue'))
-  ipcMain.handle('tasks:history', () => apiClient.listTasks('history'))
+  ipcMain.handle('tasks:page', (_event, status: string, limit?: number, offset?: number) =>
+    apiClient.listTasksByStatus(status as TaskStatus, limit, offset),
+  )
+  ipcMain.handle('tasks:summary', () => apiClient.getTasksSummary())
 
   ipcMain.handle('tasks:open', async (_event, id: number) => {
     try {
@@ -101,6 +110,13 @@ export function registerIpcHandlers(
   )
   ipcMain.handle('wallpaper:dialog', () => showWallpaperDialog(getWindow()))
 
+  ipcMain.handle('icon:get', () => getUserIconState())
+  ipcMain.handle('icon:pick', () => pickUserIcon(getWindow()))
+  ipcMain.handle('icon:set-preset', (_event, presetId: string) =>
+    setUserIconPreset(typeof presetId === 'string' ? presetId : ''),
+  )
+  ipcMain.handle('icon:reset', () => resetUserIcon())
+
   ipcMain.on('window:minimize', () => {
     // 最小化 = 收起为小球（同一窗口），不再缩到任务栏
     orb?.enterOrb()
@@ -116,9 +132,9 @@ export function registerIpcHandlers(
     orb?.enterOrb()
   })
 
-  ipcMain.handle('orb:set-panel', (_event, expanded: boolean) => {
-    orb?.setPanelExpanded(Boolean(expanded))
-  })
+  ipcMain.handle('orb:set-panel', (_event, expanded: boolean) =>
+    orb?.setPanelExpanded(Boolean(expanded)) ?? null,
+  )
   ipcMain.on('orb:drag-start', (_event, screenX: number, screenY: number) => {
     orb?.dragStart(sanitizeCoord(screenX), sanitizeCoord(screenY))
   })
