@@ -1,90 +1,64 @@
-# 生成应用图标：石墨圆角方块 + 四向汇聚 hub 图形
-# 输出：icon.png / tray.png / icon.ico（多尺寸，供 electron-builder 与 PyInstaller）
-# 用法：pwsh scripts/make-icon.ps1
-param(
-    [string]$OutDir = (Join-Path $PSScriptRoot '..\resources')
-)
+# =============================================================================
+# make-icon.ps1 —— 从单一源图生成应用全套图标
+#
+# 【单一源图模型】
+#   唯一源图：desktop/resources/anime-head.png（256×256 正方形，樱花粉二次元女头）
+#   更换图标 = 替换 anime-head.png，然后重跑本脚本即可再生成全套：
+#     - desktop/resources/icon.png   256×256
+#     - desktop/resources/tray.png    32×32 圆形（透明四角，供系统托盘）
+#     - desktop/resources/icon.ico    16/24/32/48/64/128/256 多尺寸（PNG 帧，32bppArgb）
+#     - packaging/app.ico             icon.ico 副本（供 PyInstaller 后端 exe）
+#   用法：pwsh desktop/scripts/make-icon.ps1
+#   本脚本不依赖当前工作目录：路径一律基于 $PSScriptRoot 解析，可任意 cwd 运行。
+# =============================================================================
 
 $ErrorActionPreference = 'Stop'
 Add-Type -AssemblyName System.Drawing
 
-function New-RoundedRectPath([float]$x, [float]$y, [float]$w, [float]$h, [float]$r) {
-    $path = New-Object System.Drawing.Drawing2D.GraphicsPath
-    $d = $r * 2
-    $path.AddArc($x, $y, $d, $d, 180, 90)
-    $path.AddArc($x + $w - $d, $y, $d, $d, 270, 90)
-    $path.AddArc($x + $w - $d, $y + $h - $d, $d, $d, 0, 90)
-    $path.AddArc($x, $y + $h - $d, $d, $d, 90, 90)
-    $path.CloseFigure()
-    return $path
+$root      = (Resolve-Path (Join-Path $PSScriptRoot '..\..')).Path
+$resources = Join-Path $root 'desktop\resources'
+$packaging = Join-Path $root 'packaging'
+$sourcePng = Join-Path $resources 'anime-head.png'
+
+if (-not (Test-Path -LiteralPath $sourcePng)) {
+    Write-Host "错误：缺少源图：$sourcePng" -ForegroundColor Red
+    Write-Host '请先重新生成 anime-head.png（256×256 樱花粉二次元女头）后再运行本脚本。' -ForegroundColor Red
+    exit 1
 }
 
-function New-HubBitmap([int]$size) {
-    # 32bppArgb，避免 PNG tRNS 导致 electron-builder 转 ico 失败/回退
+# 从源图缩放出目标尺寸位图（32bppArgb，避免 PNG tRNS 导致 electron-builder 转 ico 失败/回退）
+function New-HubBitmap([System.Drawing.Bitmap]$src, [int]$size) {
     $bmp = New-Object System.Drawing.Bitmap($size, $size, [System.Drawing.Imaging.PixelFormat]::Format32bppArgb)
     $g = [System.Drawing.Graphics]::FromImage($bmp)
+    $g.SmoothingMode = [System.Drawing.Drawing2D.SmoothingMode]::HighQuality
+    $g.InterpolationMode = [System.Drawing.Drawing2D.InterpolationMode]::HighQualityBicubic
+    $g.PixelOffsetMode = [System.Drawing.Drawing2D.PixelOffsetMode]::HighQuality
+    $g.Clear([System.Drawing.Color]::Transparent)
+    $g.DrawImage($src, 0, 0, $size, $size)
+    $g.Dispose()
+    return $bmp
+}
+
+# 圆形托盘图标：源图缩放后按内切圆做 alpha 掩码，四角透明
+function New-TrayBitmap([System.Drawing.Bitmap]$src, [int]$size) {
+    $bmp = New-HubBitmap $src $size
+
+    $mask = New-Object System.Drawing.Bitmap($size, $size, [System.Drawing.Imaging.PixelFormat]::Format32bppArgb)
+    $g = [System.Drawing.Graphics]::FromImage($mask)
     $g.SmoothingMode = [System.Drawing.Drawing2D.SmoothingMode]::AntiAlias
     $g.Clear([System.Drawing.Color]::Transparent)
-
-    $rect = New-Object System.Drawing.Rectangle(0, 0, $size, $size)
-    $brush = New-Object System.Drawing.Drawing2D.LinearGradientBrush(
-        $rect,
-        [System.Drawing.Color]::FromArgb(255, 49, 58, 61),
-        [System.Drawing.Color]::FromArgb(255, 23, 27, 29),
-        55
-    )
-    $inset = [Math]::Max(0, $size * 0.025)
-    $radius = [Math]::Max(1, $size * 0.24)
-    $roundPath = New-RoundedRectPath $inset $inset ($size - $inset * 2) ($size - $inset * 2) $radius
-    $g.FillPath($brush, $roundPath)
-
-    $borderPen = New-Object System.Drawing.Pen(
-        [System.Drawing.Color]::FromArgb(72, 255, 255, 255),
-        [Math]::Max(1, $size * 0.008)
-    )
-    $g.DrawPath($borderPen, $roundPath)
-
-    $ivory = [System.Drawing.Color]::FromArgb(255, 247, 243, 235)
-    $coral = [System.Drawing.Color]::FromArgb(255, 223, 118, 84)
-    $ink = [System.Drawing.Color]::FromArgb(255, 32, 38, 41)
-    $cx = $size / 2
-    $cy = $size / 2
-    $outer = @(
-        @(($size * 0.29), ($size * 0.29)),
-        @(($size * 0.71), ($size * 0.29)),
-        @(($size * 0.29), ($size * 0.71)),
-        @(($size * 0.71), ($size * 0.71))
-    )
-
-    $pen = New-Object System.Drawing.Pen($ivory, [Math]::Max(1, $size * 0.047))
-    $pen.StartCap = [System.Drawing.Drawing2D.LineCap]::Round
-    $pen.EndCap = [System.Drawing.Drawing2D.LineCap]::Round
-    foreach ($pt in $outer) {
-        $g.DrawLine($pen, $cx, $cy, $pt[0], $pt[1])
-    }
-
-    $nodeR = [Math]::Max(1, $size * 0.055)
-    $nodeBrush = New-Object System.Drawing.SolidBrush($ivory)
-    foreach ($pt in $outer) {
-        $g.FillEllipse($nodeBrush, $pt[0] - $nodeR, $pt[1] - $nodeR, $nodeR * 2, $nodeR * 2)
-    }
-
-    $centerR = [Math]::Max(1.5, $size * 0.115)
-    $centerBrush = New-Object System.Drawing.SolidBrush($coral)
-    $g.FillEllipse($centerBrush, $cx - $centerR, $cy - $centerR, $centerR * 2, $centerR * 2)
-
-    $coreR = [Math]::Max(0.7, $size * 0.038)
-    $coreBrush = New-Object System.Drawing.SolidBrush($ink)
-    $g.FillEllipse($coreBrush, $cx - $coreR, $cy - $coreR, $coreR * 2, $coreR * 2)
-
+    $g.FillEllipse([System.Drawing.Brushes]::White, 0, 0, $size, $size)
     $g.Dispose()
-    $brush.Dispose()
-    $borderPen.Dispose()
-    $pen.Dispose()
-    $nodeBrush.Dispose()
-    $centerBrush.Dispose()
-    $coreBrush.Dispose()
-    $roundPath.Dispose()
+
+    for ($y = 0; $y -lt $size; $y++) {
+        for ($x = 0; $x -lt $size; $x++) {
+            $c = $bmp.GetPixel($x, $y)
+            $m = $mask.GetPixel($x, $y)
+            $a = [int]($c.A * $m.A / 255)
+            $bmp.SetPixel($x, $y, [System.Drawing.Color]::FromArgb($a, $c.R, $c.G, $c.B))
+        }
+    }
+    $mask.Dispose()
     return $bmp
 }
 
@@ -92,11 +66,11 @@ function Save-Png([System.Drawing.Bitmap]$bmp, [string]$path) {
     $bmp.Save($path, [System.Drawing.Imaging.ImageFormat]::Png)
 }
 
-function Save-Ico([string]$icoPath, [int[]]$sizes) {
+function Save-Ico([System.Drawing.Bitmap]$src, [string]$icoPath, [int[]]$sizes) {
     # 手工写 ICO：多帧 PNG 嵌入（Vista+），避免 System.Drawing Icon 质量差
     $frames = @()
     foreach ($s in $sizes) {
-        $bmp = New-HubBitmap $s
+        $bmp = New-HubBitmap $src $s
         $ms = New-Object System.IO.MemoryStream
         $bmp.Save($ms, [System.Drawing.Imaging.ImageFormat]::Png)
         $frames += ,@{ Size = $s; Bytes = $ms.ToArray() }
@@ -107,19 +81,19 @@ function Save-Ico([string]$icoPath, [int[]]$sizes) {
     $fs = [System.IO.File]::Create($icoPath)
     $bw = New-Object System.IO.BinaryWriter($fs)
     # ICONDIR
-    $bw.Write([uint16]0)           # reserved
-    $bw.Write([uint16]1)           # type = icon
+    $bw.Write([uint16]0)            # reserved
+    $bw.Write([uint16]1)            # type = icon
     $bw.Write([uint16]$frames.Count)
 
     $offset = 6 + (16 * $frames.Count)
     foreach ($f in $frames) {
         $s = $f.Size
         $len = $f.Bytes.Length
-        $bw.Write([byte]($(if ($s -ge 256) { 0 } else { $s }))) # width
-        $bw.Write([byte]($(if ($s -ge 256) { 0 } else { $s }))) # height
-        $bw.Write([byte]0)   # color count
-        $bw.Write([byte]0)   # reserved
-        $bw.Write([uint16]1) # planes
+        $bw.Write([byte]($(if ($s -ge 256) { 0 } else { $s })))  # width
+        $bw.Write([byte]($(if ($s -ge 256) { 0 } else { $s })))  # height
+        $bw.Write([byte]0)    # color count
+        $bw.Write([byte]0)    # reserved
+        $bw.Write([uint16]1)  # planes
         $bw.Write([uint16]32) # bit count
         $bw.Write([uint32]$len)
         $bw.Write([uint32]$offset)
@@ -133,28 +107,32 @@ function Save-Ico([string]$icoPath, [int[]]$sizes) {
     $fs.Dispose()
 }
 
-New-Item -ItemType Directory -Force -Path $OutDir | Out-Null
-$iconPng = Join-Path $OutDir 'icon.png'
-$trayPng = Join-Path $OutDir 'tray.png'
-$iconIco = Join-Path $OutDir 'icon.ico'
+New-Item -ItemType Directory -Force -Path $resources | Out-Null
+New-Item -ItemType Directory -Force -Path $packaging | Out-Null
 
-$big = New-HubBitmap 256
+$src = New-Object System.Drawing.Bitmap($sourcePng)
+
+$iconPng = Join-Path $resources 'icon.png'
+$trayPng = Join-Path $resources 'tray.png'
+$iconIco = Join-Path $resources 'icon.ico'
+
+$big = New-HubBitmap $src 256
 Save-Png $big $iconPng
 $big.Dispose()
 
-$tray = New-HubBitmap 32
+$tray = New-TrayBitmap $src 32
 Save-Png $tray $trayPng
 $tray.Dispose()
 
-Save-Ico $iconIco @(16, 24, 32, 48, 64, 128, 256)
+Save-Ico $src $iconIco @(16, 24, 32, 48, 64, 128, 256)
+
+$src.Dispose()
 
 # 同步一份到 packaging，供 PyInstaller 后端 exe 使用
-$packagingDir = Join-Path $PSScriptRoot '..\..\packaging'
-New-Item -ItemType Directory -Force -Path $packagingDir | Out-Null
-Copy-Item $iconIco (Join-Path $packagingDir 'app.ico') -Force
+Copy-Item $iconIco (Join-Path $packaging 'app.ico') -Force
 
-Write-Output "icons written:"
+Write-Output 'icons written:'
 Write-Output "  $iconPng"
 Write-Output "  $trayPng"
 Write-Output "  $iconIco"
-Write-Output "  $(Join-Path $packagingDir 'app.ico')"
+Write-Output "  $(Join-Path $packaging 'app.ico')"

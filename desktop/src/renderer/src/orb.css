@@ -65,6 +65,7 @@ html[data-mode='orb'] #wallpaper {
 .orb-ball {
   --tone: #df7654;
   --glow-alpha: 0;
+  --orb-face: none;
 
   position: absolute;
   inset: 4px;
@@ -75,35 +76,33 @@ html[data-mode='orb'] #wallpaper {
   border-radius: 50%;
   pointer-events: auto;
   cursor: grab;
-  display: grid;
-  place-items: center;
   -webkit-app-region: no-drag;
   z-index: 2;
 
-  /* 多层渐变模拟玻璃球体高光 + 折射 */
-  background:
+  /* 二次元女头主体 + 顶层玻璃高光；背景会被 border-radius 裁成圆形，无需 overflow:hidden */
+  background-image:
     /* 顶部高光 */ radial-gradient(
       ellipse 75% 35% at 50% 22%,
-      rgba(255, 255, 255, 0.18) 0%,
+      rgba(255, 255, 255, 0.22) 0%,
       transparent 70%
     ),
     /* 底部反光 */ radial-gradient(
       ellipse 60% 30% at 50% 88%,
-      rgba(255, 255, 255, 0.06) 0%,
+      rgba(255, 255, 255, 0.08) 0%,
       transparent 65%
     ),
-    /* 球体主色 */ radial-gradient(
-        circle at 38% 32%,
-        color-mix(in srgb, var(--tone) 55%, #fff) 0%,
-        color-mix(in srgb, var(--tone) 75%, #1a1d24) 38%,
-        color-mix(in srgb, var(--tone) 95%, #0c0e14) 100%
-      );
+    /* 女头主体（orb.ts 通过 --orb-face 注入 URL） */ var(--orb-face);
+  /* 女头层放大并居中，让脸在圆内更突出、同时裁掉四角白色背景 */
+  background-size: auto, auto, 125% auto;
+  background-position: 50% 22%, 50% 88%, center 50%;
+  background-repeat: no-repeat;
 
   border: 1.5px solid color-mix(in srgb, var(--tone) 50%, rgba(255, 255, 255, 0.5));
 
   box-shadow:
-    /* 外发光 */ 0 0 18px rgba(223, 118, 84, calc(var(--glow-alpha) * 0.55)),
-    0 0 38px rgba(223, 118, 84, calc(var(--glow-alpha) * 0.3)),
+    /* 外发光：跟随状态色调（--tone）*/ 0 0 18px
+      color-mix(in srgb, var(--tone) calc(var(--glow-alpha) * 55%), transparent),
+    0 0 38px color-mix(in srgb, var(--tone) calc(var(--glow-alpha) * 30%), transparent),
     /* 投影 */ 0 8px 22px rgba(0, 0, 0, 0.45),
     /* 内高光 */ inset 0 1.5px 0 rgba(255, 255, 255, 0.28),
     /* 内缘 */ inset 0 0 0 1px rgba(255, 255, 255, 0.06);
@@ -216,23 +215,6 @@ html[data-mode='orb'] .orb-root.expanded .orb-ball {
   to {
     transform: rotate(360deg);
   }
-}
-
-/* ───────── 中心图标 ───────── */
-
-.orb-core {
-  width: 18px;
-  height: 18px;
-  display: grid;
-  place-items: center;
-  filter: drop-shadow(0 1px 2px rgba(0, 0, 0, 0.3));
-  pointer-events: none;
-}
-
-.orb-core svg {
-  width: 14px;
-  height: 14px;
-  color: rgba(255, 255, 255, 0.92);
 }
 
 /* ───────── 未读计数 ───────── */

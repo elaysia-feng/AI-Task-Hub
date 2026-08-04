@@ -2,8 +2,8 @@ import './orb.css'
 import type { HubTask, TaskStatus, WallpaperState } from '../../shared/types'
 import { SOURCE_LABELS, STATUS_LABELS, displayTitle } from '../../shared/labels'
 import { state, subscribe } from './state'
-import { BRAND_MARK_SVG } from './ui/dom'
 import { applyWallpaper } from './ui/wallpaper'
+import animeHeadUrl from './assets/anime-head.png'
 
 const STATUS_COLOR: Record<string, string> = {
   RUNNING: '#38bdf8',
@@ -60,7 +60,9 @@ export function mountOrb(): void {
   ball.className = 'orb-ball'
   ball.type = 'button'
   ball.title = '拖动移动 · 点击打开面板 · 悬停查看任务'
-  ball.innerHTML = `<span class="orb-ring"></span><span class="orb-core">${BRAND_MARK_SVG}</span><span class="orb-count hidden">0</span>`
+  // 二次元女头作为球体主体：通过 CSS 变量注入 URL，玻璃高光叠加层留在 orb.css 里
+  ball.style.setProperty('--orb-face', `url("${animeHeadUrl}")`)
+  ball.innerHTML = `<span class="orb-ring"></span><span class="orb-count hidden">0</span>`
 
   const panel = document.createElement('div')
   panel.className = 'orb-panel'
