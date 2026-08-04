@@ -20,7 +20,9 @@ describe('formatRelativeTime', () => {
   it('同一天内显示 N 小时前', () => {
     const threeHoursAgo = new Date(Date.now() - 3 * 3600 * 1000)
     const now = new Date()
-    if (threeHoursAgo.getDate() === now.getDate()) {
+    // 与 formatRelativeTime 的 isSameDay 一致：按 UTC 日界判断。
+    // 用本地 getDate() 会在 UTC+8 本地凌晨（UTC 仍属昨天）时错判，导致测试依赖墙钟时刻而闪红。
+    if (threeHoursAgo.getUTCDate() === now.getUTCDate()) {
       expect(formatRelativeTime(threeHoursAgo.toISOString())).toBe('3 小时前')
     }
   })
