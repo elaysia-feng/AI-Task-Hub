@@ -101,7 +101,10 @@ export function registerIpcHandlers(
   )
   ipcMain.handle('wallpaper:dialog', () => showWallpaperDialog(getWindow()))
 
-  ipcMain.on('window:minimize', () => getWindow()?.minimize())
+  ipcMain.on('window:minimize', () => {
+    // 最小化 = 收起为小球（同一窗口），不再缩到任务栏
+    orb?.enterOrb()
+  })
   ipcMain.on('window:close', () => {
     // 关闭 = 收起为小球（同一窗口）
     orb?.enterOrb()

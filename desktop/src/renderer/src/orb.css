@@ -73,6 +73,7 @@ html[data-mode='orb'] #wallpaper {
   height: auto;
   min-width: 28px;
   min-height: 28px;
+  aspect-ratio: 1 / 1; /* 无论窗口/布局尺寸如何，始终是正圆而非椭圆 */
   border-radius: 50%;
   pointer-events: auto;
   cursor: grab;
