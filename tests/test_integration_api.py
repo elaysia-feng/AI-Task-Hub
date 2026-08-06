@@ -213,8 +213,9 @@ def _freeze(monkeypatch, tmp_path):
 def test_frozen_install_materializes_adapters(client, claude_settings, codex_paths, monkeypatch, tmp_path):
     """打包态：install 把适配器物化到用户目录，钩子/notify 指向物化路径；运行时产物不复制。"""
     user_base = _freeze(monkeypatch, tmp_path)
-    # 打包态模拟解释器：相对名 "python" 在测试环境 PATH 上不存在，用真实 venv 绝对路径
-    py = str(integration_api._REPO_ROOT / ".venv" / "Scripts" / "python.exe")
+    # 打包态模拟解释器：相对名 "python" 在测试环境 PATH 上不存在，
+    # 用当前 pytest 解释器绝对路径（sys.executable 任何平台都存在）
+    py = sys.executable
     monkeypatch.setenv("AIHUB_PYTHON", py)
 
     res = client.post("/api/integrations/claude-code/install").json()
@@ -251,10 +252,12 @@ def test_frozen_install_without_python_returns_error(client, codex_paths, monkey
 
 
 def test_adapter_python_dev_uses_venv(monkeypatch):
-    """开发态：_adapter_python 返回仓库 .venv 的 python.exe。"""
+    """开发态：_adapter_python 返回仓库 .venv 的解释器路径（跨平台）。"""
     monkeypatch.delattr(sys, "frozen", raising=False)
-    got = integration_api._adapter_python()
-    assert got == str(integration_api._REPO_ROOT / ".venv" / "Scripts" / "python.exe")
+    scripts = "Scripts" if sys.platform == "win32" else "bin"
+    exe = "python.exe" if sys.platform == "win32" else "python"
+    expected = str(integration_api._REPO_ROOT / ".venv" / scripts / exe)
+    assert integration_api._adapter_python() == expected
 
 
 def test_adapter_python_frozen_rejects_nonexistent_absolute(monkeypatch, tmp_path):
@@ -280,7 +283,7 @@ def test_frozen_install_missing_adapter_returns_error(client, claude_settings, m
     monkeypatch.setattr(integration_api, "user_data_dir", lambda: user_base)
     monkeypatch.setattr(sys, "frozen", True, raising=False)
     monkeypatch.setattr(sys, "_MEIPASS", str(bundled), raising=False)
-    monkeypatch.setenv("AIHUB_PYTHON", str(integration_api._REPO_ROOT / ".venv" / "Scripts" / "python.exe"))
+    monkeypatch.setenv("AIHUB_PYTHON", sys.executable)
 
     res = client.post("/api/integrations/claude-code/install").json()
     assert res["success"] is False

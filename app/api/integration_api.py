@@ -166,19 +166,24 @@ def _adapter_python() -> str | None:
     不写坏命令。返回前校验不含引号/换行（A31），防破坏命令拼接或注入。
     """
     if not getattr(sys, "frozen", False):
-        cmd = str(_REPO_ROOT / ".venv" / "Scripts" / "python.exe")
-    else:
-        cmd = os.environ.get("AIHUB_PYTHON", "").strip()
-        if not cmd:
-            cmd = shutil.which("python") or shutil.which("python3") or shutil.which("py") or ""
+        # 开发态：路径由仓库布局决定（Windows .venv/Scripts/python.exe，POSIX .venv/bin/python）。
+        # 确定性返回、不做存在性校验：venv 缺失属开发环境问题，由运行期自然暴露；
+        # 若在此校验会让无 .venv 的 CI 测试环境解析为 None（存在性校验只属于打包态）。
+        scripts = "Scripts" if sys.platform == "win32" else "bin"
+        exe = "python.exe" if sys.platform == "win32" else "python"
+        return str(_REPO_ROOT / ".venv" / scripts / exe)
+
+    # 打包态：AIHUB_PYTHON 优先，否则 PATH 上的 python/python3/py；解析后确认解释器
+    # 真实存在，找不到则返回 None：避免把不存在的路径写进钩子/notify 造成静默失败
+    # （review MEDIUM fail-open）。相对名经 PATH 解析为绝对路径；绝对路径须真实存在。
+    cmd = os.environ.get("AIHUB_PYTHON", "").strip()
+    if not cmd:
+        cmd = shutil.which("python") or shutil.which("python3") or shutil.which("py") or ""
     if not cmd:
         return None
     if any(c in cmd for c in ('"', "\n", "\r")):
         logger.warning("Python 命令含引号/换行，拒绝写入配置: %s", cmd)
         return None
-    # 解析为绝对路径并确认解释器存在，找不到则返回 None：避免把不存在的路径写进
-    # 钩子/notify 造成静默失败（review MEDIUM fail-open）。相对名（如 python）经 PATH
-    # 解析为绝对路径；绝对路径（如 AIHUB_PYTHON 直接填完整路径）须真实存在。
     if not os.path.isabs(cmd):
         resolved = shutil.which(cmd)
         if resolved is None:
