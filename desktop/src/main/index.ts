@@ -144,7 +144,15 @@ function createMainWindow(): BrowserWindow {
     return { action: 'deny' }
   })
   win.webContents.on('will-navigate', (event, url) => {
-    if (!url.startsWith('app://') && !url.startsWith('file://') && !url.startsWith('http://localhost') && !url.startsWith('https://')) {
+    // 精确前缀：仅放行本地开发服务器（localhost:/127.0.0.1:）。startsWith('http://localhost')
+    // 会误匹配 http://localhost.evil.com 等伪造域名（review MEDIUM）
+    if (
+      !url.startsWith('app://') &&
+      !url.startsWith('file://') &&
+      !url.startsWith('http://localhost:') &&
+      !url.startsWith('http://127.0.0.1:') &&
+      !url.startsWith('https://')
+    ) {
       event.preventDefault()
     }
   })
@@ -193,7 +201,7 @@ app.whenReady().then(() => {
 
   backend.onStatusChange((status) => {
     mainWindow?.webContents.send('backend:status', status)
-    if (status === 'online') socket.connect()
+    if (status === 'online') socket.connect(true) // fresh：后端恢复上线，重置重连退避计数
     else socket.close()
   })
   backend.start()

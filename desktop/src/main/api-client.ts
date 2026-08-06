@@ -58,8 +58,10 @@ export const apiClient = {
   async clearTasks(scope: TaskClearScope = 'all'): Promise<number> {
     // 后端自 303f6b6 起要求 confirm=true 防误删；漏带会 400（一键清理「用不了」的根因）
     // scope=queue/history 按 tab 独立清理（后端 0839… 起支持），默认 all 全清
+    // URLSearchParams 负责编码，避免 scope 直拼进 URL 造成参数注入（review MEDIUM）
+    const params = new URLSearchParams({ confirm: 'true', scope })
     const data = await request<{ success: boolean; deleted: number }>(
-      `/api/tasks?confirm=true&scope=${scope}`,
+      `/api/tasks?${params}`,
       { method: 'DELETE' },
     )
     return data.deleted

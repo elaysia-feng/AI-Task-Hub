@@ -110,7 +110,8 @@ export function registerIpcHandlers(
   ipcMain.handle('integrations:install-codex', () => apiClient.installCodex())
   ipcMain.handle('tasks:events', (_event, taskId: number) => {
     const id = Number(taskId)
-    if (!Number.isInteger(id) || id <= 0) return null
+    // 返回 [] 而非 null：渲染层对 events.length 无空指针防护，且类型声明为数组（review LOW）
+    if (!Number.isInteger(id) || id <= 0) return []
     return apiClient.getTaskEvents(id)
   })
   ipcMain.handle('shell:open-path', (_event, target: string) => {

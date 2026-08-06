@@ -103,30 +103,43 @@ def _chatgpt_extension_dir() -> Path:
     )
 
 
-def _claude_adapter() -> Path:
+def _claude_adapter() -> Path | None:
     """Claude Code 适配器脚本路径（claude_adapter.py 与其 session_titles.json 须同目录）。
 
     打包态物化到用户目录，供 ~/.claude/settings.json 的钩子命令引用。
+    脚本文件不存在时返回 None（物化源缺失/被打包遗漏），调用方在写入配置前报错，
+    避免把不存在的命令写进 settings.json 造成静默失败（review LOW fail-open）。
     """
     if not getattr(sys, "frozen", False):
-        return _REPO_ROOT / "adapters" / "claude-code" / "claude_adapter.py"
-    return _materialize_bundled(
-        "adapters/claude-code",
-        user_data_dir() / "adapters" / "claude-code",
-        frozenset({"__pycache__"}),
-    ) / "claude_adapter.py"
+        candidate = _REPO_ROOT / "adapters" / "claude-code" / "claude_adapter.py"
+    else:
+        candidate = _materialize_bundled(
+            "adapters/claude-code",
+            user_data_dir() / "adapters" / "claude-code",
+            frozenset({"__pycache__"}),
+        ) / "claude_adapter.py"
+    if not candidate.is_file():
+        logger.warning("[integrations] Claude Code 适配器脚本缺失: %s", candidate)
+        return None
+    return candidate
 
 
-def _codex_chain() -> Path:
+def _codex_chain() -> Path | None:
     """Codex 链式 notify 适配器路径。打包态物化到用户目录（forward_target.json 由
-    install 落盘到同一目录，notify_chain 从自身目录读取，目录必须可写）。"""
+    install 落盘到同一目录，notify_chain 从自身目录读取，目录必须可写）。
+    脚本不存在时返回 None，install 写入配置前报错（review LOW fail-open）。"""
     if not getattr(sys, "frozen", False):
-        return _REPO_ROOT / "adapters" / "codex" / "notify_chain.py"
-    return _materialize_bundled(
-        "adapters/codex",
-        user_data_dir() / "adapters" / "codex",
-        frozenset({"__pycache__", "forward_target.json", "notify_debug.log"}),
-    ) / "notify_chain.py"
+        candidate = _REPO_ROOT / "adapters" / "codex" / "notify_chain.py"
+    else:
+        candidate = _materialize_bundled(
+            "adapters/codex",
+            user_data_dir() / "adapters" / "codex",
+            frozenset({"__pycache__", "forward_target.json", "notify_debug.log"}),
+        ) / "notify_chain.py"
+    if not candidate.is_file():
+        logger.warning("[integrations] Codex 适配器脚本缺失: %s", candidate)
+        return None
+    return candidate
 
 
 def _codex_forward_target() -> Path:
@@ -163,8 +176,18 @@ def _adapter_python() -> str | None:
     if any(c in cmd for c in ('"', "\n", "\r")):
         logger.warning("Python 命令含引号/换行，拒绝写入配置: %s", cmd)
         return None
-    if os.path.isabs(cmd) and not os.path.isfile(cmd):
-        logger.warning("Python 解释器不存在（%s），写入的钩子/notify 命令将不可用", cmd)
+    # 解析为绝对路径并确认解释器存在，找不到则返回 None：避免把不存在的路径写进
+    # 钩子/notify 造成静默失败（review MEDIUM fail-open）。相对名（如 python）经 PATH
+    # 解析为绝对路径；绝对路径（如 AIHUB_PYTHON 直接填完整路径）须真实存在。
+    if not os.path.isabs(cmd):
+        resolved = shutil.which(cmd)
+        if resolved is None:
+            logger.warning("Python 解释器未找到: %s", cmd)
+            return None
+        cmd = resolved
+    elif not os.path.isfile(cmd):
+        logger.warning("Python 解释器不存在（%s），拒绝写入配置", cmd)
+        return None
     return cmd
 
 
@@ -241,7 +264,10 @@ def install_claude_code() -> dict[str, Any]:
             "changed": False,
             "error": "未检测到本机 Python，无法接入 Claude Code（打包版需安装 Python，或设置 AIHUB_PYTHON 后重启）",
         }
-    command = f'"{python}" "{_claude_adapter()}"'
+    adapter = _claude_adapter()
+    if adapter is None:
+        return {"success": False, "changed": False, "error": "未找到 Claude Code 适配器脚本（应用资源缺失），请重新安装应用"}
+    command = f'"{python}" "{adapter}"'
 
     data: dict[str, Any] = {}
     if CLAUDE_SETTINGS.exists():
@@ -294,6 +320,8 @@ def install_codex() -> dict[str, Any]:
             "error": "未检测到本机 Python，无法接入 Codex（打包版需安装 Python，或设置 AIHUB_PYTHON 后重启）",
         }
     chain = _codex_chain()
+    if chain is None:
+        return {"success": False, "changed": False, "error": "未找到 Codex 适配器脚本（应用资源缺失），请重新安装应用"}
     forward_target = _codex_forward_target()
 
     doc: Any = tomlkit.document()

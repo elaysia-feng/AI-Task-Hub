@@ -22,8 +22,11 @@ export class TaskSocket {
     this.listeners.add(listener)
   }
 
-  connect(): void {
+  connect(fresh = false): void {
     this.closedByUser = false
+    // 后端恢复上线是全新生命周期：重置退避计数。仅 fresh 时重置——若 scheduleReconnect
+    // 的内部重试也清零，MAX_RECONNECT_ATTEMPTS 上限将永不触发（review HIGH）
+    if (fresh) this.reconnectAttempts = 0
     if (this.ws && (this.ws.readyState === WebSocket.CONNECTING || this.ws.readyState === WebSocket.OPEN)) {
       return
     }

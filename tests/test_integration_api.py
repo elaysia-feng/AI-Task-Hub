@@ -213,7 +213,9 @@ def _freeze(monkeypatch, tmp_path):
 def test_frozen_install_materializes_adapters(client, claude_settings, codex_paths, monkeypatch, tmp_path):
     """打包态：install 把适配器物化到用户目录，钩子/notify 指向物化路径；运行时产物不复制。"""
     user_base = _freeze(monkeypatch, tmp_path)
-    monkeypatch.setenv("AIHUB_PYTHON", "python")  # 模拟打包态找到解释器
+    # 打包态模拟解释器：相对名 "python" 在测试环境 PATH 上不存在，用真实 venv 绝对路径
+    py = str(integration_api._REPO_ROOT / ".venv" / "Scripts" / "python.exe")
+    monkeypatch.setenv("AIHUB_PYTHON", py)
 
     res = client.post("/api/integrations/claude-code/install").json()
     assert res["success"] is True and res["changed"] is True
@@ -223,7 +225,7 @@ def test_frozen_install_materializes_adapters(client, claude_settings, codex_pat
     data = json.loads(claude_settings.read_text(encoding="utf-8"))
     cmd = data["hooks"]["Stop"][0]["hooks"][0]["command"]
     assert str(cc_dir / "claude_adapter.py") in cmd
-    assert cmd.startswith('"python"')
+    assert cmd.startswith(f'"{py}"')
 
     config, forward = codex_paths
     res = client.post("/api/integrations/codex/install").json()
@@ -253,3 +255,34 @@ def test_adapter_python_dev_uses_venv(monkeypatch):
     monkeypatch.delattr(sys, "frozen", raising=False)
     got = integration_api._adapter_python()
     assert got == str(integration_api._REPO_ROOT / ".venv" / "Scripts" / "python.exe")
+
+
+def test_adapter_python_frozen_rejects_nonexistent_absolute(monkeypatch, tmp_path):
+    """打包态 AIHUB_PYTHON 指向不存在的绝对路径 → None（不把坏命令写进配置）。"""
+    monkeypatch.setattr(sys, "frozen", True, raising=False)
+    monkeypatch.setenv("AIHUB_PYTHON", str(tmp_path / "no-such-python.exe"))
+    assert integration_api._adapter_python() is None
+
+
+def test_adapter_python_frozen_resolves_relative_via_path(monkeypatch, tmp_path):
+    """打包态 AIHUB_PYTHON 为相对名：PATH 上找不到 → None。"""
+    monkeypatch.setattr(sys, "frozen", True, raising=False)
+    monkeypatch.setenv("AIHUB_PYTHON", "no-such-interpreter-on-path")
+    monkeypatch.setattr(integration_api.shutil, "which", lambda name: None)
+    assert integration_api._adapter_python() is None
+
+
+def test_frozen_install_missing_adapter_returns_error(client, claude_settings, monkeypatch, tmp_path):
+    """打包态捆绑缺少适配器脚本：install 返回明确错误而非写坏配置（fail-open 修复）。"""
+    bundled = tmp_path / "bundled"
+    user_base = tmp_path / "userdata"
+    (bundled / "adapters" / "claude-code").mkdir(parents=True)  # 目录在但缺 claude_adapter.py
+    monkeypatch.setattr(integration_api, "user_data_dir", lambda: user_base)
+    monkeypatch.setattr(sys, "frozen", True, raising=False)
+    monkeypatch.setattr(sys, "_MEIPASS", str(bundled), raising=False)
+    monkeypatch.setenv("AIHUB_PYTHON", str(integration_api._REPO_ROOT / ".venv" / "Scripts" / "python.exe"))
+
+    res = client.post("/api/integrations/claude-code/install").json()
+    assert res["success"] is False
+    assert "适配器" in res["error"]
+    assert not claude_settings.exists()  # 未写入 settings.json

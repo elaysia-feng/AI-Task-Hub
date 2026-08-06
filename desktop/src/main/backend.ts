@@ -119,6 +119,14 @@ export class BackendManager {
       child.on('error', (err) => {
         console.warn('[backend] 启动失败:', err.message)
         if (this.child === child) this.child = null
+        // spawn 异步失败（exe 存在但无法启动、权限不足等）可能不触发 exit，必须在此关闭
+        // 日志句柄，否则 backend-console.log 句柄泄漏、文件被锁（review HIGH）
+        try {
+          fs.closeSync(outFd)
+          fs.closeSync(errFd)
+        } catch {
+          /* 句柄可能已被进程退出清理 */
+        }
         // 通知 renderer，避免用户一直停留在 "connecting"（LOW：spawn 错误仅 console.warn）
         this.setStatus('offline')
       })
