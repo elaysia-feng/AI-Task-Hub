@@ -15,6 +15,7 @@ import os
 import re
 import subprocess
 import sys
+import time
 import urllib.request
 from datetime import datetime
 from logging.handlers import RotatingFileHandler
@@ -164,6 +165,11 @@ def main() -> None:
         event = codex_notify_to_event(payload, cwd=os.getcwd())
         if event:
             result = post_event(event)
+            if result != "ok":
+                # Hub 可能尚在启动（桌面端拉起后端的启动竞态）或瞬时抖动：短延时重试一次，
+                # 仍失败才跳过转发。总开销 ≤ ~2.5s，符合「不阻塞 Codex」的边界（review HIGH）
+                time.sleep(0.5)
+                result = post_event(event)
             debug_log({"stage": "posted", "result": result, "payload_type": payload.get("type")})
             # skip forward if post_event failed to avoid split-brain
             if result == "ok":

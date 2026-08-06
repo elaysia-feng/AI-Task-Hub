@@ -5,6 +5,7 @@
 - ChatGPT：接收 Chrome 扩展心跳（5min），判断扩展在线状态
 """
 
+import functools
 import json
 import logging
 import time
@@ -21,6 +22,21 @@ from shared.constants import APP_VERSION
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/integrations", tags=["integrations"])
+
+# 一键接入端点做读-改-写（settings.json / config.toml）。FastAPI 同步端点跑在线程池，
+# 不加锁时两个并发请求可交错覆盖彼此的修改（lost update）。单进程部署下进程内锁足够。
+_INSTALL_LOCK = Lock()
+
+
+def _serialized(fn):
+    """给 FastAPI 同步端点加进程内锁，串行化读-改-写区间。"""
+
+    @functools.wraps(fn)
+    def wrapper(*args, **kwargs):
+        with _INSTALL_LOCK:
+            return fn(*args, **kwargs)
+
+    return wrapper
 
 _REPO_ROOT = Path(__file__).resolve().parent.parent.parent
 
@@ -127,6 +143,7 @@ def _claude_installed() -> bool:
 
 
 @router.post("/claude-code/install")
+@_serialized
 def install_claude_code() -> dict[str, Any]:
     """向 settings.json 的 hooks 追加三类钩子事件，其余配置原样保留。"""
     data: dict[str, Any] = {}
@@ -169,6 +186,7 @@ def _codex_installed() -> bool:
 
 
 @router.post("/codex/install")
+@_serialized
 def install_codex() -> dict[str, Any]:
     """config.toml 的 notify 改写为链式适配器；原 notify 命令存入 forward_target.json 继续转发。"""
     doc: Any = tomlkit.document()

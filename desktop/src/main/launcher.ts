@@ -46,11 +46,22 @@ function validatePath(inputPath: string | null | undefined): string | null {
 
 /** Restore lifecycle tracking for a spawned child */
 function trackChild(child: ReturnType<typeof spawn>, delayMs = 5_000): void {
-  childProcesses.set(child.pid!, setTimeout(() => {
+  // child.pid 在 'spawn' 事件前是 undefined：此刻登记会让键互相覆盖，先启动的子进程
+  // 失去自动回收定时器。推迟到 spawn 完成（pid 已确定）再登记（review HIGH: pid! 断言）
+  const pid = child.pid
+  if (pid === undefined) {
+    child.once('spawn', () => trackChild(child, delayMs))
+    return
+  }
+  const timer = setTimeout(() => {
     child.kill()
-    childProcesses.delete(child.pid!)
-  }, delayMs))
-  child.on('exit', () => childProcesses.delete(child.pid!))
+    childProcesses.delete(pid)
+  }, delayMs)
+  childProcesses.set(pid, timer)
+  child.once('exit', () => {
+    clearTimeout(timer)
+    childProcesses.delete(pid)
+  })
 }
 
 /** Kill all tracked children on shutdown */

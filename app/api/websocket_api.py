@@ -18,15 +18,19 @@ class WebSocketManager:
 
     def __init__(self):
         self._connections: set[WebSocket] = set()
+        # 串行化 check → await accept → add：accept 是挂起点，无锁时两个并发连接
+        # 可同时通过数量检查，导致连接数短暂超过上限（review MEDIUM TOCTOU）
+        self._lock = asyncio.Lock()
 
     async def connect(self, websocket: WebSocket) -> None:
-        if len(self._connections) >= _MAX_CONNECTIONS:
-            await websocket.close(code=1008, reason="connection limit reached")
-            logger.warning("WS 连接数达到上限 %d，拒绝接入", _MAX_CONNECTIONS)
-            return
-        await websocket.accept()
-        self._connections.add(websocket)
-        logger.info("WebSocket 客户端接入，当前连接数 %d", len(self._connections))
+        async with self._lock:
+            if len(self._connections) >= _MAX_CONNECTIONS:
+                await websocket.close(code=1008, reason="connection limit reached")
+                logger.warning("WS 连接数达到上限 %d，拒绝接入", _MAX_CONNECTIONS)
+                return
+            await websocket.accept()
+            self._connections.add(websocket)
+            logger.info("WebSocket 客户端接入，当前连接数 %d", len(self._connections))
 
     def disconnect(self, websocket: WebSocket) -> None:
         self._connections.discard(websocket)

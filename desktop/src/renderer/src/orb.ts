@@ -178,14 +178,21 @@ export function mountOrb(): void {
       btn.type = 'button'
       btn.className = 'orb-item'
       btn.style.setProperty('--c', color)
-      btn.innerHTML = `
-        <div class="orb-item-top">
-          <span class="orb-item-src">${SOURCE_LABELS[task.source] ?? task.source}</span>
-          <span class="orb-item-status">${STATUS_LABELS[task.status] ?? task.status}</span>
-        </div>
-        <div class="orb-item-title"></div>
-      `
-      ;(btn.querySelector('.orb-item-title') as HTMLElement).textContent = displayTitle(task)
+      // DOM 构造而非 innerHTML：label 映射缺项时的原始值（未知 source/status）走 textContent，
+      // 不会作为 HTML 注入（review MEDIUM）
+      const top = document.createElement('div')
+      top.className = 'orb-item-top'
+      const src = document.createElement('span')
+      src.className = 'orb-item-src'
+      src.textContent = SOURCE_LABELS[task.source] ?? task.source
+      const st = document.createElement('span')
+      st.className = 'orb-item-status'
+      st.textContent = STATUS_LABELS[task.status] ?? task.status
+      top.append(src, st)
+      const title = document.createElement('div')
+      title.className = 'orb-item-title'
+      title.textContent = displayTitle(task)
+      btn.append(top, title)
       btn.onclick = async (e) => {
         e.stopPropagation()
         await window.aihub.openTask(task.id)

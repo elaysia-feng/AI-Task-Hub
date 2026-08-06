@@ -4,6 +4,8 @@ import type { ServerMessage } from '../shared/types'
 const INITIAL_RECONNECT_DELAY_MS = 1000
 const MAX_RECONNECT_DELAY_MS = 30000
 const MAX_RECONNECT_ATTEMPTS = 20
+/** 连接保持超过该时长才视为「稳定」，断开时才重置退避计数 */
+const STABLE_CONNECTION_MS = 10_000
 
 type MessageListener = (msg: ServerMessage) => void
 
@@ -14,6 +16,7 @@ export class TaskSocket {
   private closedByUser = false
   private reconnectAttempts = 0
   private reconnectTimer: NodeJS.Timeout | null = null
+  private connectedAt: number | null = null
 
   onMessage(listener: MessageListener): void {
     this.listeners.add(listener)
@@ -45,9 +48,15 @@ export class TaskSocket {
       }
     }
     this.ws.onopen = () => {
-      this.reconnectAttempts = 0
+      this.connectedAt = Date.now()
     }
     this.ws.onclose = () => {
+      // 只有「稳定连接后断开」才重置退避计数；刚连上就断（后端抖动）不重置，
+      // 否则退避永远停留在初始值且永不触发 MAX_RECONNECT_ATTEMPTS 放弃（review MEDIUM）
+      if (this.connectedAt !== null) {
+        if (Date.now() - this.connectedAt >= STABLE_CONNECTION_MS) this.reconnectAttempts = 0
+        this.connectedAt = null
+      }
       this.ws = null
       if (!this.closedByUser) this.scheduleReconnect()
     }

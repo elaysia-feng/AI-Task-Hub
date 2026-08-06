@@ -103,6 +103,7 @@ class Database:
     def __init__(self, config: Optional[MySQLConfig] = None):
         self.config = config or MySQLConfig.from_env()
         self._lock = threading.RLock()
+        self._tx_active = False  # 事务内重连时恢复 autocommit=False 语义（见 _cursor/transaction）
         self._ensure_database()
         self._conn = self._connect(with_database=True)
         self._init_schema()
@@ -194,6 +195,12 @@ class Database:
         except pymysql.MySQLError:
             old = self._conn
             self._conn = self._connect(with_database=True)
+            # 重建的连接默认 autocommit=True：若重连发生在 transaction() 块内，必须恢复
+            # 事务语义（autocommit=False + 开启新事务），否则块内后续语句各自立即提交，
+            # 破坏「任务快照 + 事件流水」的原子性（review CRITICAL）
+            if self._tx_active:
+                self._conn.autocommit(False)
+                self._conn.begin()
             try:
                 old.close()  # 释放失效连接，避免每次重建泄漏 TCP 套接字/服务端会话
             except Exception:
@@ -241,17 +248,22 @@ class Database:
         语句自动提交（autocommit=True 的默认行为）。
         """
         with self._lock:
-            self._conn.autocommit(False)
-            self._conn.begin()
+            self._tx_active = True
             try:
-                yield
-                self._conn.commit()
-            except Exception:
-                # 失败路径在这里统一 rollback；finally 不再重复 rollback（原实现双重回滚，M7）
-                self._conn.rollback()
-                raise
+                self._conn.autocommit(False)
+                self._conn.begin()
+                try:
+                    yield
+                    self._conn.commit()
+                except Exception:
+                    # 失败路径在这里统一 rollback；finally 不再重复 rollback（原实现双重回滚，M7）
+                    self._conn.rollback()
+                    raise
+                finally:
+                    # yield 期间可能已重连（_cursor 换新连接）：autocommit(True) 作用于当前连接
+                    self._conn.autocommit(True)
             finally:
-                self._conn.autocommit(True)
+                self._tx_active = False
 
     def close(self) -> None:
         with self._lock:

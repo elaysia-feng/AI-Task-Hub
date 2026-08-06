@@ -48,6 +48,13 @@ class TaskRepository:
         当前 schema 下 UPDATE 不触碰 unique 列，IntegrityError 理论上不可触发；
         一旦触发说明存在 schema/数据问题，直接抛出而非静默返回 False（M9）。
         若调用方吞掉 False 继续提交事件，会造成任务状态与事件流水不一致（M1）。
+
+        注意：这里固定返回 True，而非 `cursor.rowcount > 0`。两个后端在「UPDATE 未改变
+        任何值」时（幂等重复事件的再投递，字段与库内一致）rowcount 都是 0——MySQL 默认
+        无 CLIENT_FOUND_ROWS 统计的是「被修改行」而非「匹配行」，SQLite 同理。若按
+        rowcount 判失败，幂等去重会被误判为「任务被并发删除」而抛错回滚（回归）。真正的
+        异常路径（任务行被并发删除）已被调用方的 FOR UPDATE 锁定读排除：handle_event /
+        _set_terminal_status 均在事务内先对目标行加锁，不存在并发删除窗口。
         """
         self._db.execute(
             """

@@ -184,7 +184,8 @@ export interface AihubApi {
   getTaskPage(status: TaskStatus, limit?: number, offset?: number): Promise<TaskListResult>
   /** 各状态任务总数，供状态 chip/标题显示准确计数 */
   getTasksSummary(): Promise<TaskStatusSummary>
-  openTask(id: number): Promise<void>
+  /** 打开任务（唤起对应会话）；返回是否成功，失败带错误信息（后端离线/任务已删除等） */
+  openTask(id: number): Promise<{ ok: boolean; err?: string }>
   ignoreTask(id: number): Promise<void>
   deleteTask(id: number): Promise<void>
   clearTasks(scope?: TaskClearScope): Promise<number>
@@ -204,7 +205,8 @@ export interface AihubApi {
   installClaude(): Promise<InstallResult>
   installCodex(): Promise<InstallResult>
   getTaskEvents(taskId: number): Promise<TaskEventRecord[]>
-  openPath(target: string): Promise<void>
+  /** 在系统文件管理器中打开路径：成功返回 ''，失败返回错误串或被拒路径 {err} */
+  openPath(target: string): Promise<string | { err: string }>
   getWallpaper(): Promise<WallpaperState>
   pickWallpaper(): Promise<WallpaperState>
   setWallpaperPreset(presetId: string): Promise<WallpaperState>

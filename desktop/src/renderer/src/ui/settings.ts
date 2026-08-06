@@ -141,27 +141,36 @@ function makeAppearanceSection(): HTMLElement {
     }
   }
 
-  let debounceTimer: ReturnType<typeof setTimeout> | undefined
-  const debouncePush = (partial: Partial<WallpaperPrefs>): void => {
-    if (debounceTimer !== undefined) clearTimeout(debounceTimer)
-    debounceTimer = setTimeout(() => {
-      // 视图已卸载/重渲染（刷新设置页会重建外观区）则丢弃，避免对脱离文档的滑杆再写偏好
-      if (!blurInput.isConnected) return
-      void pushPrefs(partial)
-    }, 200)
-  }
+  // 每个滑杆独立的防抖工厂：共用同一个定时器时，快速连续拖动两个滑杆（如先调模糊再调
+  // 变暗）会被后一个清掉前一个，导致前者的中间值被静默丢弃（review HIGH）
+  const debounced =
+    (push: (value: number) => void): ((value: number) => void) => {
+      let timer: ReturnType<typeof setTimeout> | undefined
+      return (value) => {
+        if (timer !== undefined) clearTimeout(timer)
+        timer = setTimeout(() => {
+          timer = undefined
+          // 视图已卸载/重渲染（刷新设置页会重建外观区）则丢弃，避免对脱离文档的滑杆再写偏好
+          if (!blurInput.isConnected) return
+          push(value)
+        }, 200)
+      }
+    }
+  const debounceBlur = debounced((v) => void pushPrefs({ blur: v }))
+  const debounceDim = debounced((v) => void pushPrefs({ dim: v }))
+  const debounceOpacity = debounced((v) => void pushPrefs({ opacity: v }))
 
   blurInput.oninput = () => {
     blurVal.textContent = `${blurInput.value}px`
-    debouncePush({ blur: Number(blurInput.value) })
+    debounceBlur(Number(blurInput.value))
   }
   dimInput.oninput = () => {
     dimVal.textContent = `${dimInput.value}%`
-    debouncePush({ dim: Number(dimInput.value) })
+    debounceDim(Number(dimInput.value))
   }
   opacityInput.oninput = () => {
     opacityVal.textContent = `${opacityInput.value}%`
-    debouncePush({ opacity: Number(opacityInput.value) })
+    debounceOpacity(Number(opacityInput.value))
   }
 
   pickBtn.onclick = async () => {

@@ -176,6 +176,17 @@ function renderContent(): void {
 
 const PAGE_SIZE = 100
 let reloadRequestId = 0
+let reloadTimer: ReturnType<typeof setTimeout> | undefined
+
+/** 把 reload 合入防抖窗口：批量操作（如 read-all 标记 50 条）会连发多个 task_changed，
+ *  每次都触发 7 路 API 调用属浪费，收口为一次（review MEDIUM） */
+function scheduleReload(): void {
+  if (reloadTimer !== undefined) clearTimeout(reloadTimer)
+  reloadTimer = setTimeout(() => {
+    reloadTimer = undefined
+    void reload().catch((err) => console.error('[main] reload failed:', err))
+  }, 250)
+}
 
 async function reload(): Promise<boolean> {
   const requestId = ++reloadRequestId
@@ -330,7 +341,7 @@ async function bootstrap(): Promise<void> {
         showToast(`${SOURCE_LABELS[msg.task.source]} · ${label}：${displayTitle(msg.task)}`, accent, `task:${msg.task.id}:${msg.eventType}`)
       }
     }
-    void reload().catch((err) => console.error('[main] reload failed:', err))
+    scheduleReload()
   })
 
   window.aihub.onUpdateStatus((s) => {

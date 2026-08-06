@@ -364,7 +364,8 @@ export async function buildExeWithConfirm(win: BrowserWindow | null): Promise<Bu
     if (iconResult.code !== 0) {
       win?.webContents.send('packaging:status', {
         state: 'running',
-        message: `当前图标重生成失败，沿用现有图标：${tail(iconResult.log)}`,
+        // 常见原因是只装了 Windows PowerShell 5.1、没有 pwsh：给出可执行的安装指引
+        message: `当前图标重生成失败，沿用现有图标：${tail(iconResult.log)}（如需重新生成请安装 PowerShell 7：winget install Microsoft.PowerShell）`,
       })
     }
   }
