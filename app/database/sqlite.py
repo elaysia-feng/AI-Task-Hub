@@ -50,7 +50,7 @@ def _adapt_datetime(value: datetime) -> str:
     return value.isoformat(sep=" ")
 
 
-def _convert_datetime(value: bytes) -> datetime:
+def _convert_datetime(value: bytes) -> datetime | str:
     text = value.decode("utf-8")
     try:
         return datetime.fromisoformat(text)
@@ -66,15 +66,31 @@ sqlite3.register_converter("DATETIME", _convert_datetime)
 _DATETIME_COLUMNS = frozenset({"created_at", "completed_at", "viewed_at"})
 
 
+def _exe_dir() -> Path:
+    """打包版可执行文件目录：相对路径的可靠基准。
+
+    _PROJECT_ROOT 在 PyInstaller onefile 下指向临时解压目录 _MEIPASS，
+    进程退出即清空；相对路径必须基于 exe 目录解析，否则数据会丢。
+    """
+    return Path(sys.executable).resolve().parent
+
+
 def _sqlite_path() -> Path:
-    """解析 AIHUB_SQLITE_PATH；默认 %APPDATA%\\AI Task Hub\\data.sqlite（打包版与开发版一致）。"""
+    """解析 AIHUB_SQLITE_PATH；默认 %APPDATA%\\AI Task Hub\\data.sqlite（打包版与开发版一致）。
+
+    相对路径：开发版基于仓库根目录；打包版基于 exe 目录（避免落入 _MEIPASS 临时目录丢数据）。
+    """
     env = os.environ.get("AIHUB_SQLITE_PATH")
     if env:
         p = Path(env)
-        return p if p.is_absolute() else _PROJECT_ROOT / p
+        if p.is_absolute():
+            return p
+        return _exe_dir() / p if getattr(sys, "frozen", False) else _PROJECT_ROOT / p
     appdata = os.environ.get("APPDATA")
     if appdata:
         return Path(appdata) / "AI Task Hub" / "data.sqlite"
+    if getattr(sys, "frozen", False):
+        return _exe_dir() / "data.sqlite"
     return _PROJECT_ROOT / "data.sqlite"
 
 

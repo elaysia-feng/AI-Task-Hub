@@ -454,12 +454,15 @@ function makeDbBackendSection(): HTMLElement {
     select.append(option)
   }
 
-  // 选择器初值 = config.env 显式配置（未配置默认 sqlite）；「当前」列展示 /api/status 的实际后端。
+  // 选择器初值 = config.env 显式配置；未显式配置时跟随 /api/status 的实际后端
+  // （避免 config.env 为空时选择器显示推荐默认值，与实际运行后端自相矛盾）。
   // 两路都是主进程本地 IPC / 后端 HTTP，独立失败都不致命，分别回退。
   void Promise.allSettled([window.aihub.getDbBackend(), window.aihub.getServerStatus()]).then(
     ([cfg, st]) => {
       if (!select.isConnected || !current.isConnected) return
-      const configured = cfg.status === 'fulfilled' ? cfg.value.value : 'sqlite'
+      const actual =
+        st.status === 'fulfilled' ? (st.value.db.backend === 'mysql' ? 'mysql' : 'sqlite') : 'sqlite'
+      const configured = cfg.status === 'fulfilled' && cfg.value.explicit ? cfg.value.value : actual
       select.value = configured
       current.textContent =
         st.status === 'fulfilled'

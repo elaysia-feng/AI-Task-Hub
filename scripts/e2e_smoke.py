@@ -1,11 +1,11 @@
 """端到端冒烟：独立端口后端实例上跑完整事件生命周期。
 
 用法：
-    .venv/Scripts/python.exe scripts/e2e_smoke.py              # 默认 MySQL（ai_task_hub_test）
-    AIHUB_DB_BACKEND=sqlite .venv/Scripts/python.exe scripts/e2e_smoke.py
+    .venv/Scripts/python.exe scripts/e2e_smoke.py              # 默认 SQLite（临时库文件，无需 MySQL）
+    AIHUB_DB_BACKEND=mysql .venv/Scripts/python.exe scripts/e2e_smoke.py   # 打 MySQL 测试库 ai_task_hub_test
 
 - 拉起 AIHUB_PORT=17899 的隔离后端（不碰正式库/正式端口）
-- mysql：AIHUB_MYSQL_DB=ai_task_hub_test；sqlite：临时库文件，无需 MySQL
+- sqlite：临时库文件；mysql：AIHUB_MYSQL_DB=ai_task_hub_test
 - 断言：health → status → 事件 → 队列 → 时间线契约 → read-all → clear → WebSocket 广播
 - 结束自动清理（清空测试数据、终止子进程）
 """

@@ -4,7 +4,7 @@ from typing import Optional
 
 import pymysql
 
-from app.database.mysql import Database
+from app.database import StorageBackend
 from app.utils import now
 
 logger = logging.getLogger(__name__)
@@ -13,7 +13,7 @@ logger = logging.getLogger(__name__)
 class EventRepository:
     """任务生命周期事件流水，用于审计、排障与后续离线补偿。"""
 
-    def __init__(self, db: Database):
+    def __init__(self, db: StorageBackend):
         self._db = db
 
     def insert(

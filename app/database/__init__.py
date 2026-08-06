@@ -28,12 +28,18 @@ def create_database() -> StorageBackend:
         return Database()
     if backend == "sqlite":
         return SQLiteDatabase()
-    # auto 或非法值：优先 MySQL，失败降级 SQLite
-    try:
-        return Database()
-    except Exception:
-        logger.warning(
-            "MySQL 不可用，自动降级 SQLite（如需强制 MySQL 请设置 AIHUB_DB_BACKEND=mysql）",
-            exc_info=True,
-        )
-        return SQLiteDatabase()
+    if backend == "auto":
+        try:
+            return Database()
+        except Exception:
+            logger.warning(
+                "MySQL 不可用，自动降级 SQLite（如需强制 MySQL 请设置 AIHUB_DB_BACKEND=mysql）",
+                exc_info=True,
+            )
+            return SQLiteDatabase()
+    # 非法值：按默认 sqlite 处理（与桌面端「非法值回退 sqlite」语义一致，
+    # 避免配置拼写错误时静默连上本机 MySQL），并告警便于排查
+    logger.warning(
+        "AIHUB_DB_BACKEND=%r 不是有效值（sqlite/mysql/auto），已回退为 sqlite", backend
+    )
+    return SQLiteDatabase()

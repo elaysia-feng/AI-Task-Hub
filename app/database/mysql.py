@@ -175,7 +175,12 @@ class Database:
                                 cursor.execute(f"DROP TABLE IF EXISTS `{tbl}`")
                     finally:
                         conn.close()
+                    old = self._conn
                     self._conn = self._connect(with_database=True)
+                    try:
+                        old.close()  # 释放原（已异常）连接，避免重建后泄漏
+                    except Exception:
+                        pass
                 except Exception:
                     logger.exception(
                         "schema cleanup after init failure also failed; schema may be partially initialised"
@@ -187,7 +192,12 @@ class Database:
         try:
             self._conn.ping(reconnect=False)
         except pymysql.MySQLError:
+            old = self._conn
             self._conn = self._connect(with_database=True)
+            try:
+                old.close()  # 释放失效连接，避免每次重建泄漏 TCP 套接字/服务端会话
+            except Exception:
+                pass  # 旧连接可能已失效，close 失败可忽略
         return self._conn.cursor()
 
     def execute_many(self, sql: str, params: list[tuple]):

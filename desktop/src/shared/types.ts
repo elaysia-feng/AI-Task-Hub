@@ -196,8 +196,8 @@ export interface AihubApi {
   installUpdate(): void
   onUpdateStatus(cb: (state: UpdateState) => void): () => void
   getServerStatus(): Promise<ServerStatus>
-  /** 设置页：读取 config.env 里配置的存储后端（未配置默认 sqlite），附配置文件路径 */
-  getDbBackend(): Promise<{ value: DbBackendValue; path: string }>
+  /** 设置页：读取 config.env 里配置的存储后端（未配置默认 sqlite，explicit 标记是否显式写入），附配置文件路径 */
+  getDbBackend(): Promise<{ value: DbBackendValue; path: string; explicit: boolean }>
   /** 设置页：把存储后端选择写入 config.env（重启后端后生效；失败不抛错，走返回值） */
   setDbBackend(value: DbBackendValue): Promise<{ ok: boolean; path?: string; error?: string }>
   getIntegrations(): Promise<IntegrationsStatus | null>

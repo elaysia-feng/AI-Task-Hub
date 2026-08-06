@@ -1,14 +1,14 @@
 import logging
 from typing import Optional
 
-from app.database.mysql import Database
+from app.database import StorageBackend
 from app.model.task import Task
 
 logger = logging.getLogger(__name__)
 
 
 class TaskRepository:
-    def __init__(self, db: Database):
+    def __init__(self, db: StorageBackend):
         self._db = db
 
     def transaction(self):

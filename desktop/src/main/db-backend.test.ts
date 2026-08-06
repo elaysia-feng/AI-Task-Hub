@@ -30,7 +30,24 @@ describe('db-backend config.env 读写', () => {
     expect(res.ok).toBe(true)
     expect(fs.existsSync(file)).toBe(true)
     expect(fs.readFileSync(file, 'utf-8')).toContain('AIHUB_DB_BACKEND=sqlite')
-    expect(getConfiguredDbBackend().value).toBe('sqlite')
+    const read = getConfiguredDbBackend()
+    expect(read.value).toBe('sqlite')
+    expect(read.explicit).toBe(true) // 已显式写入
+  })
+
+  it('config.env 不存在时回退 sqlite 且 explicit=false', () => {
+    const read = getConfiguredDbBackend()
+    expect(read.value).toBe('sqlite')
+    expect(read.explicit).toBe(false)
+    expect(read.path).toBe(configEnvPath())
+  })
+
+  it('非法值显式写入时回退 sqlite 且仍视为已配置', () => {
+    fs.mkdirSync(path.dirname(configEnvPath()), { recursive: true })
+    fs.writeFileSync(configEnvPath(), 'AIHUB_DB_BACKEND=sqllite\n', 'utf-8')
+    const read = getConfiguredDbBackend()
+    expect(read.value).toBe('sqlite')
+    expect(read.explicit).toBe(true)
   })
 
   it('文件已存在时只替换 AIHUB_DB_BACKEND 行，保留注释与其它键', () => {

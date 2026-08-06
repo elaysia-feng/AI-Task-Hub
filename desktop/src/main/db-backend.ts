@@ -15,10 +15,17 @@ export function configEnvPath(): string {
   return path.join(app.getPath('appData'), 'AI Task Hub', CONFIG_FILE)
 }
 
-/** 读 config.env 中 AIHUB_DB_BACKEND 的显式配置；文件不存在/键缺失/非法值一律回退 sqlite（默认） */
-export function getConfiguredDbBackend(): { value: DbBackendValue; path: string } {
+interface BackendKeyResult {
+  value: DbBackendValue
+  /** config.env 是否显式写入了 AIHUB_DB_BACKEND（区别于「未配置回退默认值」） */
+  explicit: boolean
+}
+
+/** 读 config.env 中 AIHUB_DB_BACKEND 的显式配置；文件不存在/键缺失/非法值一律回退 sqlite（默认）。explicit 标记该值是否显式写入过。 */
+export function getConfiguredDbBackend(): { value: DbBackendValue; path: string; explicit: boolean } {
   const file = configEnvPath()
-  return { value: readBackendKey(file), path: file }
+  const { value, explicit } = readBackendKey(file)
+  return { value, path: file, explicit }
 }
 
 /**
@@ -49,19 +56,22 @@ export function setConfiguredDbBackend(
   }
 }
 
-function readBackendKey(file: string): DbBackendValue {
+function readBackendKey(file: string): BackendKeyResult {
   try {
-    if (!fs.existsSync(file)) return 'sqlite'
+    if (!fs.existsSync(file)) return { value: 'sqlite', explicit: false }
     for (const raw of fs.readFileSync(file, 'utf-8').split(/\r?\n/)) {
       const line = raw.trim()
       if (!line || line.startsWith('#') || !line.includes('=')) continue
       const eq = line.indexOf('=')
       if (line.slice(0, eq).trim() !== BACKEND_KEY) continue
       const value = line.slice(eq + 1).trim().replace(/^['"]|['"]$/g, '')
-      return value === 'auto' || value === 'mysql' || value === 'sqlite' ? value : 'sqlite'
+      // 显式但非法：回退 sqlite，但仍视为「已显式配置」（与后端工厂非法值→sqlite 一致）
+      return value === 'auto' || value === 'mysql' || value === 'sqlite'
+        ? { value, explicit: true }
+        : { value: 'sqlite', explicit: true }
     }
-    return 'sqlite'
+    return { value: 'sqlite', explicit: false }
   } catch {
-    return 'sqlite'
+    return { value: 'sqlite', explicit: false }
   }
 }

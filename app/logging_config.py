@@ -39,6 +39,9 @@ def setup_logging(level: int = logging.INFO) -> Path:
         file_handler = TimedRotatingFileHandler(
             path, when="midnight", backupCount=30, encoding="utf-8"
         )
+        # Windows 上 os.rename 在目标已存在/被短暂锁定时抛 PermissionError 导致轮转失败；
+        # 改用 os.replace（原子覆盖），轮转更稳健
+        file_handler.rotator = lambda source, dest: os.replace(source, dest)
         file_handler.setFormatter(formatter)
         root.addHandler(file_handler)
 

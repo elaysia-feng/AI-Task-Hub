@@ -4,6 +4,7 @@
 用于验证两个后端对仓库层 SQL 的行为一致（SQL 方言差异由 sqlite.py 内部翻译）。
 """
 
+import sys
 from datetime import datetime
 
 from app.model.agent_event import AgentEvent
@@ -252,3 +253,77 @@ class TestForeignKeyCascade:
         assert db.query_one("SELECT COUNT(*) AS c FROM task_event")["c"] == 1
         assert task_service.delete_task(task.id)
         assert db.query_one("SELECT COUNT(*) AS c FROM task_event")["c"] == 0
+
+
+class TestBackendFactory:
+    """AIHUB_DB_BACKEND 工厂语义：默认 / 非法值 / 显式 sqlite 均落 SQLite。"""
+
+    def test_default_and_invalid_and_explicit_all_use_sqlite(self, monkeypatch, tmp_path):
+        from app.database import create_database
+        from app.database.mysql import _config_candidates
+        from app.database.sqlite import SQLiteDatabase
+
+        # 隔离仓库 .env（本机可能已配 AIHUB_DB_BACKEND=mysql），且不加载任何配置文件
+        monkeypatch.setattr("app.database.mysql._config_candidates", lambda: [])
+        monkeypatch.delenv("AIHUB_DB_BACKEND", raising=False)
+        monkeypatch.setenv("AIHUB_SQLITE_PATH", str(tmp_path / "factory.sqlite"))
+
+        # 未设置 → 默认 sqlite
+        db = create_database()
+        assert isinstance(db, SQLiteDatabase)
+        db.close()
+
+        # 非法值（拼写错误等）→ sqlite，绝不静默连 MySQL
+        monkeypatch.setenv("AIHUB_DB_BACKEND", "sqllite")
+        db = create_database()
+        assert isinstance(db, SQLiteDatabase)
+        db.close()
+
+        # 显式 sqlite
+        monkeypatch.setenv("AIHUB_DB_BACKEND", "sqlite")
+        db = create_database()
+        assert isinstance(db, SQLiteDatabase)
+        db.close()
+
+
+class TestSqlitePathResolution:
+    """AIHUB_SQLITE_PATH 相对路径的基准：打包版 exe 目录，开发版仓库根目录。"""
+
+    def test_frozen_relative_path_uses_exe_dir(self, monkeypatch, tmp_path):
+        from app.database import sqlite as sqlite_mod
+
+        monkeypatch.setattr(sys, "frozen", True, raising=False)
+        fake_exe = tmp_path / "AI Task Hub" / "aihub-backend.exe"
+        fake_exe.parent.mkdir(parents=True, exist_ok=True)
+        fake_exe.touch()
+        monkeypatch.setattr(sqlite_mod.sys, "executable", str(fake_exe))
+        monkeypatch.setenv("AIHUB_SQLITE_PATH", "data/custom.sqlite")
+        monkeypatch.delenv("APPDATA", raising=False)
+        path = sqlite_mod._sqlite_path()
+        assert path == fake_exe.parent / "data" / "custom.sqlite"
+        assert path.is_absolute()  # 绝不能落到 _MEIPASS 临时目录
+
+    def test_dev_relative_path_uses_project_root(self, monkeypatch):
+        from app.database import sqlite as sqlite_mod
+
+        monkeypatch.setattr(sys, "frozen", False, raising=False)
+        monkeypatch.setenv("AIHUB_SQLITE_PATH", "data/dev.sqlite")
+        monkeypatch.delenv("APPDATA", raising=False)
+        path = sqlite_mod._sqlite_path()
+        assert path == sqlite_mod._PROJECT_ROOT / "data" / "dev.sqlite"
+
+    def test_frozen_no_env_uses_appdata_then_exe_dir(self, monkeypatch, tmp_path):
+        from app.database import sqlite as sqlite_mod
+
+        monkeypatch.setattr(sys, "frozen", True, raising=False)
+        monkeypatch.delenv("AIHUB_SQLITE_PATH", raising=False)
+        fake_exe = tmp_path / "app" / "aihub-backend.exe"
+        fake_exe.parent.mkdir(parents=True, exist_ok=True)
+        fake_exe.touch()
+        monkeypatch.setattr(sqlite_mod.sys, "executable", str(fake_exe))
+
+        monkeypatch.setenv("APPDATA", str(tmp_path / "appdata"))
+        assert sqlite_mod._sqlite_path() == tmp_path / "appdata" / "AI Task Hub" / "data.sqlite"
+
+        monkeypatch.delenv("APPDATA", raising=False)
+        assert sqlite_mod._sqlite_path() == fake_exe.parent / "data.sqlite"
