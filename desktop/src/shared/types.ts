@@ -80,7 +80,7 @@ export interface TaskEventRecord {
   payload: Record<string, unknown>
 }
 
-/** 存储后端配置值：写入 config.env 的 AIHUB_DB_BACKEND（auto=MySQL 优先，连不上自动降级 SQLite） */
+/** 存储后端配置值：写入 config.env 的 AIHUB_DB_BACKEND（sqlite=默认零依赖；mysql=严格 MySQL；auto=MySQL 优先连不上自动降级 SQLite） */
 export type DbBackendValue = 'auto' | 'mysql' | 'sqlite'
 
 export interface ServerStatus {
@@ -196,7 +196,7 @@ export interface AihubApi {
   installUpdate(): void
   onUpdateStatus(cb: (state: UpdateState) => void): () => void
   getServerStatus(): Promise<ServerStatus>
-  /** 设置页：读取 config.env 里配置的存储后端（未配置默认 auto），附配置文件路径 */
+  /** 设置页：读取 config.env 里配置的存储后端（未配置默认 sqlite），附配置文件路径 */
   getDbBackend(): Promise<{ value: DbBackendValue; path: string }>
   /** 设置页：把存储后端选择写入 config.env（重启后端后生效；失败不抛错，走返回值） */
   setDbBackend(value: DbBackendValue): Promise<{ ok: boolean; path?: string; error?: string }>

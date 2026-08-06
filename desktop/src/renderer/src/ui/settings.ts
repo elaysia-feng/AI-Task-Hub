@@ -422,9 +422,9 @@ function refreshSettings(): void {
 /* ---------- 存储后端 ---------- */
 
 const DB_BACKEND_OPTIONS: ReadonlyArray<{ value: DbBackendValue; label: string; desc: string }> = [
-  { value: 'auto', label: '自动（默认）', desc: '优先本机 MySQL，连不上自动改用 SQLite' },
-  { value: 'mysql', label: '本机 MySQL', desc: '严格使用本机 MySQL，连不上即报错' },
-  { value: 'sqlite', label: '直接用 SQLite', desc: '数据保存在本地文件，不依赖 MySQL' },
+  { value: 'sqlite', label: '直接用 SQLite（默认，推荐）', desc: '数据保存在本地文件，零依赖开箱即用' },
+  { value: 'mysql', label: '本机 MySQL', desc: '需自行安装配置 MySQL，连不上即报错' },
+  { value: 'auto', label: '自动', desc: '优先本机 MySQL，连不上自动改用 SQLite' },
 ]
 
 function dbBackendLabel(value: DbBackendValue): string {
@@ -454,12 +454,12 @@ function makeDbBackendSection(): HTMLElement {
     select.append(option)
   }
 
-  // 选择器初值 = config.env 显式配置（未配置默认 auto）；「当前」列展示 /api/status 的实际后端。
+  // 选择器初值 = config.env 显式配置（未配置默认 sqlite）；「当前」列展示 /api/status 的实际后端。
   // 两路都是主进程本地 IPC / 后端 HTTP，独立失败都不致命，分别回退。
   void Promise.allSettled([window.aihub.getDbBackend(), window.aihub.getServerStatus()]).then(
     ([cfg, st]) => {
       if (!select.isConnected || !current.isConnected) return
-      const configured = cfg.status === 'fulfilled' ? cfg.value.value : 'auto'
+      const configured = cfg.status === 'fulfilled' ? cfg.value.value : 'sqlite'
       select.value = configured
       current.textContent =
         st.status === 'fulfilled'

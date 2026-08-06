@@ -61,17 +61,17 @@ def wait_health(timeout: float = 30) -> None:
 
 
 def main() -> None:
-    backend = os.environ.get("AIHUB_DB_BACKEND", "auto").strip().lower()
+    backend = os.environ.get("AIHUB_DB_BACKEND", "sqlite").strip().lower()
     env = os.environ.copy()
     env["AIHUB_PORT"] = str(PORT)
     sqlite_dir: Path | None = None
     if backend == "sqlite":
-        # sqlite 分支：临时库文件，无需 MySQL
+        # 默认 / sqlite：临时库文件，无需 MySQL（与分发默认一致）
         sqlite_dir = Path(tempfile.mkdtemp(prefix="aihub-e2e-sqlite-"))
         env["AIHUB_DB_BACKEND"] = "sqlite"
         env["AIHUB_SQLITE_PATH"] = str(sqlite_dir / "e2e.sqlite")
     else:
-        # 默认 / auto / mysql：MySQL 测试库（保留原有路径；auto 不静默降级默认库路径）
+        # 显式 mysql / auto：MySQL 测试库（保留原有路径；auto 不静默降级默认库路径）
         env["AIHUB_DB_BACKEND"] = "mysql"
         env["AIHUB_MYSQL_DB"] = "ai_task_hub_test"
     proc = subprocess.Popen(

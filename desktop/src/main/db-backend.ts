@@ -15,7 +15,7 @@ export function configEnvPath(): string {
   return path.join(app.getPath('appData'), 'AI Task Hub', CONFIG_FILE)
 }
 
-/** 读 config.env 中 AIHUB_DB_BACKEND 的显式配置；文件不存在/键缺失/非法值一律回退 auto */
+/** 读 config.env 中 AIHUB_DB_BACKEND 的显式配置；文件不存在/键缺失/非法值一律回退 sqlite（默认） */
 export function getConfiguredDbBackend(): { value: DbBackendValue; path: string } {
   const file = configEnvPath()
   return { value: readBackendKey(file), path: file }
@@ -51,17 +51,17 @@ export function setConfiguredDbBackend(
 
 function readBackendKey(file: string): DbBackendValue {
   try {
-    if (!fs.existsSync(file)) return 'auto'
+    if (!fs.existsSync(file)) return 'sqlite'
     for (const raw of fs.readFileSync(file, 'utf-8').split(/\r?\n/)) {
       const line = raw.trim()
       if (!line || line.startsWith('#') || !line.includes('=')) continue
       const eq = line.indexOf('=')
       if (line.slice(0, eq).trim() !== BACKEND_KEY) continue
       const value = line.slice(eq + 1).trim().replace(/^['"]|['"]$/g, '')
-      return value === 'mysql' || value === 'sqlite' ? value : 'auto'
+      return value === 'auto' || value === 'mysql' || value === 'sqlite' ? value : 'sqlite'
     }
-    return 'auto'
+    return 'sqlite'
   } catch {
-    return 'auto'
+    return 'sqlite'
   }
 }

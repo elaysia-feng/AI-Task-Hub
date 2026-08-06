@@ -72,7 +72,7 @@ AI 任务跑久了，最容易错过的不是结果，而是“等待输入”�
 | Node.js | 22+ | 桌面端与构建工具 |
 | Python | 3.12+ | 本地 FastAPI 服务 |
 | MySQL | 8.0+ | 可选。自动 / MySQL 模式需要；纯 SQLite 模式无需安装 |
-| SQLite | Python 标准库内置 | 默认 `auto` 在 MySQL 不可用时自动兜底；`sqlite` 模式直接使用 |
+| SQLite | Python 标准库内置 | 默认使用，零依赖开箱即用；`auto` 模式 MySQL 不可用时自动兜底 |
 | NSIS | 3.x | 仅生成安装包时需要 |
 
 ### 开发模式
@@ -85,7 +85,7 @@ cd AI-Task-Hub
 uv venv
 uv pip install -r requirements.txt
 Copy-Item .env.example .env
-# 编辑 .env：无 MySQL 环境可直接用默认 auto（MySQL 不可用时自动改用 SQLite），有 MySQL 则填写连接信息
+# 编辑 .env：默认 sqlite 零依赖直接可用；想用 MySQL 则填连接信息并把 AIHUB_DB_BACKEND 设为 mysql
 
 # 启动 Electron；后端会被自动探测并拉起
 cd desktop
@@ -175,8 +175,8 @@ AIHUB_MYSQL_PASSWORD=你的密码
 AIHUB_MYSQL_DB=ai_task_hub
 AIHUB_MYSQL_TEST_DB=ai_task_hub_test
 
-# 存储后端：auto（默认）/ mysql / sqlite
-AIHUB_DB_BACKEND=auto
+# 存储后端：sqlite（默认，推荐）/ mysql / auto
+AIHUB_DB_BACKEND=sqlite
 # SQLite 数据文件路径；留空使用默认 %APPDATA%\AI Task Hub\data.sqlite（自定义请填绝对路径）
 AIHUB_SQLITE_PATH=
 ```
@@ -185,13 +185,13 @@ AIHUB_SQLITE_PATH=
 
 ### 存储后端
 
-后端支持两种存储：本机 **MySQL** 与本地 **SQLite 文件**，由 `AIHUB_DB_BACKEND` 决定：
+后端支持两种存储：本地 **SQLite 文件**（默认）与本机 **MySQL**（可选），由 `AIHUB_DB_BACKEND` 决定：
 
 | 值 | 行为 |
 |---|---|
-| `auto`（默认） | 优先连接本机 MySQL，连接失败自动降级为 SQLite 并记录告警 |
+| `sqlite`（默认，推荐） | 直接用本地 SQLite 文件，无需任何外部服务，开箱即用（分发版默认） |
 | `mysql` | 严格 MySQL：连不上即启动失败 |
-| `sqlite` | 直接用本地 SQLite 文件，无需任何外部服务，开箱即用 |
+| `auto` | 优先连接本机 MySQL，连接失败自动降级为 SQLite 并记录告警 |
 
 配置读取优先级（进程环境变量始终最高，不会被配置文件覆盖；配置文件只取首个存在的候选）：
 
@@ -203,7 +203,7 @@ AIHUB_SQLITE_PATH=
 
 SQLite 数据文件默认位于 `%APPDATA%\AI Task Hub\data.sqlite`（打包版与开发版一致）。数据文件与表结构在首次启动时自动创建，无需手动建库；如需换位置，用 `AIHUB_SQLITE_PATH` 指定绝对路径即可。
 
-桌面端在 **设置 → 存储后端** 中可直接选择「自动 / 本机 MySQL / 直接用 SQLite」，选择会写入 `%APPDATA%\AI Task Hub\config.env`，重启后端后生效；区块中会显示当前实际后端。实际运行中的后端可通过 `http://127.0.0.1:17891/api/status` 确认：`db.backend` 为 `mysql` 或 `sqlite`，并附带对应的连接信息（MySQL 为 host/port/database；SQLite 为数据文件路径）。
+桌面端在 **设置 → 存储后端** 中可直接选择「直接用 SQLite / 本机 MySQL / 自动」，选择会写入 `%APPDATA%\AI Task Hub\config.env`，重启后端后生效；区块中会显示当前实际后端。实际运行中的后端可通过 `http://127.0.0.1:17891/api/status` 确认：`db.backend` 为 `mysql` 或 `sqlite`，并附带对应的连接信息（MySQL 为 host/port/database；SQLite 为数据文件路径）。
 
 **幂等语义**：任务按 `(source, externalTaskId)` 唯一约束去重。`external_task_id` 为 `NULL` 或空串的事件会按同一来源合并到同一条任务（数据库用生成列 `external_task_id_not_null = IFNULL(external_task_id, '')` + 唯一索引实现），而不是每次新建任务；MySQL 与 SQLite 两种后端行为一致。
 
@@ -247,6 +247,10 @@ tests/          后端与集成测试
 | Codex 接入后没有事件 | Codex 只在启动时读取配置；退出并重启所有 Codex 进程 |
 | ChatGPT 没有通知 | 确认扩展已加载、浏览器仍在运行、本地健康检查正常 |
 | 端口 `17891` 被拒绝 | 等待自动健康检查完成；仍失败时单独启动后端查看具体日志 |
+
+## 日志
+
+日志按天分文件：当天的日志写在 `backend.log`，跨天自动滚动为 `backend.log.YYYY-MM-DD`（保留最近 30 天）。日志目录在打包版为 `%APPDATA%\AI Task Hub\logs\`，开发版为仓库 `logs\`；桌面端可在 **设置 → 打开日志目录** 直接查看。
 
 ## License
 
