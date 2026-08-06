@@ -1557,6 +1557,26 @@ html[data-wallpaper='on'] .content-header h1 {
   color: var(--text-muted);
 }
 
+.db-backend-select {
+  height: 32px;
+  padding: 0 28px 0 10px;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  background: var(--card);
+  color: var(--text);
+  font-size: 12.5px;
+  cursor: pointer;
+}
+
+.db-backend-select:hover {
+  border-color: var(--border-strong);
+}
+
+.db-backend-current {
+  font-size: 12.5px;
+  color: var(--text-secondary);
+}
+
 .icon-preset-wrap {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(118px, 1fr));

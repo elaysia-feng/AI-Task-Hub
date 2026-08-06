@@ -80,6 +80,7 @@ class MySQLConfig:
     user: str = "root"
     password: str = ""
     database: str = "ai_task_hub"
+    backend: str = "mysql"  # 供 /api/status 识别存储后端
 
     @classmethod
     def from_env(cls) -> "MySQLConfig":

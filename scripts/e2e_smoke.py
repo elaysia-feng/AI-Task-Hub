@@ -1,9 +1,11 @@
 """端到端冒烟：独立端口后端实例上跑完整事件生命周期。
 
 用法：
-    .venv/Scripts/python.exe scripts/e2e_smoke.py
+    .venv/Scripts/python.exe scripts/e2e_smoke.py              # 默认 MySQL（ai_task_hub_test）
+    AIHUB_DB_BACKEND=sqlite .venv/Scripts/python.exe scripts/e2e_smoke.py
 
-- 拉起 AIHUB_PORT=17899 + AIHUB_MYSQL_DB=ai_task_hub_test 的隔离后端（不碰正式库/正式端口）
+- 拉起 AIHUB_PORT=17899 的隔离后端（不碰正式库/正式端口）
+- mysql：AIHUB_MYSQL_DB=ai_task_hub_test；sqlite：临时库文件，无需 MySQL
 - 断言：health → status → 事件 → 队列 → 时间线契约 → read-all → clear → WebSocket 广播
 - 结束自动清理（清空测试数据、终止子进程）
 """
@@ -11,8 +13,10 @@
 import asyncio
 import json
 import os
+import shutil
 import subprocess
 import sys
+import tempfile
 import time
 import urllib.request
 from pathlib import Path
@@ -57,9 +61,19 @@ def wait_health(timeout: float = 30) -> None:
 
 
 def main() -> None:
+    backend = os.environ.get("AIHUB_DB_BACKEND", "auto").strip().lower()
     env = os.environ.copy()
     env["AIHUB_PORT"] = str(PORT)
-    env["AIHUB_MYSQL_DB"] = "ai_task_hub_test"
+    sqlite_dir: Path | None = None
+    if backend == "sqlite":
+        # sqlite 分支：临时库文件，无需 MySQL
+        sqlite_dir = Path(tempfile.mkdtemp(prefix="aihub-e2e-sqlite-"))
+        env["AIHUB_DB_BACKEND"] = "sqlite"
+        env["AIHUB_SQLITE_PATH"] = str(sqlite_dir / "e2e.sqlite")
+    else:
+        # 默认 / auto / mysql：MySQL 测试库（保留原有路径；auto 不静默降级默认库路径）
+        env["AIHUB_DB_BACKEND"] = "mysql"
+        env["AIHUB_MYSQL_DB"] = "ai_task_hub_test"
     proc = subprocess.Popen(
         [str(_python_exe()), "-m", "app.main"],
         cwd=REPO_ROOT, env=env,
@@ -71,7 +85,7 @@ def main() -> None:
 
         status = http("GET", "/api/status")
         assert status["db"]["ok"], f"数据库探活失败: {status}"
-        print(f"[2/9] status ok: v{status['version']} db={status['db']['database']}")
+        print(f"[2/9] status ok: v{status['version']} backend={status['db']['backend']} db={status['db']['database']}")
 
         # 前次运行若中途失败会残留任务，先清空保证可重复执行
         http("DELETE", "/api/tasks?confirm=true")
@@ -137,6 +151,8 @@ def main() -> None:
             proc.wait(timeout=10)
         except subprocess.TimeoutExpired:
             proc.kill()
+        if sqlite_dir is not None:
+            shutil.rmtree(sqlite_dir, ignore_errors=True)
 
 
 if __name__ == "__main__":

@@ -414,8 +414,8 @@ export async function buildExeWithConfirm(win: BrowserWindow | null): Promise<Bu
   }
 
   const pack = await runCommand(
-    'npx',
-    ['electron-builder', '--publish', 'never'],
+    'node',
+    ['scripts/electron-dist.mjs', '--publish', 'never'],
     desktopRoot(),
     packEnv,
   )

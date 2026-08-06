@@ -1,6 +1,7 @@
 """数据库诊断：对比 ai_task_hub / ai_task_hub_test 的表与行数，排查数据去向。
 
-用法：.venv/Scripts/python.exe scripts/db_inspect.py
+仅支持 MySQL：本脚本的 SQL（information_schema、`db`.table 库名前缀）为 MySQL 专属。
+用法：AIHUB_DB_BACKEND=mysql .venv/Scripts/python.exe scripts/db_inspect.py
 """
 
 import os
@@ -25,6 +26,14 @@ def _safe_ident(name: str) -> str:
 
 
 def main() -> None:
+    backend = os.environ.get("AIHUB_DB_BACKEND", "auto").strip().lower()
+    if backend != "mysql":
+        raise SystemExit(
+            "db_inspect.py 仅支持 MySQL：其 SQL（information_schema、`db`.table 库名前缀）"
+            "是 MySQL 专属语法。\n"
+            "请设置 AIHUB_DB_BACKEND=mysql 后运行；SQLite 场景请直接查看 "
+            "AIHUB_SQLITE_PATH 指定的数据库文件（默认 %APPDATA%\\AI Task Hub\\data.sqlite）。"
+        )
     cfg = MySQLConfig.from_env()
     # 库名从配置/环境派生，不再硬编码（LOW：db_inspect.py 硬编码 DB 名）；插值前过白名单
     main_db = _safe_ident(cfg.database)

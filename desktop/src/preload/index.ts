@@ -2,6 +2,7 @@ import { contextBridge, ipcRenderer } from 'electron'
 import type {
   AihubApi,
   BackendStatus,
+  DbBackendValue,
   ServerMessage,
   TaskClearScope,
   UpdateState,
@@ -41,6 +42,8 @@ const api: AihubApi = {
   },
 
   getServerStatus: () => ipcRenderer.invoke('server:status'),
+  getDbBackend: () => ipcRenderer.invoke('settings:get-db-backend'),
+  setDbBackend: (value: DbBackendValue) => ipcRenderer.invoke('settings:set-db-backend', value),
   getIntegrations: () => ipcRenderer.invoke('integrations:status'),
   installClaude: () => ipcRenderer.invoke('integrations:install-claude'),
   installCodex: () => ipcRenderer.invoke('integrations:install-codex'),

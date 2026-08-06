@@ -1,6 +1,7 @@
 /* 设置视图：外观（壁纸）/ 接入集成 / 应用更新 / 诊断 */
 
 import type {
+  DbBackendValue,
   IntegrationsStatus,
   ServerStatus,
   UserIconState,
@@ -49,12 +50,13 @@ export function renderSettingsView(container: HTMLElement): void {
     h('h2', '', ['接入集成']),
     h('div', 'settings-loading', ['正在检测三平台接入状态…']),
   ])
+  const dbBackendSection = makeDbBackendSection()
   const updateSection = makeUpdateSection()
   const diagSection = h('section', 'settings-section', [
     h('h2', '', ['诊断']),
     h('div', 'settings-loading', ['正在读取后端状态…']),
   ])
-  container.append(appearanceSection, integrationsSection, updateSection, diagSection)
+  container.append(appearanceSection, integrationsSection, dbBackendSection, updateSection, diagSection)
 
   if (state.backend === 'online') {
     void fillIntegrations(integrationsSection)
@@ -417,6 +419,84 @@ function refreshSettings(): void {
   }
 }
 
+/* ---------- 存储后端 ---------- */
+
+const DB_BACKEND_OPTIONS: ReadonlyArray<{ value: DbBackendValue; label: string; desc: string }> = [
+  { value: 'auto', label: '自动（默认）', desc: '优先本机 MySQL，连不上自动改用 SQLite' },
+  { value: 'mysql', label: '本机 MySQL', desc: '严格使用本机 MySQL，连不上即报错' },
+  { value: 'sqlite', label: '直接用 SQLite', desc: '数据保存在本地文件，不依赖 MySQL' },
+]
+
+function dbBackendLabel(value: DbBackendValue): string {
+  return DB_BACKEND_OPTIONS.find((opt) => opt.value === value)?.label ?? value
+}
+
+/** 诊断 / 存储区块共用：数据库定位文案（sqlite 无 host/port） */
+function dbLocationText(db: ServerStatus['db']): string {
+  if (db.backend === 'sqlite') return db.database ?? 'SQLite 本地文件'
+  return `${db.database}@${db.host}:${db.port}`
+}
+
+/** 存储区块「当前」列：auto 配置按 /api/status 的实际 backend 展示实际落点 */
+function dbBackendCurrentText(configured: DbBackendValue, db: ServerStatus['db']): string {
+  const actual = db.backend === 'mysql' ? '本机 MySQL' : '直接使用 SQLite'
+  return configured === 'auto' ? `自动（实际：${actual}）` : actual
+}
+
+function makeDbBackendSection(): HTMLElement {
+  const current = h('span', 'db-backend-current', ['读取中…'])
+  const select = document.createElement('select')
+  select.className = 'db-backend-select'
+  for (const opt of DB_BACKEND_OPTIONS) {
+    const option = document.createElement('option')
+    option.value = opt.value
+    option.textContent = opt.label
+    select.append(option)
+  }
+
+  // 选择器初值 = config.env 显式配置（未配置默认 auto）；「当前」列展示 /api/status 的实际后端。
+  // 两路都是主进程本地 IPC / 后端 HTTP，独立失败都不致命，分别回退。
+  void Promise.allSettled([window.aihub.getDbBackend(), window.aihub.getServerStatus()]).then(
+    ([cfg, st]) => {
+      if (!select.isConnected || !current.isConnected) return
+      const configured = cfg.status === 'fulfilled' ? cfg.value.value : 'auto'
+      select.value = configured
+      current.textContent =
+        st.status === 'fulfilled'
+          ? dbBackendCurrentText(configured, st.value.db)
+          : '后端离线，无法读取当前存储后端'
+    },
+  )
+
+  select.onchange = async () => {
+    const value = select.value as DbBackendValue
+    select.disabled = true
+    try {
+      const res = await window.aihub.setDbBackend(value)
+      if (res.ok) {
+        showToast(`存储后端已设为「${dbBackendLabel(value)}」，重启后端后生效`, 'var(--st-done)')
+      } else {
+        showToast(res.error ?? '写入存储配置失败', 'var(--st-fail)')
+      }
+    } catch (err) {
+      showToast(err instanceof Error ? err.message : '写入存储配置失败', 'var(--st-fail)')
+    } finally {
+      select.disabled = false
+    }
+  }
+
+  return h('section', 'settings-section', [
+    h('h2', '', ['存储后端']),
+    h('div', 'wallpaper-panel', [
+      h('div', 'wallpaper-actions', [select, current]),
+      h('div', 'wallpaper-status', [
+        ...DB_BACKEND_OPTIONS.map((opt) => h('div', '', [`${opt.label}：${opt.desc}`])),
+      ]),
+      h('div', 'wallpaper-status', ['切换写入 config.env，重启后端后生效；写入失败不影响使用']),
+    ]),
+  ])
+}
+
 /* ---------- 更新 ---------- */
 
 function makeUpdateSection(): HTMLElement {
@@ -562,7 +642,7 @@ async function fillDiagnostics(section: HTMLElement): Promise<void> {
       h('span', 'v', [`v${s.version}（运行 ${uptime}）`]),
       h('span', 'k', ['数据库']),
       h('span', 'v', [
-        s.db.ok ? `正常 · ${s.db.database}@${s.db.host}:${s.db.port}` : '连接失败',
+        s.db.ok ? `正常 · ${dbLocationText(s.db)}` : '连接失败',
       ]),
       h('span', 'k', ['任务 / 事件']),
       h('span', 'v', [`${s.tasks ?? '—'} / ${s.events ?? '—'}`]),

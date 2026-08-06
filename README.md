@@ -58,7 +58,7 @@ AI 任务跑久了，最容易错过的不是结果，而是“等待输入”�
 - **悬浮球与托盘**：关闭主窗口后继续后台工作，未读状态随时可见。
 - **快速定位**：支持状态、来源、关键词、排序组合筛选；`Ctrl+K` 或 `/` 聚焦搜索。
 - **一键接入**：设置页检测并配置 Claude Code hooks 与 Codex notify 链路。
-- **本地优先**：FastAPI 与 MySQL 均运行在本机，平台适配器只向本地事件服务上报。
+- **本地优先**：FastAPI 与存储后端（本机 MySQL 或本地 SQLite 文件）均运行在本机，平台适配器只向本地事件服务上报。
 - **运行自愈**：自动拉起后端、重连 WebSocket、检查 Electron 运行时并保留崩溃转储。
 - **自动更新**：安装版定时检查 GitHub Releases，下载后可重启安装。
 
@@ -71,7 +71,8 @@ AI 任务跑久了，最容易错过的不是结果，而是“等待输入”�
 | Windows | 10 / 11 | 当前仅支持 Windows |
 | Node.js | 22+ | 桌面端与构建工具 |
 | Python | 3.12+ | 本地 FastAPI 服务 |
-| MySQL | 8.0+ | 任务与事件持久化 |
+| MySQL | 8.0+ | 可选。自动 / MySQL 模式需要；纯 SQLite 模式无需安装 |
+| SQLite | Python 标准库内置 | 默认 `auto` 在 MySQL 不可用时自动兜底；`sqlite` 模式直接使用 |
 | NSIS | 3.x | 仅生成安装包时需要 |
 
 ### 开发模式
@@ -84,7 +85,7 @@ cd AI-Task-Hub
 uv venv
 uv pip install -r requirements.txt
 Copy-Item .env.example .env
-# 编辑 .env，填写 MySQL 连接信息
+# 编辑 .env：无 MySQL 环境可直接用默认 auto（MySQL 不可用时自动改用 SQLite），有 MySQL 则填写连接信息
 
 # 启动 Electron；后端会被自动探测并拉起
 cd desktop
@@ -123,7 +124,7 @@ flowchart LR
     subgraph BE["本地 FastAPI"]
         API["POST /api/events"]
         WS["/ws/tasks"]
-        DB[("MySQL")]
+        DB[("MySQL / SQLite")]
     end
 
     subgraph DT["Electron 桌面端"]
@@ -157,24 +158,54 @@ npm run dist:local
 |---|---|
 | `AI Task Hub Setup x.y.z.exe` | NSIS 安装向导 |
 | `AI-Task-Hub-Portable-x.y.z.exe` | 免安装便携版 |
-| `win-unpacked\AI Task Hub.exe` | 解压后直接运行 |
+| `win-unpacked\AI Task Hub.exe` | 中间产物，本地打包不再刷新；直接交付物为两个 exe（Setup 安装版 + Portable 便携版） |
 
 开发版也可以在 **设置 → 应用更新 / 打包 → 生成 exe 安装包** 中执行同一流程。安装版不包含源码和打包工具，因此不会开放这个入口。
 
 ## 配置
 
-开发版复制 `.env.example` 为 `.env`。安装版在 `%APPDATA%\AI Task Hub\config.env` 中配置：
+开发版复制 `.env.example` 为 `.env`；安装版在 `%APPDATA%\AI Task Hub\config.env` 中配置。两种文件格式相同，后端启动时按下方优先级读取：
 
 ```env
+# MySQL 连接（mysql / auto 模式使用）
 AIHUB_MYSQL_HOST=127.0.0.1
 AIHUB_MYSQL_PORT=3306
 AIHUB_MYSQL_USER=root
 AIHUB_MYSQL_PASSWORD=你的密码
 AIHUB_MYSQL_DB=ai_task_hub
 AIHUB_MYSQL_TEST_DB=ai_task_hub_test
+
+# 存储后端：auto（默认）/ mysql / sqlite
+AIHUB_DB_BACKEND=auto
+# SQLite 数据文件路径；留空使用默认 %APPDATA%\AI Task Hub\data.sqlite（自定义请填绝对路径）
+AIHUB_SQLITE_PATH=
 ```
 
 默认后端端口为 `17891`。
+
+### 存储后端
+
+后端支持两种存储：本机 **MySQL** 与本地 **SQLite 文件**，由 `AIHUB_DB_BACKEND` 决定：
+
+| 值 | 行为 |
+|---|---|
+| `auto`（默认） | 优先连接本机 MySQL，连接失败自动降级为 SQLite 并记录告警 |
+| `mysql` | 严格 MySQL：连不上即启动失败 |
+| `sqlite` | 直接用本地 SQLite 文件，无需任何外部服务，开箱即用 |
+
+配置读取优先级（进程环境变量始终最高，不会被配置文件覆盖；配置文件只取首个存在的候选）：
+
+1. 进程环境变量；
+2. `AIHUB_CONFIG` 显式指定的文件（需绝对路径）；
+3. exe 同级目录的 `config.env` / `.env`（仅打包版）；
+4. `%APPDATA%\AI Task Hub\config.env`（桌面设置页的选择也写在这里）；
+5. 仓库根目录 `.env`（仅开发版）。
+
+SQLite 数据文件默认位于 `%APPDATA%\AI Task Hub\data.sqlite`（打包版与开发版一致）。数据文件与表结构在首次启动时自动创建，无需手动建库；如需换位置，用 `AIHUB_SQLITE_PATH` 指定绝对路径即可。
+
+桌面端在 **设置 → 存储后端** 中可直接选择「自动 / 本机 MySQL / 直接用 SQLite」，选择会写入 `%APPDATA%\AI Task Hub\config.env`，重启后端后生效；区块中会显示当前实际后端。实际运行中的后端可通过 `http://127.0.0.1:17891/api/status` 确认：`db.backend` 为 `mysql` 或 `sqlite`，并附带对应的连接信息（MySQL 为 host/port/database；SQLite 为数据文件路径）。
+
+**幂等语义**：任务按 `(source, externalTaskId)` 唯一约束去重。`external_task_id` 为 `NULL` 或空串的事件会按同一来源合并到同一条任务（数据库用生成列 `external_task_id_not_null = IFNULL(external_task_id, '')` + 唯一索引实现），而不是每次新建任务；MySQL 与 SQLite 两种后端行为一致。
 
 ## 验证
 

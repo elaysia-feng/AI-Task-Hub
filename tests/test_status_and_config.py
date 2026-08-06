@@ -18,7 +18,15 @@ def test_status_endpoint(client):
     assert body["status"] == "ok"
     assert body["version"]
     assert body["db"]["ok"] is True
-    assert body["db"]["database"] == TEST_DB_NAME
+    backend = body["db"]["backend"]
+    assert backend in ("mysql", "sqlite")
+    if backend == "sqlite":
+        assert body["db"]["database"]  # SQLite：数据库文件路径非空
+        assert "host" not in body["db"]
+    else:
+        assert body["db"]["database"] == TEST_DB_NAME
+        assert body["db"]["host"]
+        assert body["db"]["port"]
     assert isinstance(body["tasks"], int)
     assert isinstance(body["events"], int)
     assert body["logFile"].endswith("backend.log")

@@ -19,9 +19,10 @@ import {
   resetUserIcon,
   setUserIconPreset,
 } from './icon-picker'
+import { getConfiguredDbBackend, setConfiguredDbBackend } from './db-backend'
 import type { BackendManager } from './backend'
 import type { UpdateManager } from './updater'
-import type { TaskClearScope, TaskStatus, WallpaperPrefs } from '../shared/types'
+import type { DbBackendValue, TaskClearScope, TaskStatus, WallpaperPrefs } from '../shared/types'
 
 // Allowed path prefixes for shell:open-path (user-controlled directories only)
 const ALLOWED_OPEN_PREFIXES = [
@@ -88,6 +89,14 @@ export function registerIpcHandlers(
   ipcMain.on('update:install', () => updater.quitAndInstall())
 
   ipcMain.handle('server:status', () => apiClient.getServerStatus())
+  // 存储后端选择：读/写 config.env 的 AIHUB_DB_BACKEND，失败走返回值（设置页非致命）
+  ipcMain.handle('settings:get-db-backend', () => getConfiguredDbBackend())
+  ipcMain.handle('settings:set-db-backend', (_event, value: DbBackendValue) => {
+    if (value !== 'auto' && value !== 'mysql' && value !== 'sqlite') {
+      return { ok: false, error: 'invalid db backend value' }
+    }
+    return setConfiguredDbBackend(value)
+  })
   ipcMain.handle('integrations:status', async () => {
     try {
       return await apiClient.getIntegrations()

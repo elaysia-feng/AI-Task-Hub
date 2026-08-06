@@ -22,6 +22,7 @@ a = Analysis(
     binaries=[],
     datas=[
         (os.path.join(ROOT, "app", "database", "schema.sql"), "app/database"),
+        (os.path.join(ROOT, "app", "database", "schema_sqlite.sql"), "app/database"),
         (os.path.join(ROOT, "shared", "event_schema.json"), "shared"),
     ],
     hiddenimports=hiddenimports,

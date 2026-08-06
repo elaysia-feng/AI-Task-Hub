@@ -8,7 +8,7 @@ from fastapi.responses import JSONResponse
 from starlette.middleware.base import BaseHTTPMiddleware
 
 from app.api import event_api, integration_api, task_api, websocket_api
-from app.database.mysql import Database
+from app.database import StorageBackend, create_database
 from app.logging_config import log_file
 from app.repository.event_repository import EventRepository
 from app.repository.task_repository import TaskRepository
@@ -67,8 +67,8 @@ class SecurityHeadersMiddleware(BaseHTTPMiddleware):
 _STARTED_AT = time.time()
 
 
-def create_app(db: Database | None = None) -> FastAPI:
-    database = db or Database()
+def create_app(db: StorageBackend | None = None) -> FastAPI:
+    database = db or create_database()
     task_repo = TaskRepository(database)
     event_repo = EventRepository(database)
 
@@ -130,17 +130,20 @@ def create_app(db: Database | None = None) -> FastAPI:
         except Exception:
             db_ok = False
             logger.exception("/api/status 数据库探活失败")
+        backend = getattr(database.config, "backend", "mysql")
+        db_info: dict = {"ok": db_ok, "backend": backend}
+        if backend == "sqlite":
+            db_info["database"] = getattr(database.config, "database", "")
+        else:
+            db_info["host"] = getattr(database.config, "host", "-")
+            db_info["port"] = getattr(database.config, "port", 0)
+            db_info["database"] = getattr(database.config, "database", "")
         return {
             "status": "ok" if db_ok else "degraded",
             "service": APP_NAME,
             "version": APP_VERSION,
             "uptimeSec": int(time.time() - _STARTED_AT),
-            "db": {
-                "ok": db_ok,
-                "host": database.config.host,
-                "port": database.config.port,
-                "database": database.config.database,
-            },
+            "db": db_info,
             "tasks": task_count,
             "events": event_count,
             "logFile": str(log_file()),

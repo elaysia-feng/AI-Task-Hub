@@ -1,6 +1,7 @@
 -- AI Task Hub MySQL Schema（InnoDB / utf8mb4）
 -- 主键：BIGINT AUTO_INCREMENT；时间字段：DATETIME(3)（毫秒精度，存本地时间）
--- (source, external_task_id) 唯一约束用于跨平台事件幂等去重；NULL 不参与去重（每次新建任务）
+-- (source, external_task_id_not_null) 唯一约束用于跨平台事件幂等去重；NULL/空串经
+-- generated column 归一到 ''，同源 NULL/空串事件合并去重到同一条任务（非「每次新建」）
 
 CREATE TABLE IF NOT EXISTS task (
     id BIGINT PRIMARY KEY AUTO_INCREMENT,
