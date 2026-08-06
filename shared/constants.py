@@ -8,7 +8,7 @@ import os
 
 APP_NAME = "AI Task Hub"
 APP_ID = "ai-task-hub"
-APP_VERSION = "0.1.7"
+APP_VERSION = "0.1.8"
 
 API_HOST = "127.0.0.1"
 # 端口可被 AIHUB_PORT 覆盖（冒烟测试并行实例、端口冲突场景）
