@@ -22,7 +22,7 @@ def codex_paths(monkeypatch, tmp_path):
     config = tmp_path / "codex" / "config.toml"
     forward = tmp_path / "forward_target.json"
     monkeypatch.setattr(integration_api, "CODEX_CONFIG", config)
-    monkeypatch.setattr(integration_api, "CODEX_FORWARD_TARGET", forward)
+    monkeypatch.setattr(integration_api, "_codex_forward_target", lambda: forward)
     return config, forward
 
 
@@ -188,3 +188,68 @@ def test_chatgpt_extension_dir_frozen_materializes(client, monkeypatch, tmp_path
     body2 = client.get("/api/integrations/status").json()
     assert body2["chatgpt"]["extensionDir"] == str(expected)
     assert (expected / "manifest.json").exists()
+
+
+def _freeze(monkeypatch, tmp_path):
+    """模拟 PyInstaller 冻结态：构造 _MEIPASS 捆绑目录 + 用户数据目录。"""
+    bundled = tmp_path / "bundled"
+    user_base = tmp_path / "userdata"
+    # claude-code 适配器（claude_adapter.py 与其 session_titles.json 须同目录）
+    cc = bundled / "adapters" / "claude-code"
+    cc.mkdir(parents=True)
+    (cc / "claude_adapter.py").write_text("print('adapter')", encoding="utf-8")
+    (cc / "session_titles.json").write_text("{}", encoding="utf-8")
+    # codex 适配器 + 开发态运行时产物（物化时应排除 forward_target.json）
+    cx = bundled / "adapters" / "codex"
+    cx.mkdir(parents=True)
+    (cx / "notify_chain.py").write_text("print('chain')", encoding="utf-8")
+    (cx / "forward_target.json").write_text('{"command":["dev-only"]}', encoding="utf-8")
+    monkeypatch.setattr(integration_api, "user_data_dir", lambda: user_base)
+    monkeypatch.setattr(sys, "frozen", True, raising=False)
+    monkeypatch.setattr(sys, "_MEIPASS", str(bundled), raising=False)
+    return user_base
+
+
+def test_frozen_install_materializes_adapters(client, claude_settings, codex_paths, monkeypatch, tmp_path):
+    """打包态：install 把适配器物化到用户目录，钩子/notify 指向物化路径；运行时产物不复制。"""
+    user_base = _freeze(monkeypatch, tmp_path)
+    monkeypatch.setenv("AIHUB_PYTHON", "python")  # 模拟打包态找到解释器
+
+    res = client.post("/api/integrations/claude-code/install").json()
+    assert res["success"] is True and res["changed"] is True
+    cc_dir = user_base / "adapters" / "claude-code"
+    assert (cc_dir / "claude_adapter.py").exists()
+    assert (cc_dir / "session_titles.json").exists()
+    data = json.loads(claude_settings.read_text(encoding="utf-8"))
+    cmd = data["hooks"]["Stop"][0]["hooks"][0]["command"]
+    assert str(cc_dir / "claude_adapter.py") in cmd
+    assert cmd.startswith('"python"')
+
+    config, forward = codex_paths
+    res = client.post("/api/integrations/codex/install").json()
+    assert res["success"] is True
+    cx_dir = user_base / "adapters" / "codex"
+    assert (cx_dir / "notify_chain.py").exists()
+    # 物化排除运行时产物 forward_target.json（install 时才按需写入用户目录）
+    assert not (cx_dir / "forward_target.json").exists()
+    assert "notify_chain.py" in config.read_text(encoding="utf-8")
+
+
+def test_frozen_install_without_python_returns_error(client, codex_paths, monkeypatch, tmp_path):
+    """打包态找不到 Python 时：install 返回明确错误，不写坏配置。"""
+    _freeze(monkeypatch, tmp_path)
+    monkeypatch.delenv("AIHUB_PYTHON", raising=False)
+    monkeypatch.setattr(integration_api.shutil, "which", lambda name: None)
+
+    res = client.post("/api/integrations/codex/install").json()
+    assert res["success"] is False
+    assert "Python" in res["error"]
+    config, _ = codex_paths
+    assert not config.exists()  # 未写入 config.toml
+
+
+def test_adapter_python_dev_uses_venv(monkeypatch):
+    """开发态：_adapter_python 返回仓库 .venv 的 python.exe。"""
+    monkeypatch.delattr(sys, "frozen", raising=False)
+    got = integration_api._adapter_python()
+    assert got == str(integration_api._REPO_ROOT / ".venv" / "Scripts" / "python.exe")

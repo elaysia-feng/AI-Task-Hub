@@ -27,6 +27,11 @@ a = Analysis(
         # ChatGPT 扩展：打包态由 _chatgpt_extension_dir() 物化到 %APPDATA%/AI Task Hub/chatgpt-extension
         # （_MEIPASS 是每次运行临时解压目录，Chrome 卸载扩展须指向稳定路径）
         (os.path.join(ROOT, "adapters", "chatgpt-extension"), "adapters/chatgpt-extension"),
+        # Claude Code / Codex 适配器（纯标准库，由本机系统 Python 执行）：打包态物化到
+        # %APPDATA%/AI Task Hub/adapters/*；forward_target.json / notify_debug.log 为运行时产物，
+        # 物化时排除（见 _codex_chain() 的 exclude 集合）
+        (os.path.join(ROOT, "adapters", "claude-code"), "adapters/claude-code"),
+        (os.path.join(ROOT, "adapters", "codex"), "adapters/codex"),
     ],
     hiddenimports=hiddenimports,
     hookspath=[],
