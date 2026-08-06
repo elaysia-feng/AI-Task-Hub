@@ -24,6 +24,9 @@ a = Analysis(
         (os.path.join(ROOT, "app", "database", "schema.sql"), "app/database"),
         (os.path.join(ROOT, "app", "database", "schema_sqlite.sql"), "app/database"),
         (os.path.join(ROOT, "shared", "event_schema.json"), "shared"),
+        # ChatGPT 扩展：打包态由 _chatgpt_extension_dir() 物化到 %APPDATA%/AI Task Hub/chatgpt-extension
+        # （_MEIPASS 是每次运行临时解压目录，Chrome 卸载扩展须指向稳定路径）
+        (os.path.join(ROOT, "adapters", "chatgpt-extension"), "adapters/chatgpt-extension"),
     ],
     hiddenimports=hiddenimports,
     hookspath=[],

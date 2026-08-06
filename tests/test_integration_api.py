@@ -2,6 +2,7 @@
 
 import json
 import os
+import sys
 import time
 
 import pytest
@@ -149,3 +150,41 @@ def test_integrations_status_shape(client):
     assert body["backend"]["version"]
     assert "installed" in body["claudeCode"]
     assert "stale" in body["codex"]
+
+
+def test_chatgpt_extension_dir_dev_points_to_repo(client, monkeypatch):
+    """开发态（未冻结）：扩展目录直接指向仓库源码，不做物化。"""
+    # 确保不处于冻结态（隔离其他用例的 monkeypatch 残留）
+    monkeypatch.delattr(sys, "_MEIPASS", raising=False)
+    if getattr(sys, "frozen", False):
+        monkeypatch.setattr(sys, "frozen", False)
+
+    body = client.get("/api/integrations/status").json()
+    assert body["chatgpt"]["extensionDir"] == str(
+        integration_api._REPO_ROOT / "adapters" / "chatgpt-extension"
+    )
+
+
+def test_chatgpt_extension_dir_frozen_materializes(client, monkeypatch, tmp_path):
+    """打包态（sys.frozen + _MEIPASS）：扩展被物化到持久用户目录，status 返回该路径。"""
+    bundled = tmp_path / "bundled"
+    ext_source = bundled / "adapters" / "chatgpt-extension"
+    ext_source.mkdir(parents=True)
+    (ext_source / "manifest.json").write_text('{"name": "ai-task-hub"}', encoding="utf-8")
+    (ext_source / "background.js").write_text("console.log('hub')", encoding="utf-8")
+
+    user_base = tmp_path / "userdata"
+    monkeypatch.setattr(integration_api, "user_data_dir", lambda: user_base)
+    monkeypatch.setattr(sys, "frozen", True, raising=False)
+    monkeypatch.setattr(sys, "_MEIPASS", str(bundled), raising=False)
+
+    body = client.get("/api/integrations/status").json()
+    expected = user_base / "chatgpt-extension"
+    assert body["chatgpt"]["extensionDir"] == str(expected)
+    assert (expected / "manifest.json").read_text(encoding="utf-8") == '{"name": "ai-task-hub"}'
+    assert (expected / "background.js").read_text(encoding="utf-8") == "console.log('hub')"
+
+    # 幂等：再次调用不报错，文件仍在
+    body2 = client.get("/api/integrations/status").json()
+    assert body2["chatgpt"]["extensionDir"] == str(expected)
+    assert (expected / "manifest.json").exists()

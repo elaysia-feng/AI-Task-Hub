@@ -8,6 +8,9 @@
 import functools
 import json
 import logging
+import os
+import shutil
+import sys
 import time
 from pathlib import Path
 from threading import Lock
@@ -17,7 +20,7 @@ import tomlkit
 from fastapi import APIRouter
 from pydantic import BaseModel
 
-from app.logging_config import log_dir
+from app.logging_config import log_dir, user_data_dir
 from shared.constants import APP_VERSION
 
 logger = logging.getLogger(__name__)
@@ -47,9 +50,54 @@ CODEX_CONFIG = Path.home() / ".codex" / "config.toml"
 CODEX_CHAIN = _REPO_ROOT / "adapters" / "codex" / "notify_chain.py"
 CODEX_FORWARD_TARGET = _REPO_ROOT / "adapters" / "codex" / "forward_target.json"
 
-CHATGPT_EXT_DIR = _REPO_ROOT / "adapters" / "chatgpt-extension"
 HEARTBEAT_FILE = log_dir() / "chatgpt_heartbeat.json"
 HEARTBEAT_TTL_SEC = 10 * 60
+
+# PyInstaller 打包态资源在 _MEIPASS 内的相对路径
+_CHATGPT_EXT_BUNDLED = "adapters/chatgpt-extension"
+
+
+def _chatgpt_extension_dir() -> Path:
+    """ChatGPT 扩展目录：开发态指向仓库源码（改动即时生效）；
+    打包态指向持久用户目录 %APPDATA%/AI Task Hub/chatgpt-extension，首次运行从包内复制。
+
+    不能直接指向 _MEIPASS：那是 PyInstaller 每次运行的临时解压目录（会重建/清理），
+    Chrome「加载已解压的扩展」需要稳定的可写路径，且桌面端打开该目录须真实存在。
+    """
+    if not getattr(sys, "frozen", False):
+        return _REPO_ROOT / "adapters" / "chatgpt-extension"
+    target = user_data_dir() / "chatgpt-extension"
+    _materialize_chatgpt_extension(target)
+    return target
+
+
+def _materialize_chatgpt_extension(target: Path) -> None:
+    """把打包进 exe 的扩展源码复制到持久目录（幂等：目标缺失或源更新时覆盖）。
+
+    Chrome 对已加载的未打包扩展做文件监听，覆盖文件会热加载生效，
+    因此升级后无需用户重装扩展；任何失败仅告警，不阻断 /status。
+    """
+    meipass = getattr(sys, "_MEIPASS", None)
+    if not meipass:
+        return
+    source = Path(meipass) / _CHATGPT_EXT_BUNDLED
+    if not source.is_dir():
+        logger.warning("[integrations] 打包内缺少 chatgpt-extension 资源: %s", source)
+        return
+    try:
+        target.mkdir(parents=True, exist_ok=True)
+        for src_file in source.iterdir():
+            if not src_file.is_file():
+                continue
+            dst_file = target / src_file.name
+            try:
+                if dst_file.exists() and src_file.stat().st_mtime <= dst_file.stat().st_mtime:
+                    continue
+                shutil.copy2(src_file, dst_file)
+            except OSError:
+                continue
+    except OSError as exc:
+        logger.warning("[integrations] chatgpt-extension 物化失败: %s", exc)
 
 _CLAUDE_HOOK_MARKER = "claude_adapter.py"
 _CODEX_CHAIN_MARKER = "notify_chain.py"
@@ -283,7 +331,7 @@ def integrations_status() -> dict[str, Any]:
         },
         "chatgpt": {
             **_chatgpt_online(),
-            "extensionDir": str(CHATGPT_EXT_DIR),
+            "extensionDir": str(_chatgpt_extension_dir()),
         },
         "backend": {"version": APP_VERSION, "python": _venv_python()},
     }

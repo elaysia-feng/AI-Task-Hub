@@ -12,12 +12,22 @@ from logging.handlers import BaseRotatingHandler, TimedRotatingFileHandler
 from pathlib import Path
 
 
-def log_dir() -> Path:
+def user_data_dir() -> Path:
+    """用户数据根目录：打包态 %APPDATA%/AI Task Hub（可写），开发态仓库根。
+
+    config.env / 日志 / SQLite 库 / ChatGPT 扩展等用户数据统一放这里，
+    避免写入 exe 所在目录（可能无写权限）或 _MEIPASS 临时解压目录（每次运行重建）。
+    """
     if getattr(sys, "frozen", False):
         base = Path(os.environ.get("APPDATA", str(Path.home()))) / "AI Task Hub"
     else:
         base = Path(__file__).resolve().parent.parent
-    path = base / "logs"
+    base.mkdir(parents=True, exist_ok=True)
+    return base
+
+
+def log_dir() -> Path:
+    path = user_data_dir() / "logs"
     path.mkdir(parents=True, exist_ok=True)
     return path
 
