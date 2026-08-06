@@ -87,11 +87,12 @@ jobs:
             desktop/dist/**
           if-no-files-found: warn
 
-      # softprops/action-gh-release 已 pin 到 commit SHA 2538c8b (2024-08)
-      # 升级路径：定期跑 `git ls-remote https://github.com/softprops/action-gh-release.git refs/heads/main`
+      # softprops/action-gh-release 已 pin 到 commit SHA 77fb938 (2026-08-04)
+      # 旧 pin 2538c8b 为无效 SHA（该 commit 不存在），导致 Release 工作流在 "Set up job"
+      # 阶段即失败。升级路径：定期跑 `git ls-remote https://github.com/softprops/action-gh-release.git refs/heads/main`
       # 找到新 SHA 后人工 review + 更新此处。
       - name: Publish GitHub Release
-        uses: softprops/action-gh-release@2538c8b6dd4b2de4c2c18ea73d6e14bd7e277dea
+        uses: softprops/action-gh-release@77fb938f2f95e717ce6705d2909af527263360a0
         with:
           draft: false
           generate_release_notes: true
