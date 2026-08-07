@@ -69,6 +69,22 @@ jobs:
           Get-Content electron-builder.log
           if ($code -ne 0) { exit $code }
 
+      # 防复发：latest.yml 里引用的文件名必须真实存在于 dist。
+      # 否则 electron-updater 会按该名下载 → 404（此前空格产物名被 GitHub 转成点号即踩过此坑）。
+      - name: Verify latest.yml references existing artifacts
+        working-directory: desktop
+        run: |
+          $yml = Get-Content dist/latest.yml -Raw
+          if (-not $yml) { throw 'dist/latest.yml 缺失——electron-builder 未生成更新清单' }
+          $refs = @()
+          if ($yml -match '(?m)^path:\s*(\S+)') { $refs += $Matches[1] }
+          [regex]::Matches($yml, '(?m)^\s*- url:\s*(\S+)') | ForEach-Object { $refs += $_.Groups[1].Value }
+          $refs = $refs | Select-Object -Unique
+          if ($refs.Count -eq 0) { throw 'latest.yml 未解析到任何产物引用' }
+          $missing = $refs | Where-Object { -not (Test-Path (Join-Path 'dist' $_)) }
+          if ($missing) { throw "latest.yml 引用的产物在 dist 中缺失（会导致升级 404）：$($missing -join ', ')" }
+          Write-Host "OK latest.yml 引用的产物均已生成：$($refs -join ', ')"
+
       - name: List dist artifacts
         if: always()
         working-directory: desktop

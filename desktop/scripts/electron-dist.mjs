@@ -27,7 +27,7 @@ const staging = path.join(os.tmpdir(), `ai-task-hub-build-${process.pid}-${Date.
 const ALWAYS_COPY = ['latest.yml']
 const OPTIONAL_COPY = ['builder-debug.yml']
 const ARTIFACT_RE =
-  /^AI Task Hub Setup .+\.exe(\.blockmap)?$|^AI-Task-Hub-Portable-.+\.exe$/
+  /^AI-Task-Hub-Setup-.+\.exe(\.blockmap)?$|^AI-Task-Hub-Portable-.+\.exe$/
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms))
 

@@ -58,6 +58,7 @@
       "icon": "resources/icon.ico"
     },
     "nsis": {
+      "artifactName": "AI-Task-Hub-Setup-${version}.exe",
       "oneClick": false,
       "perMachine": false,
       "allowToChangeInstallationDirectory": true,
