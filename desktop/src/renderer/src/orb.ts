@@ -87,7 +87,7 @@ export function mountOrb(): void {
   const listEl = panel.querySelector('.orb-list') as HTMLElement
   const countEl = ball.querySelector('.orb-count') as HTMLElement
 
-  const countBy = (status: TaskStatus): number => queue.filter((t) => t.status === status).length
+  const countBy = (status: TaskStatus): number => state.statusCounts[status]
 
   const dominantTone = (): string => {
     if (countBy('RUNNING')) return 'run'
@@ -126,7 +126,7 @@ export function mountOrb(): void {
     const needs = countBy('NEEDS_INPUT')
     const done = countBy('COMPLETED_UNREAD')
     const failed = countBy('FAILED_UNREAD')
-    const total = queue.length
+    const total = QUEUE_STATUSES.reduce((sum, status) => sum + countBy(status), 0)
 
     ball.dataset.tone = dominantTone()
     ball.classList.toggle('pulse', running > 0)
@@ -196,23 +196,9 @@ export function mountOrb(): void {
       btn.onclick = async (e) => {
         e.stopPropagation()
         await window.aihub.openTask(task.id)
-        await reload()
       }
       listEl.append(btn)
     }
-  }
-
-  const reload = async (): Promise<void> => {
-    try {
-      // 按种类独立分页：悬浮球只取 4 种队列状态首页，互不影响
-      const pages = await Promise.all(
-        QUEUE_STATUSES.map((status) => window.aihub.getTaskPage(status, 100, 0)),
-      )
-      queue = pages.flatMap((page) => page.tasks)
-    } catch {
-      queue = []
-    }
-    render()
   }
 
   ball.addEventListener('mouseenter', () => {
@@ -301,7 +287,6 @@ export function mountOrb(): void {
   })
   panel.querySelector('[data-act="read"]')!.addEventListener('click', async () => {
     await window.aihub.readAllTasks()
-    await reload()
   })
 
   // 壁纸切换：单击换壁纸，如果已有壁纸则弹出选择（可换或清除）
@@ -335,14 +320,14 @@ export function mountOrb(): void {
   // 初始加载壁纸状态
   void refreshWallpaper()
 
-  // 订阅共享状态而非重复注册 onTaskChanged：main.ts 已统一监听并 reload 更新 state.queue，
-  // 这里只随 state 重渲染，避免每个事件触发两次 reload（M20）
+  // 复用主面板已加载的任务与准确计数，避免切换悬浮球时重复请求后端。
+  queue = state.queue
   subscribe(() => {
     queue = state.queue
     render()
   })
 
-  void reload()
+  render()
 }
 
 export function applyUiMode(mode: 'panel' | 'orb'): void {

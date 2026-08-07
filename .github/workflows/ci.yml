@@ -38,7 +38,13 @@ jobs:
           cache-dependency-path: requirements.txt
       - name: Install dependencies
         run: pip install -r requirements.txt
-      - name: Run backend tests
+      - name: Run backend tests (SQLite)
+        env:
+          AIHUB_DB_BACKEND: sqlite
+        run: pytest -q
+      - name: Run backend tests (MySQL)
+        env:
+          AIHUB_DB_BACKEND: mysql
         run: pytest -q
 
   desktop:

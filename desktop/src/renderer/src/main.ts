@@ -165,7 +165,7 @@ function renderContent(): void {
   if (state.view === 'settings') renderSettingsView(contentEl)
   else renderTasksView(contentEl, reload, loadMore)
 
-  const count = state.queue.length
+  const count = QUEUE_STATUSES.reduce((sum, status) => sum + state.statusCounts[status], 0)
   if (queueBadge) {
     queueBadge.textContent = String(count)
     queueBadge.classList.toggle('zero', count === 0)
@@ -189,24 +189,25 @@ function scheduleReload(): void {
 }
 
 async function reload(): Promise<boolean> {
+  if (reloadTimer !== undefined) {
+    clearTimeout(reloadTimer)
+    reloadTimer = undefined
+  }
   const requestId = ++reloadRequestId
   if (state.queue.length + state.history.length === 0) {
     state.taskLoadState = 'loading'
     emit()
   }
   try {
-    // 按种类独立分页：summary + 6 种状态各拉第一页，互不影响 offset/hasMore。
-    // 每页上限 PAGE_SIZE，避免无限增长时一次载入全表（内存尖峰已修）。
-    const [summary, ...pages] = await Promise.all([
-      window.aihub.getTasksSummary(),
-      ...ALL_STATUSES.map((status) => window.aihub.getTaskPage(status, PAGE_SIZE, 0)),
-    ])
+    // 一次 IPC/HTTP 往返取回 summary + 6 种状态首屏；后续加载更多仍按状态独立分页。
+    const snapshot = await window.aihub.getTaskSnapshot(PAGE_SIZE)
     if (requestId !== reloadRequestId) return true
-    state.statusCounts = summary
+    state.statusCounts = snapshot.counts
     const byStatus = new Map<TaskStatus, HubTask[]>()
-    pages.forEach((page, i) => byStatus.set(ALL_STATUSES[i], page.tasks))
     for (const status of ALL_STATUSES) {
-      state.bucketHasMore[status] = pages[ALL_STATUSES.indexOf(status)].hasMore
+      const page = snapshot.buckets[status]
+      byStatus.set(status, page.tasks)
+      state.bucketHasMore[status] = page.hasMore
     }
     state.queue = QUEUE_STATUSES.flatMap((status) => byStatus.get(status) ?? [])
     state.history = HISTORY_STATUSES.flatMap((status) => byStatus.get(status) ?? [])

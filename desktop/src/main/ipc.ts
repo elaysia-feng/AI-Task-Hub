@@ -67,6 +67,7 @@ export function registerIpcHandlers(
     apiClient.listTasksByStatus(status as TaskStatus, limit, offset),
   )
   ipcMain.handle('tasks:summary', () => apiClient.getTasksSummary())
+  ipcMain.handle('tasks:snapshot', (_event, limit?: number) => apiClient.getTaskSnapshot(limit))
 
   ipcMain.handle('tasks:open', async (_event, id: number) => {
     try {

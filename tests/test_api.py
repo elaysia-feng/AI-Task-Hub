@@ -282,3 +282,45 @@ def test_tasks_summary_counts_by_status(client):
         "VIEWED": 1,
         "IGNORED": 0,
     }
+
+
+def test_tasks_snapshot_returns_counts_and_first_page_per_status(client):
+    """snapshot 一次返回准确计数与每种状态的独立首屏。"""
+    for i in range(2):
+        client.post(
+            "/api/events",
+            json={
+                **EVENT_PAYLOAD,
+                "externalTaskId": f"snapshot-running-{i}",
+                "eventType": "TASK_STARTED",
+            },
+        )
+    completed = client.post(
+        "/api/events",
+        json={
+            **EVENT_PAYLOAD,
+            "externalTaskId": "snapshot-viewed",
+            "eventType": "TASK_COMPLETED",
+        },
+    ).json()["taskId"]
+    client.post(f"/api/tasks/{completed}/view")
+
+    res = client.get("/api/tasks/snapshot?limit=1")
+
+    assert res.status_code == 200
+    snapshot = res.json()
+    assert snapshot["counts"]["RUNNING"] == 2
+    assert snapshot["counts"]["VIEWED"] == 1
+    assert set(snapshot["buckets"]) == {
+        "RUNNING",
+        "NEEDS_INPUT",
+        "COMPLETED_UNREAD",
+        "FAILED_UNREAD",
+        "VIEWED",
+        "IGNORED",
+    }
+    assert len(snapshot["buckets"]["RUNNING"]["tasks"]) == 1
+    assert snapshot["buckets"]["RUNNING"]["hasMore"] is True
+    assert snapshot["buckets"]["VIEWED"]["tasks"][0]["id"] == completed
+    assert snapshot["buckets"]["VIEWED"]["hasMore"] is False
+    assert snapshot["buckets"]["IGNORED"] == {"tasks": [], "hasMore": False}

@@ -62,6 +62,12 @@ export interface TaskListResult {
   tasks: HubTask[]
   hasMore: boolean
 }
+
+/** 主面板首屏快照：准确计数 + 每种状态的独立第一页 */
+export interface TaskSnapshot {
+  counts: TaskStatusSummary
+  buckets: Record<TaskStatus, TaskListResult>
+}
 export type TaskLoadState = 'loading' | 'ready' | 'error'
 export type TaskSort = 'newest' | 'oldest'
 
@@ -184,6 +190,8 @@ export interface AihubApi {
   getTaskPage(status: TaskStatus, limit?: number, offset?: number): Promise<TaskListResult>
   /** 各状态任务总数，供状态 chip/标题显示准确计数 */
   getTasksSummary(): Promise<TaskStatusSummary>
+  /** 一次拉取准确计数与全部状态首屏，避免刷新时重复 HTTP 往返 */
+  getTaskSnapshot(limit?: number): Promise<TaskSnapshot>
   /** 打开任务（唤起对应会话）；返回是否成功，失败带错误信息（后端离线/任务已删除等） */
   openTask(id: number): Promise<{ ok: boolean; err?: string }>
   ignoreTask(id: number): Promise<void>

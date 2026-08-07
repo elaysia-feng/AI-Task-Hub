@@ -14,6 +14,7 @@ const api: AihubApi = {
   getTaskPage: (status, limit?: number, offset?: number) =>
     ipcRenderer.invoke('tasks:page', status, limit, offset),
   getTasksSummary: () => ipcRenderer.invoke('tasks:summary'),
+  getTaskSnapshot: (limit?: number) => ipcRenderer.invoke('tasks:snapshot', limit),
   openTask: (id) => ipcRenderer.invoke('tasks:open', id),
   ignoreTask: (id) => ipcRenderer.invoke('tasks:ignore', id),
   deleteTask: (id) => ipcRenderer.invoke('tasks:delete', id),

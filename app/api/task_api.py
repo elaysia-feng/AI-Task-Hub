@@ -60,6 +60,23 @@ async def task_summary(request: Request) -> dict:
     return {"counts": request.app.state.task_service.status_summary()}
 
 
+@router.get("/snapshot")
+async def task_snapshot(
+    request: Request,
+    limit: int = Query(100, ge=1, le=500),
+) -> dict:
+    """返回各状态首屏与准确计数，减少桌面端首次刷新时的 HTTP 往返。"""
+    task_service = request.app.state.task_service
+    buckets = {}
+    for status in ALL_STATUSES:
+        tasks, has_more = task_service.list_by_status(status, limit, 0)
+        buckets[status] = {
+            "tasks": [_dump(task) for task in tasks],
+            "hasMore": has_more,
+        }
+    return {"counts": task_service.status_summary(), "buckets": buckets}
+
+
 @router.get("/{task_id}")
 async def get_task(request: Request, task_id: int = Path(..., gt=0)) -> dict:
     """按 ID 获取任务，供历史任务重新打开等单任务操作使用。"""

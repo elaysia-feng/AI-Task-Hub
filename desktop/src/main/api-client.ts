@@ -7,6 +7,7 @@ import type {
   TaskClearScope,
   TaskEventRecord,
   TaskListResult,
+  TaskSnapshot,
   TaskStatus,
   TaskStatusSummary,
 } from '../shared/types'
@@ -36,6 +37,13 @@ export const apiClient = {
   async getTasksSummary(): Promise<TaskStatusSummary> {
     const data = await request<{ counts: TaskStatusSummary }>('/api/tasks/summary')
     return data.counts
+  },
+
+  getTaskSnapshot(limit?: number): Promise<TaskSnapshot> {
+    const params = new URLSearchParams()
+    if (limit !== undefined) params.set('limit', String(limit))
+    const query = params.size > 0 ? '?' + params.toString() : ''
+    return request('/api/tasks/snapshot' + query)
   },
 
   async getTask(id: number): Promise<HubTask> {
