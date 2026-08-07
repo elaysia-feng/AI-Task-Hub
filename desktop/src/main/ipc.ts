@@ -52,6 +52,8 @@ export interface OrbIpc {
   dragMove: (screenX: number, screenY: number) => void
   dragEnd: () => void
   isOrb: () => boolean
+  /** 渲染层 applyUiMode 完成绘制后的回执，主进程据此解除模式切换时的隐身（防闪烁） */
+  modeApplied: () => void
 }
 
 /** 注册渲染进程可调用的全部 IPC 通道 */
@@ -165,6 +167,9 @@ export function registerIpcHandlers(
   })
   ipcMain.on('orb:drag-end', () => {
     orb?.dragEnd()
+  })
+  ipcMain.on('ui:mode-applied', () => {
+    orb?.modeApplied()
   })
 
   ipcMain.handle('packaging:build-exe', () => buildExeWithConfirm(getWindow()))

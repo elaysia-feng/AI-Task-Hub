@@ -91,6 +91,8 @@ const api: AihubApi = {
     ipcRenderer.on('ui:mode', listener)
     return () => ipcRenderer.removeListener('ui:mode', listener)
   },
+  // 模式切换回执：applyUiMode 完成绘制后通知主进程解除隐身（消除切换闪烁）
+  modeApplied: () => ipcRenderer.send('ui:mode-applied'),
 
   buildExe: () => ipcRenderer.invoke('packaging:build-exe'),
   isPackaged: () => ipcRenderer.invoke('app:is-packaged'),

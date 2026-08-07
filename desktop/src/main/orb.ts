@@ -19,6 +19,8 @@ let dragState: { sx: number; sy: number; wx: number; wy: number } | null = null
 let orbExpanded = false
 /** 面板展开方向：上方空间不足时改为向下展开（球贴窗口右上角） */
 let orbExpandDown = false
+/** 模式切换中窗口已隐身，等渲染层 applyUiMode 回执后显身（兜底超时强制显身） */
+let revealTimer: NodeJS.Timeout | null = null
 
 export function bindOrbWindow(getter: () => BrowserWindow | null): void {
   getWindow = getter
@@ -47,6 +49,34 @@ function saveOrbPos(x: number, y: number): void {
 
 function notifyMode(win: BrowserWindow): void {
   win.webContents.send('ui:mode', mode)
+}
+
+/**
+ * 模式切换前先隐身：主进程先 resize 窗口、渲染层后收到 ui:mode 才切 UI，
+ * 中间那 1~2 帧会把「旧模式的 UI 画到新窗口尺寸」——收球时面板被压成 44×44、
+ * 开面板时球被拉成 1020×660，页面就闪这两帧。隐身后再动尺寸，等渲染层回执显身。
+ */
+function hideForTransition(): void {
+  const win = getWindow()
+  if (!win || win.isDestroyed()) return
+  win.setOpacity(0)
+  if (revealTimer) clearTimeout(revealTimer)
+  // 兜底：渲染层崩溃/卡死时不能永远隐身，超时强制显身
+  revealTimer = setTimeout(() => {
+    revealTimer = null
+    if (!win.isDestroyed()) win.setOpacity(1)
+  }, 800)
+}
+
+/** 渲染层已按目标模式应用 UI 并完成绘制（applyUiMode 双 rAF 后回执），解除隐身 */
+export function onModeApplied(): void {
+  const win = getWindow()
+  if (!win || win.isDestroyed()) return
+  if (revealTimer) {
+    clearTimeout(revealTimer)
+    revealTimer = null
+  }
+  win.setOpacity(1)
 }
 
 function defaultOrbPos(): { x: number; y: number } {
@@ -97,6 +127,7 @@ export function enterOrbMode(): void {
   if (!win || win.isDestroyed()) return
 
   if (mode === 'panel') {
+    hideForTransition()
     const b = win.getBounds()
     // 只保存像样的主面板尺寸，避免把残缺尺寸当恢复目标
     if (b.width >= PANEL_MIN.width && b.height >= PANEL_MIN.height) {
@@ -137,7 +168,6 @@ export function enterOrbMode(): void {
   // 必须在仍可 resize 时改尺寸，否则 Windows 上 setBounds 常被忽略
   win.setBounds(bounds)
   win.setResizable(false)
-  win.setOpacity(1)
   if (!win.isVisible()) win.show()
   else win.showInactive()
   win.moveTop()
@@ -152,6 +182,7 @@ export function enterPanelMode(): void {
   if (!win || win.isDestroyed()) return
 
   if (mode === 'orb') {
+    hideForTransition()
     const b = win.getBounds()
     // 存球的位置用窗口左上角（收起尺寸）；向下展开时球在右上角
     if (orbExpanded) {
@@ -196,7 +227,6 @@ export function enterPanelMode(): void {
   win.setPosition(restored.x, restored.y)
 
   if (win.isMinimized()) win.restore()
-  win.setOpacity(1)
   win.show()
   win.focus()
   win.moveTop()

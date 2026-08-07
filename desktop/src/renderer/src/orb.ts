@@ -369,4 +369,7 @@ export function applyUiMode(mode: 'panel' | 'orb'): void {
       orb.classList.remove('expanded')
     }
   }
+  // 主进程在模式切换时先隐身窗口，等这里确认 UI 已应用并完成 ≥1 帧绘制后再显身，
+  // 避免「窗口先 resize、渲染层后切 UI」的中间帧把旧模式 UI 画到新尺寸（闪烁）
+  requestAnimationFrame(() => requestAnimationFrame(() => window.aihub.modeApplied()))
 }

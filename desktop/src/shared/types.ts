@@ -232,6 +232,8 @@ export interface AihubApi {
   endOrbDrag(): void
   /** 主进程切换 panel / orb 模式 */
   onUiMode(cb: (mode: 'panel' | 'orb') => void): () => void
+  /** 模式切换后通知主进程 UI 已应用（主进程据此解除隐身，消除切换闪烁） */
+  modeApplied(): void
   /** 设置页：确认后生成本地 exe 安装包 */
   buildExe(): Promise<{ ok: boolean; cancelled?: boolean; message: string; distDir?: string; missing?: 'nsis' | 'backend' | 'python' }>
   onPackagingStatus(cb: (s: { state: string; message: string }) => void): () => void

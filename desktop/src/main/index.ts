@@ -14,6 +14,7 @@ import {
   enterPanelMode,
   isOrbMode,
   moveOrbDrag,
+  onModeApplied,
   setOrbPanelExpanded,
   startOrbDrag,
   toggleOrbVisibility,
@@ -197,6 +198,7 @@ app.whenReady().then(() => {
     dragMove: moveOrbDrag,
     dragEnd: endOrbDrag,
     isOrb: isOrbMode,
+    modeApplied: onModeApplied,
   })
 
   backend.onStatusChange((status) => {
