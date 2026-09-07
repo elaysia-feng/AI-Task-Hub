@@ -96,6 +96,8 @@ function reportCompleted(messageEl, fingerprint) {
     externalTaskId: conversationId,
     title: getConversationTitle(),
     contentPreview: getPreviewText(messageEl),
+    // 全文答复随完成事件上报（不走 getPreviewText 的 200 字截断），详情面板据此展示 AI 回复
+    replyText: messageEl?.innerText ?? '',
     openTarget: 'browser',
     openUrl: location.href,
   })

@@ -24,6 +24,7 @@ dist/
 build/
 coverage/
 release/
+native-win32/obj/
 
 # ========== Node / Electron ==========
 node_modules/

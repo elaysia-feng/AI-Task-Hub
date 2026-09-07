@@ -28,6 +28,10 @@
       "type": ["string", "null"],
       "description": "任务内容摘要，例如等待输入的问题、错误信息"
     },
+    "replyText": {
+      "type": ["string", "null"],
+      "description": "AI 工具对该任务的最终答复全文（仅 CHATGPT 完成事件随事件上报；Claude Code/Codex 由服务端读本地会话记录，无需上报）"
+    },
     "projectPath": {
       "type": ["string", "null"],
       "description": "项目目录，用于打开终端恢复会话"
