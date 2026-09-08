@@ -46,6 +46,7 @@ target_link_libraries(ai-task-hub-win32 PRIVATE
     uuid
     comctl32
     comdlg32
+    advapi32
     user32
     gdi32
     ws2_32

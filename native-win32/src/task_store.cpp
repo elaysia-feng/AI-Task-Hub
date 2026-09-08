@@ -76,6 +76,14 @@ std::wstring executableDirectory() {
     }
 }
 
+std::wstring preferredDataDirectory() {
+    wchar_t value[32768]{};
+    DWORD size = sizeof(value);
+    const LSTATUS result = RegGetValueW(HKEY_CURRENT_USER, L"Software\\AI Task Hub", L"DataDirectory",
+                                        RRF_RT_REG_SZ, nullptr, value, &size);
+    return result == ERROR_SUCCESS ? std::wstring(value) : std::wstring();
+}
+
 void copyIfMissing(const std::filesystem::path &source, const std::filesystem::path &target) {
     std::error_code error;
     if (!std::filesystem::exists(source, error) || std::filesystem::exists(target, error)) return;
@@ -100,8 +108,15 @@ void migrateLegacyFiles(const std::wstring &legacyDirectory, const std::wstring 
 TaskStore::TaskStore(std::wstring dataDirectory) {
     // 便携版默认把数据库放在 exe 同目录，下载到哪里就跟随到哪里。
     // 旧版 AppData 目录只作为首次启动迁移源，不改变已有任务和主题配置。
-    legacyDataDirectory_ = dataDirectory.empty() ? roamingDataDirectory() : dataDirectory;
-    dataDirectory_ = dataDirectory.empty() ? executableDirectory() : std::move(dataDirectory);
+    const bool explicitDirectory = !dataDirectory.empty();
+    const std::wstring portableDirectory = executableDirectory();
+    legacyDataDirectory_ = explicitDirectory ? dataDirectory : roamingDataDirectory();
+    if (explicitDirectory) dataDirectory_ = std::move(dataDirectory);
+    else {
+        const std::wstring preferred = preferredDataDirectory();
+        dataDirectory_ = preferred.empty() ? portableDirectory : preferred;
+        if (!preferred.empty()) legacyDataDirectory_ = portableDirectory;
+    }
     if (dataDirectory_.empty()) dataDirectory_ = legacyDataDirectory_;
     std::error_code error;
     std::filesystem::create_directories(dataDirectory_, error);
@@ -591,8 +606,11 @@ int TaskStore::clear(const std::wstring &scope) {
     // 清理范围只接受白名单，避免未知 scope 意外退化为“清空全部”。
     std::wstring view;
     std::wstring source;
+    bool completedOnly = false;
     if (scope == L"all") {
         // no condition
+    } else if (scope == L"completed") {
+        completedOnly = true;
     } else if (scope == L"queue" || scope == L"history") {
         view = scope;
     } else if (scope.rfind(L"source:", 0) == 0) {
@@ -613,7 +631,10 @@ int TaskStore::clear(const std::wstring &scope) {
 
     std::string sql = "DELETE FROM task";
     bool hasWhere = false;
-    if (view == L"queue") {
+    if (completedOnly) {
+        sql += " WHERE status = 'COMPLETED_UNREAD'";
+        hasWhere = true;
+    } else if (view == L"queue") {
         sql += " WHERE status IN ('RUNNING','NEEDS_INPUT','COMPLETED_UNREAD','FAILED_UNREAD')";
         hasWhere = true;
     } else if (view == L"history") {
@@ -655,6 +676,59 @@ int TaskStore::markAllViewed() {
     if (!exec("COMMIT")) return 0;
     notifyChanged();
     return static_cast<int>(taskIds.size());
+}
+
+bool TaskStore::backupToDirectory(const std::wstring &directory, std::wstring &error) const {
+    std::lock_guard lock(mutex_);
+    if (!db_) { error = L"数据库尚未初始化。"; return false; }
+    if (directory.empty()) { error = L"请选择有效的存储目录。"; return false; }
+    try {
+        const std::filesystem::path destinationDirectory = std::filesystem::absolute(directory).lexically_normal();
+        const std::filesystem::path currentDirectory = std::filesystem::absolute(dataDirectory_).lexically_normal();
+        if (destinationDirectory == currentDirectory) {
+            error = L"所选目录就是当前存储位置。";
+            return false;
+        }
+        std::error_code fsError;
+        std::filesystem::create_directories(destinationDirectory, fsError);
+        if (fsError) { error = L"无法创建所选目录：" + destinationDirectory.wstring(); return false; }
+        const std::filesystem::path destinationDatabase = destinationDirectory / L"data.sqlite";
+        if (std::filesystem::exists(destinationDatabase, fsError)) {
+            error = L"所选目录已存在 data.sqlite。为避免覆盖数据，请选择空目录。";
+            return false;
+        }
+        sqlite3 *destination = nullptr;
+        const std::string destinationUtf8 = pathUtf8(destinationDatabase.wstring());
+        if (sqlite3_open_v2(destinationUtf8.c_str(), &destination,
+                            SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE | SQLITE_OPEN_FULLMUTEX, nullptr) != SQLITE_OK) {
+            error = L"无法在所选目录创建数据库。";
+            if (destination) sqlite3_close_v2(destination);
+            return false;
+        }
+        sqlite3_backup *backup = sqlite3_backup_init(destination, "main", db_, "main");
+        bool copied = backup && sqlite3_backup_step(backup, -1) == SQLITE_DONE;
+        if (backup && sqlite3_backup_finish(backup) != SQLITE_OK) copied = false;
+        if (sqlite3_close_v2(destination) != SQLITE_OK) copied = false;
+        if (!copied) {
+            std::filesystem::remove(destinationDatabase, fsError);
+            error = L"复制数据库失败，当前数据未受影响。";
+            return false;
+        }
+        const std::filesystem::path currentSettings = currentDirectory / L"AI Task Hub.ini";
+        const std::filesystem::path destinationSettings = destinationDirectory / L"AI Task Hub.ini";
+        fsError.clear();
+        if (std::filesystem::exists(currentSettings, fsError) && !std::filesystem::exists(destinationSettings, fsError)) {
+            std::filesystem::copy_file(currentSettings, destinationSettings, std::filesystem::copy_options::none, fsError);
+            if (fsError) {
+                error = L"数据库已复制，但偏好设置复制失败；存储位置尚未切换。";
+                return false;
+            }
+        }
+        return true;
+    } catch (...) {
+        error = L"迁移数据库时发生文件系统错误，当前数据未受影响。";
+        return false;
+    }
 }
 
 bool TaskStore::darkMode() const { return setting(L"darkMode") != L"false"; }

@@ -117,6 +117,12 @@ export function registerIpcHandlers(
     if (!Number.isInteger(id) || id <= 0) return []
     return apiClient.getTaskEvents(id)
   })
+  ipcMain.handle('tasks:ai-reply', (_event, taskId: number) => {
+    const id = Number(taskId)
+    // 非法 id 返回 null：渲染层以「暂无答复」占位（与 tasks:events 的 [] 同思路）
+    if (!Number.isInteger(id) || id <= 0) return null
+    return apiClient.getTaskAiReply(id)
+  })
   ipcMain.handle('shell:open-path', (_event, target: string) => {
     if (!isAllowedOpenPath(target)) {
       return { err: 'Disallowed path: must be under user home directory' }

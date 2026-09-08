@@ -250,11 +250,11 @@ std::string HttpServer::route(const std::string &method, const std::string &targ
     const std::string path = pathOnly(target);
     const auto query = queryParams(target);
     if (method == "GET" && path == "/api/health") {
-        return std::string("{\"status\":\"") + (store_.ready() ? "ok" : "degraded") + "\",\"service\":\"AI Task Hub Win32\",\"version\":\"0.3.0-win32\"}";
+        return std::string("{\"status\":\"") + (store_.ready() ? "ok" : "degraded") + "\",\"service\":\"AI Task Hub Win32\",\"version\":\"0.3.1-win32\"}";
     }
     if (method == "GET" && path == "/api/status") {
         const auto snapshot = store_.snapshot(1);
-        return std::string("{\"status\":\"") + (store_.ready() ? "ok" : "degraded") + "\",\"version\":\"0.3.0-win32\",\"runtime\":\"C++/Win32/Direct2D\",\"db\":{\"ok\":" + (store_.ready() ? "true" : "false") + ",\"backend\":\"sqlite\",\"database\":\"" + jsonlite::escapeUtf8(store_.databasePath()) + "\"},\"tasks\":" + std::to_string(snapshot.counts.total) + "}";
+        return std::string("{\"status\":\"") + (store_.ready() ? "ok" : "degraded") + "\",\"version\":\"0.3.1-win32\",\"runtime\":\"C++/Win32/Direct2D\",\"db\":{\"ok\":" + (store_.ready() ? "true" : "false") + ",\"backend\":\"sqlite\",\"database\":\"" + jsonlite::escapeUtf8(store_.databasePath()) + "\"},\"tasks\":" + std::to_string(snapshot.counts.total) + "}";
     }
     if (method == "GET" && path == "/api/integrations/status") {
         return integrations_.statusJson();
@@ -349,7 +349,7 @@ std::string HttpServer::route(const std::string &method, const std::string &targ
     if (method == "DELETE" && path == "/api/tasks") {
         if (query.find("confirm") == query.end() || query.at("confirm") != "true") { status = 400; statusText = "Bad Request"; return jsonError("confirm=true is required"); }
         const std::wstring scope = queryWide(query, "scope").empty() ? L"all" : queryWide(query, "scope");
-        const bool simpleScope = scope == L"all" || scope == L"queue" || scope == L"history";
+        const bool simpleScope = scope == L"all" || scope == L"completed" || scope == L"queue" || scope == L"history";
         const bool sourceScope = scope.rfind(L"source:", 0) == 0 ||
                                  scope.rfind(L"queue:source:", 0) == 0 ||
                                  scope.rfind(L"history:source:", 0) == 0;

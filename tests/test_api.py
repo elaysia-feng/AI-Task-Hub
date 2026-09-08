@@ -112,6 +112,40 @@ def test_clear_tasks_by_scope(client):
     assert client.delete("/api/tasks?scope=queue").status_code == 400
 
 
+def test_clear_completed_tasks_only_removes_completed_messages(client):
+    """completed 作用域只删除已完成未读消息，不影响其他待处理状态。
+
+    Args:
+        client: API 测试客户端。
+
+    Returns:
+        None。
+    """
+    # 1. 准备已完成、失败和执行中的任务。
+    completed_id = client.post(
+        "/api/events",
+        json={**EVENT_PAYLOAD, "externalTaskId": "scope-completed", "eventType": "TASK_COMPLETED"},
+    ).json()["taskId"]
+    failed_id = client.post(
+        "/api/events",
+        json={**EVENT_PAYLOAD, "externalTaskId": "scope-failed", "eventType": "TASK_FAILED"},
+    ).json()["taskId"]
+    running_id = client.post(
+        "/api/events",
+        json={**EVENT_PAYLOAD, "externalTaskId": "scope-running", "eventType": "TASK_STARTED"},
+    ).json()["taskId"]
+
+    # 2. 执行仅针对已完成消息的清理。
+    res = client.delete("/api/tasks?confirm=true&scope=completed")
+
+    # 3. 已完成被删除，其他状态仍可访问。
+    assert res.status_code == 200
+    assert res.json() == {"success": True, "deleted": 1}
+    assert client.get(f"/api/tasks/{completed_id}").status_code == 404
+    assert client.get(f"/api/tasks/{failed_id}").status_code == 200
+    assert client.get(f"/api/tasks/{running_id}").status_code == 200
+
+
 def test_websocket_broadcasts_tasks_cleared(client):
     client.post("/api/events", json=EVENT_PAYLOAD)
     with client.websocket_connect("/ws/tasks") as ws:

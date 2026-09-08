@@ -49,6 +49,7 @@ const api: AihubApi = {
   installClaude: () => ipcRenderer.invoke('integrations:install-claude'),
   installCodex: () => ipcRenderer.invoke('integrations:install-codex'),
   getTaskEvents: (taskId) => ipcRenderer.invoke('tasks:events', taskId),
+  getTaskAiReply: (taskId) => ipcRenderer.invoke('tasks:ai-reply', taskId),
   openPath: (target) => ipcRenderer.invoke('shell:open-path', target),
 
   getWallpaper: () => ipcRenderer.invoke('wallpaper:get'),

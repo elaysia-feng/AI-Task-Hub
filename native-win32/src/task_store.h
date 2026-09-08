@@ -87,6 +87,8 @@ public:
     bool remove(std::int64_t id);
     int clear(const std::wstring &scope);
     int markAllViewed();
+    // 把当前 SQLite 一致性快照复制到新目录；当前数据库保持打开且不会被删除。
+    bool backupToDirectory(const std::wstring &directory, std::wstring &error) const;
 
     bool setTheme(const std::wstring &theme);
     bool setUserIconPreset(const std::wstring &preset);

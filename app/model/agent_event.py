@@ -39,6 +39,7 @@ class AgentEvent(BaseModel):
     external_task_id: Optional[str] = None
     title: Optional[str] = None
     content_preview: Optional[str] = None
+    reply_text: Optional[str] = None
     project_path: Optional[str] = None
     open_target: Optional[str] = None
     open_url: Optional[str] = None

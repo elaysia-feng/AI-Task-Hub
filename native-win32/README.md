@@ -27,7 +27,7 @@
 
 ## 保留的行为
 
-- 默认使用 exe 所在目录的 `data.sqlite`，下载到哪里数据就跟随到哪里；首次启动会从旧 `%APPDATA%\AI Task Hub` 迁移已有任务、事件流水、主题和头像配置。
+- 默认使用 exe 所在目录的 `data.sqlite`，下载到哪里数据就跟随到哪里；也可在「设置 → 数据与通知」选择其他文件夹。切换时使用 SQLite 一致性备份复制现有数据，重启生效并保留旧数据库。
 - `127.0.0.1:17891` 提供 `/api/events`、任务快照、详情、事件流水、已读/忽略/清理等接口，适配器无需改协议。
 - 主窗口保留壁纸、头像、GPT 网页 / Claude Code / Codex / 其他来源分类、状态颜色、任务详情与生命周期事件时间线。
 - 设置页恢复三类真实接入：Claude Code 写入 `%USERPROFILE%\\.claude\\settings.json`，Codex 写入 `%USERPROFILE%\\.codex\\config.toml`，适配器脚本复制到 `%APPDATA%\\AI Task Hub\\adapters`；重复点击会更新到当前发布版路径，不会重复追加钩子。
@@ -43,7 +43,8 @@
 - 卡片按钮绑定被点击的任务；历史和详情删除前二次确认；打开目标失败不标记已读。
 - 详情中的摘要、完整答复及事件列表独立滚动，底部操作固定；窄窗口改用单栏详情。
 - 悬停小球后可点击消息查看详情、打开面板或一键已读；拖动与点击分开判定，丢失鼠标捕获会取消操作。
-- 系统通知可开关，深浅色和通知偏好保存到便携目录。
+- 系统通知和 Windows 登录后自动启动均可独立开关；开机启动只写入当前用户启动项，不要求管理员权限。
+- 深浅色和通知偏好保存在当前数据库目录，迁移数据库时一起复制。
 
 ## 接入安全与限制
 
@@ -62,9 +63,9 @@ Claude Code 的标准配置是 `.claude/settings.json`，不是 `.claudecode`。
 .\native-win32\test-win32.ps1
 ```
 
-`-StageOnly` 生成 `dist/AI Task Hub Win32.next.exe`，便于先验证后替换正在使用的版本。测试涵盖 JSON 中文/emoji/数字精度、接入备份与幂等、TOML 根表与注释、扩展心跳、任务筛选/已读/按来源删除、事件级联及偏好持久化。测试副本保存在 `obj/test-fixtures-*`。
+`-StageOnly` 生成 `dist/AI Task Hub Win32.next.exe`，便于先验证后替换正在使用的版本。测试涵盖 JSON 中文/emoji/数字精度、接入备份与幂等、TOML 根表与注释、扩展心跳、任务筛选/已读/按来源删除、事件级联、偏好持久化及数据库迁移。测试副本保存在 `obj/test-fixtures-*`。
 
-`tests/verify-ui.ps1` 用于隔离版 GUI 截图与交互验证，需要先关闭现有窗口，并提供带独立数据库的测试 exe；不能直接用于日常数据库。该脚本会检查服务返回的数据库位置后才生成测试消息。
+`tests/verify-ui.ps1` 用于隔离版 GUI 截图与交互验证，需要先关闭现有窗口，并提供复制到独立空目录的测试 exe；不能直接用于日常安装目录。脚本会创建空测试库并检查服务返回的数据库位置，避免迁入真实 AppData 旧库。
 
 ## 便携版打包
 
@@ -73,10 +74,10 @@ Claude Code 的标准配置是 `.claude/settings.json`，不是 `.claudecode`。
 ```powershell
 .\native-win32\build-win32.ps1 -StageOnly
 .\native-win32\test-win32.ps1
-.\native-win32\package-portable.ps1 -Version 0.3.0
+.\native-win32\package-portable.ps1 -Version 0.3.1
 ```
 
-ZIP 与 SHA256 校验文件位于 `native-win32/release/`。发布使用独立标签 `win32-v0.3.0`，不会触发现有 Electron 的 `v*` 构建流程。MinGW 运行库已静态链接，无需分发 `libwinpthread-1.dll`。
+ZIP 与 SHA256 校验文件位于 `native-win32/release/`。发布使用独立标签 `win32-v0.3.1`，不会触发现有 Electron 的 `v*` 构建流程。MinGW 运行库已静态链接，无需分发 `libwinpthread-1.dll`。
 
 ## 资源与内存
 

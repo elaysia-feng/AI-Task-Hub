@@ -1,6 +1,6 @@
 /* 任务视图：待处理 / 历史 + 搜索筛选 + 右侧详情面板（事件时间线 + 原始载荷） */
 
-import type { HubTask, TaskSource, TaskStatus } from '../../../shared/types'
+import type { HubTask, TaskClearScope, TaskSource, TaskStatus } from '../../../shared/types'
 import { EVENT_LABELS, SOURCE_LABELS, STATUS_LABELS, displayTitle } from '../../../shared/labels'
 import { HISTORY_STATUSES, QUEUE_STATUSES, emit, filteredTasks, state } from '../state'
 import { h, showToast, svgIcon, type IconName } from './dom'
@@ -31,6 +31,12 @@ function statusCount(status: TaskStatus): number {
 function viewTotal(view: 'queue' | 'history'): number {
   const statuses = view === 'history' ? HISTORY_STATUSES : QUEUE_STATUSES
   return statuses.reduce((sum, s) => sum + statusCount(s), 0)
+}
+
+type ClearButtonScope = Exclude<TaskClearScope, 'all'>
+
+function clearScopeCount(scope: ClearButtonScope): number {
+  return scope === 'completed' ? statusCount('COMPLETED_UNREAD') : viewTotal(scope)
 }
 
 const SOURCE_OPTIONS: Array<{ value: TaskSource | 'all'; label: string }> = [
@@ -64,13 +70,15 @@ export function renderTasksView(container: HTMLElement, reloadTasks: ReloadTasks
   // 一键清理按当前 tab 独立：待处理 tab 只清 queue 状态，历史 tab 只清 history 状态
   const clearBtn = makeClearButton(reloadTasks, view)
   clearBtn.disabled = viewTotal(view) === 0
+  const completedBtn = view === 'queue' ? makeClearButton(reloadTasks, 'completed') : null
+  if (completedBtn) completedBtn.disabled = statusCount('COMPLETED_UNREAD') === 0
   const readAllBtn = makeReadAllButton(reloadTasks)
   readAllBtn.disabled = unreadCount() === 0
 
   const summary = summaryText()
   const headerKids: Array<string | HTMLElement> = [h('h1', '', [title])]
   if (summary) headerKids.push(h('span', 'summary', [summary]))
-  headerKids.push(h('div', 'header-actions', [readAllBtn, clearBtn]))
+  headerKids.push(h('div', 'header-actions', [readAllBtn, ...(completedBtn ? [completedBtn] : []), clearBtn]))
 
   container.append(
     h('div', 'view-chrome', [
@@ -280,13 +288,19 @@ function makeReadAllButton(reloadTasks: ReloadTasks): HTMLButtonElement {
   return btn
 }
 
-/* 一键清理：按 tab 独立（scope=queue/history）。第一次点击进入确认态，3.2s 内再次点击才执行，避免误删 */
-function makeClearButton(reloadTasks: ReloadTasks, scope: 'queue' | 'history'): HTMLButtonElement {
-  const isQueue = scope === 'queue'
-  const label = isQueue ? '清理待处理' : '清理历史'
-  const unit = isQueue ? '个待处理任务' : '条历史记录'
+/* 一键清理：第一次点击进入确认态，3.2s 内再次点击才执行，避免误删 */
+function makeClearButton(reloadTasks: ReloadTasks, scope: ClearButtonScope): HTMLButtonElement {
+  const label =
+    scope === 'completed' ? '删除已完成' : scope === 'queue' ? '清理待处理' : '清理历史'
+  const unit =
+    scope === 'completed' ? '条已完成消息' : scope === 'queue' ? '个待处理任务' : '条历史记录'
   const btn = h('button', 'btn danger clear-btn', [svgIcon('trash'), label])
-  btn.title = isQueue ? '清空全部待处理任务（执行中/等待输入/已完成/失败）' : '清空全部历史记录（已查看/已忽略）'
+  btn.title =
+    scope === 'completed'
+      ? '删除全部已完成消息，不影响执行中、等待输入或失败消息'
+      : scope === 'queue'
+        ? '清空全部待处理任务（执行中/等待输入/已完成/失败）'
+        : '清空全部历史记录（已查看/已忽略）'
   let armed = false
   let timer = 0
 
@@ -301,7 +315,7 @@ function makeClearButton(reloadTasks: ReloadTasks, scope: 'queue' | 'history'): 
   btn.onclick = async () => {
     if (!armed) {
       window.clearTimeout(timer) // clear any stale timer from previous renders
-      const total = viewTotal(scope)
+      const total = clearScopeCount(scope)
       armed = true
       btn.classList.add('armed')
       btn.replaceChildren(svgIcon('trash'), `确认清空 ${total} ${unit}？`)
@@ -560,6 +574,7 @@ function makeDetailPane(task: HubTask, reloadTasks: ReloadTasks): HTMLElement {
   }
 
   const timelineBox = h('div', 'timeline', [h('div', 'timeline-loading', ['加载事件时间线…'])])
+  const aiReplyBox = h('div', 'ai-reply', [h('div', 'ai-reply-loading', ['加载 AI 答复…'])])
 
   const pane = h('aside', 'detail-pane', [
     h('div', 'detail-head', [
@@ -580,6 +595,8 @@ function makeDetailPane(task: HubTask, reloadTasks: ReloadTasks): HTMLElement {
         : []),
     ]),
     h('div', 'detail-actions', [openBtn]),
+    h('div', 'detail-section-title', ['任务相关答复']),
+    aiReplyBox,
     h('div', 'detail-section-title', ['事件时间线']),
     timelineBox,
   ])
@@ -625,6 +642,28 @@ function makeDetailPane(task: HubTask, reloadTasks: ReloadTasks): HTMLElement {
       if (!pane.isConnected) return
       timelineBox.textContent = ''
       timelineBox.append(h('div', 'timeline-loading', ['事件加载失败（后端离线？）']))
+    })
+
+  window.aihub
+    .getTaskAiReply(taskId)
+    .then((result) => {
+      // Discard if task changed or pane was unmounted
+      if (state.selectedTaskId !== taskId) return
+      if (!pane.isConnected) return
+      aiReplyBox.textContent = ''
+      if (result?.content) {
+        aiReplyBox.append(h('pre', 'ai-reply-content', [result.content]))
+      } else {
+        // 尽力而为展示：缺本地会话记录（result 为 null 或 content=null）出 muted 提示
+        aiReplyBox.append(h('div', 'ai-reply-empty', [result?.error ?? '暂无答复']))
+      }
+    })
+    .catch(() => {
+      // Discard if task changed or pane was unmounted
+      if (state.selectedTaskId !== taskId) return
+      if (!pane.isConnected) return
+      aiReplyBox.textContent = ''
+      aiReplyBox.append(h('div', 'ai-reply-empty', ['答复加载失败（后端离线？）']))
     })
 
   return pane

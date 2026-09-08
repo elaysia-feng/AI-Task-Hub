@@ -15,6 +15,9 @@ _MAX_TITLE_LEN = 512
 _MAX_OPEN_URL_LEN = 2048
 _MAX_PROJECT_PATH_LEN = 1024
 _MAX_EXTERNAL_ID_LEN = 128
+# 与 app/service/ai_reply.py 显示端上限一致：全文答复入库截断，保护 MySQL JSON 列、
+# 详情时间线渲染与扩展离线补偿队列（chrome.storage.local 10MB 配额）
+_MAX_REPLY_TEXT_LEN = 200_000
 
 
 class SimpleRateLimiter:
@@ -74,6 +77,8 @@ def _truncate_event(event: AgentEvent) -> AgentEvent:
         updates["project_path"] = event.project_path[:_MAX_PROJECT_PATH_LEN] + "…(truncated)"
     if event.external_task_id and len(event.external_task_id) > _MAX_EXTERNAL_ID_LEN:
         updates["external_task_id"] = event.external_task_id[:_MAX_EXTERNAL_ID_LEN] + "…(truncated)"
+    if event.reply_text and len(event.reply_text) > _MAX_REPLY_TEXT_LEN:
+        updates["reply_text"] = event.reply_text[:_MAX_REPLY_TEXT_LEN] + "…(truncated)"
     if updates:
         return event.model_copy(update=updates)
     return event

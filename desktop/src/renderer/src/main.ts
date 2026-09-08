@@ -174,7 +174,9 @@ function renderContent(): void {
 
 /* ---------- 数据 ---------- */
 
-const PAGE_SIZE = 100
+// 首屏按六种状态分别请求；100 会让空闲桌面端常驻至多 600 个完整任务对象。
+// 任务列表已有独立“加载更多”，40 条足够首屏浏览且不会牺牲历史访问能力。
+const PAGE_SIZE = 40
 let reloadRequestId = 0
 let reloadTimer: ReturnType<typeof setTimeout> | undefined
 

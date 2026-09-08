@@ -5,7 +5,11 @@ import { app } from 'electron'
 import { BACKEND_CMD, BACKEND_CWD, HEALTH_URL } from './config'
 import type { BackendStatus } from '../shared/types'
 
-const POLL_INTERVAL_MS = 2000
+// 后端健康时由 WebSocket 接收任务事件，轮询只负责发现后端被手动关闭；
+// 低频探测能减少常驻 IPC/HTTP 与 SQLite/MySQL 空查询。
+const ONLINE_POLL_INTERVAL_MS = 15_000
+// 启动、崩溃恢复期间需要更快探测，避免用户长时间看到“连接中”。
+const OFFLINE_POLL_INTERVAL_MS = 2_000
 const HEALTH_TIMEOUT_MS = 1500
 const RESPAWN_COOLDOWN_MS = 30_000
 
@@ -53,8 +57,9 @@ export class BackendManager {
 
   private async tick(): Promise<void> {
     if (this.stopped) return
+    let healthy = false
     try {
-      const healthy = await this.checkHealth()
+      healthy = await this.checkHealth()
       if (healthy) {
         this.setStatus('online')
       } else {
@@ -70,7 +75,10 @@ export class BackendManager {
       // 任何意外异常都不允许打断轮询：记日志并继续排下一次 tick
       console.error('[backend] tick error:', err)
     }
-    if (!this.stopped) this.timer = setTimeout(() => void this.tick(), POLL_INTERVAL_MS)
+    if (!this.stopped) {
+      const delay = healthy ? ONLINE_POLL_INTERVAL_MS : OFFLINE_POLL_INTERVAL_MS
+      this.timer = setTimeout(() => void this.tick(), delay)
+    }
   }
 
   private async checkHealth(): Promise<boolean> {

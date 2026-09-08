@@ -99,6 +99,7 @@ int wmain(int argc, wchar_t **argv) {
         check(!manager.status().chatgptOnline, "future heartbeat rejected");
 
         const auto database = root / L"database";
+        const auto relocatedDatabase = root / L"relocated-database";
         {
             TaskStore store(database.wstring());
             check(store.ready() && store.snapshot().counts.total == 0, "isolated database");
@@ -112,12 +113,27 @@ int wmain(int argc, wchar_t **argv) {
             check(store.events(first).empty() && store.snapshot().counts.total == 1, "delete cascades only selected task");
             check(store.clear(L"nonsense") == 0, "unknown delete scope rejected");
             check(store.setStatus(second, L"IGNORED"), "ignore task");
+            const auto completed = store.ingest(json("{\"source\":\"CODEX\",\"externalTaskId\":\"three\",\"eventType\":\"TASK_COMPLETED\",\"title\":\"待删除完成消息\"}"));
+            check(completed > 0 && store.clear(L"completed") == 1, "completed-only deletion");
+            check(store.events(completed).empty() && store.snapshot().counts.total == 1, "completed deletion cascades events");
             store.setDarkMode(false); store.setNotificationsEnabled(false);
+            std::wstring migrationError;
+            check(store.backupToDirectory(relocatedDatabase.wstring(), migrationError), "database snapshot migration");
+            check(std::filesystem::exists(database / L"data.sqlite"), "source database retained");
+            check(std::filesystem::exists(relocatedDatabase / L"data.sqlite"), "destination database created");
+            check(std::filesystem::exists(relocatedDatabase / L"AI Task Hub.ini"), "settings copied with database");
+            check(!store.backupToDirectory(relocatedDatabase.wstring(), migrationError), "existing database is not overwritten");
         }
         {
             TaskStore store(database.wstring());
             check(!store.darkMode() && !store.notificationsEnabled(), "settings persist");
             check(store.snapshot().counts.ignored == 1, "task status persists");
+        }
+        {
+            TaskStore relocated(relocatedDatabase.wstring());
+            check(relocated.ready(), "relocated database opens");
+            check(!relocated.darkMode() && !relocated.notificationsEnabled(), "relocated settings persist");
+            check(relocated.snapshot().counts.ignored == 1, "relocated task data persists");
         }
         std::cout << "PASS " << checks << " checks; isolated fixtures retained for inspection\n";
         return 0;

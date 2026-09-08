@@ -20,6 +20,10 @@ public static class HubUiVerify {
 [HubUiVerify]::SetProcessDPIAware() | Out-Null
 New-Item -ItemType Directory -Path $OutputDirectory -Force | Out-Null
 if ([HubUiVerify]::FindWindow('AI_TASK_HUB_WIN32_WINDOW', 'AI Task Hub') -ne [IntPtr]::Zero) { throw '请先关闭已有任务中心，避免操作真实窗口' }
+$databasePath = Join-Path ([IO.Path]::GetDirectoryName($Executable)) 'data.sqlite'
+if (Test-Path -LiteralPath $databasePath) { throw 'GUI 验证目录必须是没有现有数据库的隔离目录' }
+# 先放置空数据库文件，阻止便携版把真实 AppData 旧库迁移进测试目录；应用启动后会自动建表。
+New-Item -ItemType File -Path $databasePath | Out-Null
 $process = Start-Process -FilePath $Executable -WorkingDirectory (Resolve-Path (Join-Path $PSScriptRoot '../..')).Path -PassThru
 $cursor = New-Object HubUiVerify+Point
 [HubUiVerify]::GetCursorPos([ref]$cursor) | Out-Null
@@ -132,7 +136,7 @@ try {
     Click 250 209
     Click 484 417
     $afterIgnore = Invoke-RestMethod 'http://127.0.0.1:17891/api/tasks?view=history&source=CHATGPT'
-    if ($afterIgnore.tasks.Count -ne 2) { throw '卡片忽略操作没有命中 GPT 消息' }
+    if ($afterIgnore.tasks.Count -ne 1) { throw '卡片忽略操作没有命中 GPT 消息' }
     $codexQueue = Invoke-RestMethod 'http://127.0.0.1:17891/api/tasks?view=queue&source=CODEX'
     if ($codexQueue.tasks.Count -ne 1) { throw '忽略操作影响了其他来源' }
     Shot '11a-card-action'

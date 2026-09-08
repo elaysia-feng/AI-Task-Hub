@@ -12,6 +12,7 @@
 #include <commctrl.h>
 #include <commdlg.h>
 #include <shlobj.h>
+#include <shobjidl.h>
 #include <wrl/client.h>
 
 #include <algorithm>
@@ -43,6 +44,78 @@ constexpr int kOrbPanelInset = 10;
 // 与旧版截图的 1004×644 内容比例保持一致，启动时给用户一个稳定的宽屏工作区。
 constexpr int kPanelWidth = 1004;
 constexpr int kPanelHeight = 644;
+constexpr wchar_t kApplicationRegistryKey[] = L"Software\\AI Task Hub";
+constexpr wchar_t kRunRegistryKey[] = L"Software\\Microsoft\\Windows\\CurrentVersion\\Run";
+constexpr wchar_t kRunValueName[] = L"AI Task Hub Win32";
+
+std::wstring modulePath() {
+    std::vector<wchar_t> buffer(512);
+    for (;;) {
+        const DWORD length = GetModuleFileNameW(nullptr, buffer.data(), static_cast<DWORD>(buffer.size()));
+        if (length == 0) return {};
+        if (length < buffer.size() - 1) return std::wstring(buffer.data(), length);
+        buffer.resize(buffer.size() * 2);
+    }
+}
+
+std::wstring readRegistryString(const wchar_t *subKey, const wchar_t *valueName) {
+    DWORD size = 0;
+    if (RegGetValueW(HKEY_CURRENT_USER, subKey, valueName, RRF_RT_REG_SZ, nullptr, nullptr, &size) != ERROR_SUCCESS || size < sizeof(wchar_t)) return {};
+    std::wstring value(size / sizeof(wchar_t), L'\0');
+    if (RegGetValueW(HKEY_CURRENT_USER, subKey, valueName, RRF_RT_REG_SZ, nullptr, value.data(), &size) != ERROR_SUCCESS) return {};
+    while (!value.empty() && value.back() == L'\0') value.pop_back();
+    return value;
+}
+
+bool writeRegistryString(const wchar_t *subKey, const wchar_t *valueName, const std::wstring &value, std::wstring &error) {
+    HKEY key = nullptr;
+    if (RegCreateKeyExW(HKEY_CURRENT_USER, subKey, 0, nullptr, 0, KEY_SET_VALUE, nullptr, &key, nullptr) != ERROR_SUCCESS) {
+        error = L"无法写入当前用户设置。";
+        return false;
+    }
+    const LSTATUS result = RegSetValueExW(key, valueName, 0, REG_SZ,
+        reinterpret_cast<const BYTE *>(value.c_str()), static_cast<DWORD>((value.size() + 1) * sizeof(wchar_t)));
+    RegCloseKey(key);
+    if (result == ERROR_SUCCESS) return true;
+    error = L"保存当前用户设置失败（Windows 错误 " + std::to_wstring(result) + L"）。";
+    return false;
+}
+
+bool autoStartEnabled() {
+    const std::wstring expected = L"\"" + modulePath() + L"\"";
+    return CompareStringOrdinal(readRegistryString(kRunRegistryKey, kRunValueName).c_str(), -1,
+                                expected.c_str(), -1, TRUE) == CSTR_EQUAL;
+}
+
+bool setAutoStartEnabled(bool enabled, std::wstring &error) {
+    if (enabled) return writeRegistryString(kRunRegistryKey, kRunValueName, L"\"" + modulePath() + L"\"", error);
+    HKEY key = nullptr;
+    const LSTATUS opened = RegOpenKeyExW(HKEY_CURRENT_USER, kRunRegistryKey, 0, KEY_SET_VALUE, &key);
+    if (opened == ERROR_FILE_NOT_FOUND) return true;
+    if (opened != ERROR_SUCCESS) { error = L"无法打开开机启动设置。"; return false; }
+    const LSTATUS removed = RegDeleteValueW(key, kRunValueName);
+    RegCloseKey(key);
+    if (removed == ERROR_SUCCESS || removed == ERROR_FILE_NOT_FOUND) return true;
+    error = L"关闭开机启动失败（Windows 错误 " + std::to_wstring(removed) + L"）。";
+    return false;
+}
+
+std::wstring chooseDirectory(HWND owner) {
+    ComPtr<IFileOpenDialog> dialog;
+    if (FAILED(CoCreateInstance(CLSID_FileOpenDialog, nullptr, CLSCTX_INPROC_SERVER, IID_PPV_ARGS(&dialog)))) return {};
+    FILEOPENDIALOGOPTIONS options{};
+    dialog->GetOptions(&options);
+    dialog->SetOptions(options | FOS_PICKFOLDERS | FOS_FORCEFILESYSTEM | FOS_PATHMUSTEXIST);
+    dialog->SetTitle(L"选择 AI Task Hub 数据库存储目录");
+    if (FAILED(dialog->Show(owner))) return {};
+    ComPtr<IShellItem> item;
+    if (FAILED(dialog->GetResult(&item))) return {};
+    PWSTR path = nullptr;
+    if (FAILED(item->GetDisplayName(SIGDN_FILESYSPATH, &path)) || !path) return {};
+    const std::wstring result(path);
+    CoTaskMemFree(path);
+    return result;
+}
 
 // 离屏 DIB + ID2D1DCRenderTarget + UpdateLayeredWindow 渲染管线。
 // DIB 的 biHeight 取负数表示自顶向下、与 D2D1 默认像素布局一致，
@@ -206,6 +279,17 @@ enum HitId {
     HitIntegrationOpenDir = 41,
     HitResetFilters = 42,
     HitNotifications = 43,
+    HitAutoStart = 44,
+    HitChangeDataDirectory = 45,
+    HitCleanupBackdrop = 60,
+    HitCleanupQueue = 61,
+    HitCleanupCompleted = 62,
+    HitCleanupHistory = 63,
+    HitCleanupSources = 64,
+    HitCleanupAll = 65,
+    HitCleanupSourceBase = 66,
+    HitCleanupConfirmYes = 70,
+    HitCleanupConfirmNo = 71,
     HitSettingsTabBase = 50,
     HitThemeBase = 100,
     HitIconBase = 200,
@@ -213,14 +297,6 @@ enum HitId {
     HitStatusBase = 400,
     HitCardBase = 1000,
 };
-
-constexpr UINT kClearQueueCommand = 1001;
-constexpr UINT kClearHistoryCommand = 1002;
-constexpr UINT kClearAllCommand = 1003;
-constexpr UINT kClearChatGptCommand = 1011;
-constexpr UINT kClearClaudeCommand = 1012;
-constexpr UINT kClearCodexCommand = 1013;
-constexpr UINT kClearOtherCommand = 1014;
 
 RECT rectFrom(int left, int top, int right, int bottom) { return RECT{left, top, right, bottom}; }
 
@@ -295,6 +371,7 @@ public:
         blurLevel_ = store_.backgroundBlurLevel();
         darkMode_ = store_.darkMode();
         notificationsEnabled_ = store_.notificationsEnabled();
+        autoStartEnabled_ = autoStartEnabled();
     }
     ~Win32App() {
         if (hwnd_) Shell_NotifyIconW(NIM_DELETE, &tray_);
@@ -761,6 +838,13 @@ private:
 
     const Palette &palette() const { return darkMode_ ? kPaletteDark : kPaletteLight; }
 
+    D2D1_COLOR_F taskCardSurface(bool elevated = false) const {
+        const Palette &p = palette();
+        if (darkMode_) return elevated ? p.cardHover : p.card;
+        // 任务页和设置页都保持可见壁纸的玻璃层次；悬停/选中时只提高一点不透明度。
+        return colorFromArgb(elevated ? 0x9cf9fcffu : 0x78f6f9ffu);
+    }
+
     void toggleDarkMode() {
         darkMode_ = !darkMode_;
         store_.setDarkMode(darkMode_);
@@ -927,6 +1011,7 @@ private:
         renderSidebar(width, height);
         if (page_ == 2) renderSettings(width, height);
         else renderTasks(width, height);
+        if (cleanupMenuOpen_ || clearConfirmationOpen_) renderCleanupOverlay(width, height);
     }
 
     void renderTitlebar(int width, int /*height*/) {
@@ -1178,7 +1263,7 @@ private:
             const bool filtered = !search_.empty() || !sourceFilter_.empty() || !statusFilter_.empty();
             const int emptyTop = contentTop + 18;
             fillRound(static_cast<float>(left), static_cast<float>(emptyTop),
-                      static_cast<float>(listRight), static_cast<float>(emptyTop + 156), 18, p.card);
+                      static_cast<float>(listRight), static_cast<float>(emptyTop + 156), 18, taskCardSurface());
             circle(static_cast<float>((left + listRight) / 2), static_cast<float>(emptyTop + 60), 28, p.accentSoft);
             textCentered(filtered ? L"没有匹配的任务" : (history ? L"暂无历史任务" : L"全部处理完毕"),
                  static_cast<float>(left + 20), static_cast<float>(emptyTop + 96),
@@ -1318,7 +1403,7 @@ private:
         // 卡片底
         fillRound(static_cast<float>(x), static_cast<float>(y),
                   static_cast<float>(x + width), static_cast<float>(y + height), 18,
-                  selected ? p.cardHover : (hot ? p.cardHover : p.card));
+                  taskCardSurface(selected || hot));
         strokeRound(static_cast<float>(x), static_cast<float>(y),
                     static_cast<float>(x + width), static_cast<float>(y + height), 18, 1,
                     selected ? p.accentLine : p.border);
@@ -1404,7 +1489,7 @@ private:
         const int detailBottom = height - 22;
         // 卡片底
         fillRound(static_cast<float>(left), static_cast<float>(top),
-                  static_cast<float>(right), static_cast<float>(detailBottom), 18, p.card);
+                  static_cast<float>(right), static_cast<float>(detailBottom), 18, taskCardSurface());
         strokeRound(static_cast<float>(left), static_cast<float>(top),
                     static_cast<float>(right), static_cast<float>(detailBottom), 18, 1, p.border);
         // 头部
@@ -1587,7 +1672,7 @@ private:
         const int contentTop = 166;
         const int contentBottom = height - 14;
         const int presetCardHeight = width < 960 ? 372 : 300;
-        const int totalContentHeight = settingsTab_ == 0 ? presetCardHeight * 2 + 188 : (settingsTab_ == 1 ? 384 : 318);
+        const int totalContentHeight = settingsTab_ == 0 ? presetCardHeight * 2 + 188 : (settingsTab_ == 1 ? 384 : 412);
         const int maxScroll = std::max(0, totalContentHeight - (contentBottom - contentTop));
         scrollOffset_ = std::clamp(scrollOffset_, 0, maxScroll);
         target()->PushAxisAlignedClip(D2D1::RectF(0, static_cast<float>(contentTop),
@@ -1659,92 +1744,92 @@ private:
         y += 258;
         }
         if (settingsTab_ == 2) {
-        // 存储后端 136：标题、引擎说明、路径和操作按钮分成独立行，避免互相压字。
+        // 数据库位置和数据操作放在同一张卡片中，所有操作按钮保持等宽、同行。
         if (sectionTopVisible(y)) {
-            renderSettingsCard(left, y, right, y + 136, L"存储后端", L"");
-            text(L"SQLite WAL · 低内存模式",
+            renderSettingsCard(left, y, right, y + 196, L"数据库存储", L"");
+            text(L"当前位置",
                  static_cast<float>(left + 20), static_cast<float>(y + 44),
-                 static_cast<float>(right - 20), static_cast<float>(y + 62),
-                 13, p.textPrimary, true);
-            // 数据库路径 elide middle
-            text(shorten(store_.databasePath(), 80),
-                 static_cast<float>(left + 20), static_cast<float>(y + 66),
-                 static_cast<float>(right - 200), static_cast<float>(y + 84),
-                 10.5f, p.textSecondary, false, true);
-            // 打开数据目录
-            const int oDirX = right - 360, oDirY = y + 94, oDirW = 110;
-            const bool hotODir = hotHit_ == HitSectionOpenDir;
-            fillRound(static_cast<float>(oDirX), static_cast<float>(oDirY),
-                      static_cast<float>(oDirX + oDirW), static_cast<float>(oDirY + 30), 15,
-                      hotODir ? p.cardHover : p.card);
-            strokeRound(static_cast<float>(oDirX), static_cast<float>(oDirY),
-                        static_cast<float>(oDirX + oDirW), static_cast<float>(oDirY + 30), 15, 1, p.border);
-            textCentered(L"打开数据目录", static_cast<float>(oDirX), static_cast<float>(oDirY),
-                         static_cast<float>(oDirX + oDirW), static_cast<float>(oDirY + 30),
-                         11, p.textSecondary);
-            addHit(HitSectionOpenDir, rectFrom(oDirX, oDirY, oDirX + oDirW, oDirY + 30));
-            const int markRX = right - 240, markRW = 110;
-            const bool hotMarkR = hotHit_ == HitSectionMarkRead;
-            fillRound(static_cast<float>(markRX), static_cast<float>(oDirY),
-                      static_cast<float>(markRX + markRW), static_cast<float>(oDirY + 30), 15,
-                      hotMarkR ? p.cardHover : p.card);
-            strokeRound(static_cast<float>(markRX), static_cast<float>(oDirY),
-                        static_cast<float>(markRX + markRW), static_cast<float>(oDirY + 30), 15, 1, p.border);
-            textCentered(L"全部标记已读", static_cast<float>(markRX), static_cast<float>(oDirY),
-                         static_cast<float>(markRX + markRW), static_cast<float>(oDirY + 30),
-                         11, p.textSecondary);
-            addHit(HitSectionMarkRead, rectFrom(markRX, oDirY, markRX + markRW, oDirY + 30));
-            const int clrX = right - 120, clrW = 100;
-            const bool hotClr = hotHit_ == HitSectionClearAll;
-            fillRound(static_cast<float>(clrX), static_cast<float>(oDirY),
-                      static_cast<float>(clrX + clrW), static_cast<float>(oDirY + 30), 15,
-                      hotClr ? p.cardHover : p.card);
-            strokeRound(static_cast<float>(clrX), static_cast<float>(oDirY),
-                        static_cast<float>(clrX + clrW), static_cast<float>(oDirY + 30), 15, 1, p.border);
-            textCentered(L"清空全部", static_cast<float>(clrX), static_cast<float>(oDirY),
-                         static_cast<float>(clrX + clrW), static_cast<float>(oDirY + 30),
-                         11, p.textSecondary);
-            addHit(HitSectionClearAll, rectFrom(clrX, oDirY, clrX + clrW, oDirY + 30));
+                 static_cast<float>(left + 96), static_cast<float>(y + 64),
+                 11, p.muted, true);
+            text(shorten(store_.databasePath(), 104),
+                 static_cast<float>(left + 96), static_cast<float>(y + 43),
+                 static_cast<float>(right - 20), static_cast<float>(y + 65),
+                 11, p.textSecondary, false, true);
+            if (!pendingDataDirectory_.empty()) {
+                text(L"重启后使用", static_cast<float>(left + 20), static_cast<float>(y + 74),
+                     static_cast<float>(left + 96), static_cast<float>(y + 94), 11, p.accent, true);
+                text(shorten(pendingDataDirectory_ + L"\\data.sqlite", 104),
+                     static_cast<float>(left + 96), static_cast<float>(y + 73),
+                     static_cast<float>(right - 20), static_cast<float>(y + 95),
+                     11, p.accent, false, true);
+            } else {
+                text(L"选择新文件夹后会复制现有数据，重启生效；旧数据库继续保留。",
+                     static_cast<float>(left + 20), static_cast<float>(y + 74),
+                     static_cast<float>(right - 20), static_cast<float>(y + 96),
+                     11, p.muted);
+            }
+            const int buttonTop = y + 132;
+            const int gap = 10;
+            const int buttonLeft = left + 20;
+            const int buttonWidth = (right - left - 40 - gap * 3) / 4;
+            const auto drawAction = [&](int index, const wchar_t *label, int hitId, bool danger = false) {
+                const int x = buttonLeft + index * (buttonWidth + gap);
+                const bool hot = hotHit_ == hitId;
+                fillRound(static_cast<float>(x), static_cast<float>(buttonTop),
+                          static_cast<float>(x + buttonWidth), static_cast<float>(buttonTop + 34), 16,
+                          hot ? p.cardHover : p.card);
+                strokeRound(static_cast<float>(x), static_cast<float>(buttonTop),
+                            static_cast<float>(x + buttonWidth), static_cast<float>(buttonTop + 34), 16, 1,
+                            danger ? p.danger : p.border);
+                textCentered(label, static_cast<float>(x), static_cast<float>(buttonTop),
+                             static_cast<float>(x + buttonWidth), static_cast<float>(buttonTop + 34),
+                             11, danger ? p.danger : p.textSecondary, hot);
+                addHit(hitId, rectFrom(x, buttonTop, x + buttonWidth, buttonTop + 34));
+            };
+            drawAction(0, L"打开数据目录", HitSectionOpenDir);
+            drawAction(1, L"更改存储位置", HitChangeDataDirectory);
+            drawAction(2, L"全部标记已读", HitSectionMarkRead);
+            drawAction(3, L"清空全部", HitSectionClearAll, true);
         }
-        y += 158;
-        // 运行状态 112
+        y += 218;
+        // 开机启动与系统通知均为独立开关，状态和值在同一水平线上。
         if (sectionTopVisible(y)) {
-            renderSettingsCard(left, y, right, y + 160, L"消息通知", L"");
-            text(L"任务完成、失败或等待输入时显示系统通知", left + 20, y + 80, right - 170, y + 106, 12, p.textSecondary);
-            fillRound(right - 140, y + 74, right - 20, y + 108, 14, p.accentSoft);
-            textCentered(notificationsEnabled_ ? L"通知已开启" : L"通知已关闭", right - 140, y + 74, right - 20, y + 108, 12, p.accent, true);
-            addHit(HitNotifications, rectFrom(right - 140, y + 74, right - 20, y + 108));
+            renderSettingsCard(left, y, right, y + 194, L"启动与通知", L"");
             const bool ready = server_.running();
             const D2D1_COLOR_F runDot = ready ? p.success : p.danger;
             circle(static_cast<float>(left + 24), static_cast<float>(y + 54), 4, runDot);
-            text(ready ? L"运行中" : L"初始化失败",
+            text(ready ? L"本地服务运行中" : L"本地服务初始化失败",
                  static_cast<float>(left + 34), static_cast<float>(y + 46),
-                 static_cast<float>(right - 200), static_cast<float>(y + 66),
+                 static_cast<float>(right - 20), static_cast<float>(y + 66),
                  13, p.textPrimary, true);
-            y += 46;
-            const int darkBtnX = right - 200, darkBtnW = 80;
-            const bool hotDark = hotHit_ == HitThemeToggle;
-            fillRound(static_cast<float>(darkBtnX), static_cast<float>(y + 70),
-                      static_cast<float>(darkBtnX + darkBtnW), static_cast<float>(y + 100), 15,
-                      hotDark ? p.cardHover : p.card);
-            strokeRound(static_cast<float>(darkBtnX), static_cast<float>(y + 70),
-                        static_cast<float>(darkBtnX + darkBtnW), static_cast<float>(y + 100), 15, 1, p.border);
-            textCentered(darkMode_ ? L"深色" : L"浅色",
-                         static_cast<float>(darkBtnX), static_cast<float>(y + 70),
-                         static_cast<float>(darkBtnX + darkBtnW), static_cast<float>(y + 100),
-                         11, p.textSecondary);
-            addHit(HitThemeToggle, rectFrom(darkBtnX, y + 70, darkBtnX + darkBtnW, y + 100));
-            const int orbBtnX = right - 110, orbBtnW = 90;
-            const bool hotOrbBtn = hotHit_ == HitEnterOrb;
-            fillRound(static_cast<float>(orbBtnX), static_cast<float>(y + 70),
-                      static_cast<float>(orbBtnX + orbBtnW), static_cast<float>(y + 100), 15,
-                      hotOrbBtn ? p.cardHover : p.card);
-            strokeRound(static_cast<float>(orbBtnX), static_cast<float>(y + 70),
-                        static_cast<float>(orbBtnX + orbBtnW), static_cast<float>(y + 100), 15, 1, p.border);
-            textCentered(L"收起为悬浮球", static_cast<float>(orbBtnX), static_cast<float>(y + 70),
-                         static_cast<float>(orbBtnX + orbBtnW), static_cast<float>(y + 100),
-                         11, p.textSecondary);
-            addHit(HitEnterOrb, rectFrom(orbBtnX, y + 70, orbBtnX + orbBtnW, y + 100));
+            const auto drawToggleRow = [&](int rowTop, const wchar_t *title, const wchar_t *description,
+                                           bool enabled, int hitId) {
+                text(title, static_cast<float>(left + 20), static_cast<float>(rowTop),
+                     static_cast<float>(right - 170), static_cast<float>(rowTop + 22),
+                     12.5f, p.textPrimary, true);
+                text(description, static_cast<float>(left + 20), static_cast<float>(rowTop + 23),
+                     static_cast<float>(right - 170), static_cast<float>(rowTop + 45),
+                     11, p.muted);
+                const int toggleLeft = right - 132;
+                const int toggleTop = rowTop + 5;
+                fillRound(static_cast<float>(toggleLeft), static_cast<float>(toggleTop),
+                          static_cast<float>(right - 20), static_cast<float>(toggleTop + 34), 17,
+                          enabled ? p.accentSoft : p.card);
+                strokeRound(static_cast<float>(toggleLeft), static_cast<float>(toggleTop),
+                            static_cast<float>(right - 20), static_cast<float>(toggleTop + 34), 17, 1,
+                            enabled ? p.accentLine : p.border);
+                textCentered(enabled ? L"已开启" : L"已关闭",
+                             static_cast<float>(toggleLeft), static_cast<float>(toggleTop),
+                             static_cast<float>(right - 20), static_cast<float>(toggleTop + 34),
+                             11, enabled ? p.accent : p.textSecondary, true);
+                addHit(hitId, rectFrom(toggleLeft, toggleTop, right - 20, toggleTop + 34));
+            };
+            drawToggleRow(y + 78, L"消息通知", L"任务完成、失败或等待输入时显示系统通知",
+                          notificationsEnabled_, HitNotifications);
+            fillRound(static_cast<float>(left + 20), static_cast<float>(y + 133),
+                      static_cast<float>(right - 20), static_cast<float>(y + 134), 1, p.border);
+            drawToggleRow(y + 145, L"开机启动", L"登录 Windows 后自动启动并常驻悬浮球",
+                          autoStartEnabled_, HitAutoStart);
         }
         }
         clearHitClip();
@@ -2179,8 +2264,55 @@ private:
         InvalidateRect(hwnd_, nullptr, FALSE);
     }
 
+    void changeDataDirectory() {
+        const std::wstring selected = chooseDirectory(hwnd_);
+        if (selected.empty()) return;
+        const std::wstring prompt = L"将当前数据库完整复制到：\n\n" + selected +
+            L"\n\n下次启动将使用新位置，旧数据库会保留。是否继续？";
+        if (MessageBoxW(hwnd_, prompt.c_str(), L"更改数据库存储位置",
+                        MB_YESNO | MB_ICONQUESTION | MB_DEFBUTTON2) != IDYES) return;
+        std::wstring error;
+        if (!store_.backupToDirectory(selected, error)) {
+            MessageBoxW(hwnd_, error.c_str(), L"存储位置未更改", MB_OK | MB_ICONWARNING);
+            return;
+        }
+        if (!writeRegistryString(kApplicationRegistryKey, L"DataDirectory", selected, error)) {
+            const std::wstring message = error + L"\n\n数据库副本已保留在所选目录，但当前存储位置未切换。";
+            MessageBoxW(hwnd_, message.c_str(), L"存储位置未更改", MB_OK | MB_ICONWARNING);
+            return;
+        }
+        pendingDataDirectory_ = selected;
+        MessageBoxW(hwnd_, L"数据库和偏好设置已复制。\n\n请退出并重新打开 AI Task Hub，新存储位置才会生效。旧数据库不会自动删除。",
+                    L"迁移完成", MB_OK | MB_ICONINFORMATION);
+    }
+
     void performHit(int id) {
         if (id != HitSearch) searchFocus_ = false;
+        if (id == HitCleanupBackdrop) {
+            if (cleanupMenuOpen_) cancelClearConfirmation();
+            return;
+        }
+        if (id == HitCleanupQueue) { confirmClear(L"queue", L"个待处理任务", snapshot_.counts.queue); return; }
+        if (id == HitCleanupCompleted) {
+            confirmClear(L"completed", L"条已完成消息", snapshot_.counts.completedUnread);
+            return;
+        }
+        if (id == HitCleanupHistory) { confirmClear(L"history", L"条历史记录", snapshot_.counts.history); return; }
+        if (id == HitCleanupAll) { confirmClear(L"all", L"个任务", snapshot_.counts.total); return; }
+        if (id == HitCleanupSources) {
+            cleanupSourceMenuOpen_ = !cleanupSourceMenuOpen_;
+            InvalidateRect(hwnd_, nullptr, FALSE);
+            return;
+        }
+        if (id >= HitCleanupSourceBase && id < HitCleanupSourceBase + 4) {
+            static constexpr const wchar_t *sources[] = {L"CHATGPT", L"CLAUDE_CODE", L"CODEX", L"OTHER"};
+            static constexpr const wchar_t *labels[] = {L"个 GPT 网页任务", L"个 Claude Code 任务", L"个 Codex 任务", L"个其他来源任务"};
+            const int index = id - HitCleanupSourceBase;
+            confirmClear(L"source:" + std::wstring(sources[index]), labels[index], countForSource(sources[index]));
+            return;
+        }
+        if (id == HitCleanupConfirmYes) { executeClearConfirmation(); return; }
+        if (id == HitCleanupConfirmNo) { cancelClearConfirmation(); return; }
         if (id == HitClose) { PostMessageW(hwnd_, WM_CLOSE, 0, 0); return; }
         if (id == HitMinimize || id == HitEnterOrb) { enterOrbMode(); return; }
         if (id == HitCleanupMenu) { showCleanupMenu(); return; }
@@ -2222,6 +2354,13 @@ private:
             notificationsEnabled_ = !notificationsEnabled_;
             store_.setNotificationsEnabled(notificationsEnabled_);
         }
+        else if (id == HitAutoStart) {
+            std::wstring error;
+            const bool next = !autoStartEnabled_;
+            if (setAutoStartEnabled(next, error)) autoStartEnabled_ = next;
+            else MessageBoxW(hwnd_, error.c_str(), L"开机启动设置失败", MB_OK | MB_ICONWARNING);
+        }
+        else if (id == HitChangeDataDirectory) changeDataDirectory();
         else if (id == HitResetFilters) { search_.clear(); sourceFilter_.clear(); statusFilter_.clear(); scrollOffset_ = 0; }
         else if (id == HitQueue) { page_ = 0; selectedId_ = 0; scrollOffset_ = 0; statusFilter_.clear(); }
         else if (id == HitHistory) { page_ = 1; selectedId_ = 0; scrollOffset_ = 0; statusFilter_.clear(); }
@@ -2374,76 +2513,210 @@ private:
 
     void confirmClear(const std::wstring &scope, const std::wstring &label, int count) {
         if (count <= 0) return;
-        const std::wstring message = L"确定永久删除 " + std::to_wstring(count) + L" " + label +
-                                     L"吗？\n\n对应的事件流水也会一起删除，此操作不可恢复。";
-        if (MessageBoxW(hwnd_, message.c_str(), L"确认清理任务", MB_YESNO | MB_ICONWARNING | MB_DEFBUTTON2) != IDYES) return;
+        pendingClearScope_ = scope;
+        pendingClearLabel_ = label;
+        pendingClearCount_ = count;
+        cleanupMenuOpen_ = false;
+        cleanupSourceMenuOpen_ = false;
+        clearConfirmationOpen_ = true;
+        SetFocus(hwnd_);
+        InvalidateRect(hwnd_, nullptr, FALSE);
+    }
+
+    void showCleanupMenu() {
+        cleanupMenuOpen_ = true;
+        cleanupSourceMenuOpen_ = false;
+        SetFocus(hwnd_);
+        InvalidateRect(hwnd_, nullptr, FALSE);
+    }
+
+    void cancelClearConfirmation() {
+        clearConfirmationOpen_ = false;
+        cleanupMenuOpen_ = false;
+        cleanupSourceMenuOpen_ = false;
+        pendingClearScope_.clear();
+        pendingClearLabel_.clear();
+        pendingClearCount_ = 0;
+        InvalidateRect(hwnd_, nullptr, FALSE);
+    }
+
+    void executeClearConfirmation() {
+        if (!clearConfirmationOpen_) return;
+        const std::wstring scope = pendingClearScope_;
+        clearConfirmationOpen_ = false;
+        cleanupMenuOpen_ = false;
+        cleanupSourceMenuOpen_ = false;
+        pendingClearScope_.clear();
+        pendingClearLabel_.clear();
+        pendingClearCount_ = 0;
         store_.clear(scope);
         selectedId_ = 0;
         refreshSnapshot();
     }
 
-    void showCleanupMenu() {
-        HMENU menu = CreatePopupMenu();
-        if (!menu) return;
-        const auto flagsFor = [](int count) { return static_cast<UINT>(MF_STRING | (count > 0 ? 0 : MF_GRAYED)); };
+    void renderCleanupOverlay(int width, int height) {
+        const Palette &p = palette();
+        addHit(HitCleanupBackdrop, rectFrom(0, 0, width, height));
+        if (clearConfirmationOpen_) {
+            fillRect(0, 0, static_cast<float>(width), static_cast<float>(height),
+                     darkMode_ ? colorFromArgb(0x66000000u) : colorFromArgb(0x520b1420u));
+            const int dialogW = std::min(480, width - 32);
+            const int dialogH = 214;
+            const int left = (width - dialogW) / 2;
+            const int top = std::max(24, (height - dialogH) / 2);
+            const int right = left + dialogW;
+            fillRound(static_cast<float>(left + 8), static_cast<float>(top + 10),
+                      static_cast<float>(right + 8), static_cast<float>(top + dialogH + 10), 18,
+                      colorFromArgb(0x30000000u));
+            fillRound(static_cast<float>(left), static_cast<float>(top),
+                      static_cast<float>(right), static_cast<float>(top + dialogH), 18,
+                      darkMode_ ? colorFromArgb(0xf3222731u) : colorFromArgb(0xeaf7faffu));
+            strokeRound(static_cast<float>(left), static_cast<float>(top),
+                        static_cast<float>(right), static_cast<float>(top + dialogH), 18, 1,
+                        darkMode_ ? colorFromArgb(0x42ffffffu) : p.border);
+
+            const float iconX = static_cast<float>(left + 40);
+            const float iconY = static_cast<float>(top + 69);
+            circle(iconX, iconY, 22, darkMode_ ? colorFromArgb(0x35f59e0bu) : colorFromArgb(0x30c95f43u));
+            circleStroke(iconX, iconY, 22, 1, blend(p.warning, 0.65f));
+            textCentered(L"!", iconX - 14, iconY - 16, iconX + 14, iconY + 16, 18, p.warning, true);
+            text(L"确认清理任务", static_cast<float>(left + 72), static_cast<float>(top + 22),
+                 static_cast<float>(right - 24), static_cast<float>(top + 48), 15, p.textPrimary, true);
+            const std::wstring prompt = L"确定永久删除 " + std::to_wstring(pendingClearCount_) +
+                                        L" " + pendingClearLabel_ + L"吗？";
+            text(prompt, static_cast<float>(left + 72), static_cast<float>(top + 58),
+                 static_cast<float>(right - 24), static_cast<float>(top + 88), 12.5f, p.textPrimary, false, true);
+            text(L"对应的事件流水也会一起删除，此操作不可恢复。",
+                 static_cast<float>(left + 72), static_cast<float>(top + 94),
+                 static_cast<float>(right - 24), static_cast<float>(top + 122), 11.5f, p.textSecondary, false, true);
+
+            const int buttonH = 36;
+            const int buttonW = 112;
+            const int buttonGap = 10;
+            const int buttonY = top + dialogH - buttonH - 18;
+            const int noX = right - 20 - buttonW;
+            const int yesX = noX - buttonGap - buttonW;
+            const auto drawButton = [&](int x, const wchar_t *label, int id, bool destructive) {
+                const bool hot = hotHit_ == id;
+                const D2D1_COLOR_F background = destructive
+                    ? (darkMode_ ? colorFromArgb(hot ? 0x55ef4444u : 0x36ef4444u)
+                                 : colorFromArgb(hot ? 0x45c95f43u : 0x2ac95f43u))
+                    : (hot ? p.cardHover : p.card);
+                fillRound(static_cast<float>(x), static_cast<float>(buttonY),
+                          static_cast<float>(x + buttonW), static_cast<float>(buttonY + buttonH), 14, background);
+                strokeRound(static_cast<float>(x), static_cast<float>(buttonY),
+                            static_cast<float>(x + buttonW), static_cast<float>(buttonY + buttonH), 14, 1,
+                            destructive ? blend(p.danger, 0.65f) : p.border);
+                textCentered(label, static_cast<float>(x), static_cast<float>(buttonY),
+                             static_cast<float>(x + buttonW), static_cast<float>(buttonY + buttonH),
+                             12, destructive ? p.danger : p.textSecondary, true);
+                addHit(id, rectFrom(x, buttonY, x + buttonW, buttonY + buttonH));
+            };
+            drawButton(yesX, L"删除", HitCleanupConfirmYes, true);
+            drawButton(noX, L"取消", HitCleanupConfirmNo, false);
+            return;
+        }
+
+        const int pageRight = width - 22;
+        const int clearX = pageRight - 330;
+        const int menuW = 270;
+        const int menuRight = clearX + 100;
+        const int menuLeft = std::clamp(menuRight - menuW, 12, std::max(12, width - menuW - 12));
+        const int menuTop = 120;
+        const int rowH = 34;
+        const int padding = 10;
+        const int separator = 12;
+        const int queueY = menuTop + padding;
+        const int completedY = queueY + rowH;
+        const int historyY = completedY + rowH;
+        const int sourceY = historyY + rowH + separator;
+        const int allY = sourceY + rowH + separator;
+        const int menuBottom = allY + rowH + padding;
+        fillRound(static_cast<float>(menuLeft + 7), static_cast<float>(menuTop + 9),
+                  static_cast<float>(menuRight + 7), static_cast<float>(menuBottom + 9), 14,
+                  colorFromArgb(0x30000000u));
+        fillRound(static_cast<float>(menuLeft), static_cast<float>(menuTop),
+                  static_cast<float>(menuRight), static_cast<float>(menuBottom), 14,
+                  darkMode_ ? colorFromArgb(0xf21b2029u) : colorFromArgb(0xeef7f9ffu));
+        strokeRound(static_cast<float>(menuLeft), static_cast<float>(menuTop),
+                    static_cast<float>(menuRight), static_cast<float>(menuBottom), 14, 1,
+                    darkMode_ ? colorFromArgb(0x38ffffffu) : p.border);
+
+        const auto drawRow = [&](int y, const std::wstring &label, int id, int count, bool enabled) {
+            const bool hot = enabled && hotHit_ == id;
+            if (hot) fillRound(static_cast<float>(menuLeft + 6), static_cast<float>(y),
+                               static_cast<float>(menuRight - 6), static_cast<float>(y + rowH), 9,
+                               darkMode_ ? colorFromArgb(0x24ffffffu) : colorFromArgb(0x28c95f43u));
+            circle(static_cast<float>(menuLeft + 17), static_cast<float>(y + rowH / 2), 3,
+                   enabled ? p.accent : blend(p.muted, 0.55f));
+            text(label, static_cast<float>(menuLeft + 30), static_cast<float>(y + 8),
+                 static_cast<float>(menuRight - 28), static_cast<float>(y + rowH - 7),
+                 12, enabled ? p.textPrimary : blend(p.muted, 0.62f), enabled);
+            if (enabled) addHit(id, rectFrom(menuLeft + 6, y, menuRight - 6, y + rowH));
+        };
         const int queueCount = snapshot_.counts.queue;
+        const int completedCount = snapshot_.counts.completedUnread;
         const int historyCount = snapshot_.counts.history;
         const int allCount = snapshot_.counts.total;
-        const std::wstring queueLabel = L"删除待处理（" + std::to_wstring(queueCount) + L"）";
-        const std::wstring historyLabel = L"删除历史（" + std::to_wstring(historyCount) + L"）";
-        const std::wstring allLabel = L"删除全部任务（" + std::to_wstring(allCount) + L"）";
-        AppendMenuW(menu, flagsFor(queueCount), kClearQueueCommand, queueLabel.c_str());
-        AppendMenuW(menu, flagsFor(historyCount), kClearHistoryCommand, historyLabel.c_str());
-        AppendMenuW(menu, MF_SEPARATOR, 0, nullptr);
+        drawRow(queueY, L"删除待处理（" + std::to_wstring(queueCount) + L"）",
+                HitCleanupQueue, queueCount, queueCount > 0);
+        drawRow(completedY, L"删除已完成（" + std::to_wstring(completedCount) + L"）",
+                HitCleanupCompleted, completedCount, completedCount > 0);
+        drawRow(historyY, L"删除历史（" + std::to_wstring(historyCount) + L"）",
+                HitCleanupHistory, historyCount, historyCount > 0);
+        line(static_cast<float>(menuLeft + 14), static_cast<float>(sourceY - 6),
+             static_cast<float>(menuRight - 14), static_cast<float>(sourceY - 6), 1, p.border);
+        const bool sourceHot = hotHit_ == HitCleanupSources;
+        if (sourceHot) fillRound(static_cast<float>(menuLeft + 6), static_cast<float>(sourceY),
+                                 static_cast<float>(menuRight - 6), static_cast<float>(sourceY + rowH), 9,
+                                 darkMode_ ? colorFromArgb(0x24ffffffu) : colorFromArgb(0x28c95f43u));
+        circle(static_cast<float>(menuLeft + 17), static_cast<float>(sourceY + rowH / 2), 3, p.accent);
+        text(L"按来源删除", static_cast<float>(menuLeft + 30), static_cast<float>(sourceY + 8),
+             static_cast<float>(menuRight - 40), static_cast<float>(sourceY + rowH - 7), 12, p.textPrimary);
+        textCentered(L"›", static_cast<float>(menuRight - 32), static_cast<float>(sourceY + 1),
+                     static_cast<float>(menuRight - 12), static_cast<float>(sourceY + rowH - 1), 17, p.textSecondary);
+        addHit(HitCleanupSources, rectFrom(menuLeft + 6, sourceY, menuRight - 6, sourceY + rowH));
+        line(static_cast<float>(menuLeft + 14), static_cast<float>(allY - 6),
+             static_cast<float>(menuRight - 14), static_cast<float>(allY - 6), 1, p.border);
+        drawRow(allY, L"删除全部任务（" + std::to_wstring(allCount) + L"）",
+                HitCleanupAll, allCount, allCount > 0);
 
-        HMENU sourceMenu = CreatePopupMenu();
-        if (sourceMenu) {
-            const std::array<std::pair<UINT, const wchar_t *>, 4> sources{{
-                {kClearChatGptCommand, L"CHATGPT"}, {kClearClaudeCommand, L"CLAUDE_CODE"},
-                {kClearCodexCommand, L"CODEX"}, {kClearOtherCommand, L"OTHER"},
-            }};
-            for (const auto &[command, source] : sources) {
-                const int count = countForSource(source);
-                const std::wstring label = sourceLabel(source) + L"（" + std::to_wstring(count) + L"）";
-                AppendMenuW(sourceMenu, flagsFor(count), command, label.c_str());
-            }
-            AppendMenuW(menu, MF_POPUP, reinterpret_cast<UINT_PTR>(sourceMenu), L"按来源删除");
+        if (!cleanupSourceMenuOpen_) return;
+        const int sourceW = 194;
+        const int sourceTop = sourceY - 6;
+        const bool openLeft = menuLeft >= sourceW + 20;
+        const int sourceLeft = openLeft
+            ? menuLeft - sourceW - 8
+            : std::min(width - sourceW - 12, menuRight + 8);
+        const int sourceRight = sourceLeft + sourceW;
+        const int sourceBottom = sourceTop + padding + 4 * rowH;
+        fillRound(static_cast<float>(sourceLeft + 7), static_cast<float>(sourceTop + 9),
+                  static_cast<float>(sourceRight + 7), static_cast<float>(sourceBottom + 9), 14,
+                  colorFromArgb(0x30000000u));
+        fillRound(static_cast<float>(sourceLeft), static_cast<float>(sourceTop),
+                  static_cast<float>(sourceRight), static_cast<float>(sourceBottom), 14,
+                  darkMode_ ? colorFromArgb(0xf21b2029u) : colorFromArgb(0xeef7f9ffu));
+        strokeRound(static_cast<float>(sourceLeft), static_cast<float>(sourceTop),
+                    static_cast<float>(sourceRight), static_cast<float>(sourceBottom), 14, 1,
+                    darkMode_ ? colorFromArgb(0x38ffffffu) : p.border);
+        const std::array<const wchar_t *, 4> sourceIds{{L"CHATGPT", L"CLAUDE_CODE", L"CODEX", L"OTHER"}};
+        for (size_t i = 0; i < sourceIds.size(); ++i) {
+            const int count = countForSource(sourceIds[i]);
+            const int y = sourceTop + padding + static_cast<int>(i) * rowH;
+            const int id = HitCleanupSourceBase + static_cast<int>(i);
+            const bool enabled = count > 0;
+            const bool hot = enabled && hotHit_ == id;
+            if (hot) fillRound(static_cast<float>(sourceLeft + 6), static_cast<float>(y),
+                               static_cast<float>(sourceRight - 6), static_cast<float>(y + rowH), 9,
+                               darkMode_ ? colorFromArgb(0x24ffffffu) : colorFromArgb(0x28c95f43u));
+            circle(static_cast<float>(sourceLeft + 17), static_cast<float>(y + rowH / 2), 3,
+                   enabled ? sourceColor(sourceIds[i]) : blend(p.muted, 0.55f));
+            const std::wstring label = sourceLabel(std::wstring(sourceIds[i])) + L"（" + std::to_wstring(count) + L"）";
+            text(label, static_cast<float>(sourceLeft + 30), static_cast<float>(y + 8),
+                 static_cast<float>(sourceRight - 12), static_cast<float>(y + rowH - 7),
+                 11.5f, enabled ? p.textPrimary : blend(p.muted, 0.62f), enabled);
+            if (enabled) addHit(id, rectFrom(sourceLeft + 6, y, sourceRight - 6, y + rowH));
         }
-        AppendMenuW(menu, MF_SEPARATOR, 0, nullptr);
-        AppendMenuW(menu, flagsFor(allCount), kClearAllCommand, allLabel.c_str());
-
-        POINT cursor{};
-        GetCursorPos(&cursor);
-        SetForegroundWindow(hwnd_);
-        const UINT command = TrackPopupMenu(menu, TPM_RETURNCMD | TPM_NONOTIFY | TPM_RIGHTBUTTON,
-                                            cursor.x, cursor.y, 0, hwnd_, nullptr);
-        DestroyMenu(menu);
-        switch (command) {
-        case kClearQueueCommand:
-            confirmClear(L"queue", L"个待处理任务", queueCount);
-            break;
-        case kClearHistoryCommand:
-            confirmClear(L"history", L"条历史记录", historyCount);
-            break;
-        case kClearAllCommand:
-            confirmClear(L"all", L"个任务", allCount);
-            break;
-        case kClearChatGptCommand:
-            confirmClear(L"source:CHATGPT", L"个 GPT 网页任务", countForSource(L"CHATGPT"));
-            break;
-        case kClearClaudeCommand:
-            confirmClear(L"source:CLAUDE_CODE", L"个 Claude Code 任务", countForSource(L"CLAUDE_CODE"));
-            break;
-        case kClearCodexCommand:
-            confirmClear(L"source:CODEX", L"个 Codex 任务", countForSource(L"CODEX"));
-            break;
-        case kClearOtherCommand:
-            confirmClear(L"source:OTHER", L"个其他来源任务", countForSource(L"OTHER"));
-            break;
-        default:
-            break;
-        }
-        PostMessageW(hwnd_, WM_NULL, 0, 0);
     }
 
     static LRESULT CALLBACK windowProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam) {
@@ -2584,6 +2857,15 @@ private:
             }
             break;
         case WM_KEYDOWN:
+            if (app->clearConfirmationOpen_) {
+                if (wParam == VK_RETURN) app->executeClearConfirmation();
+                else if (wParam == VK_ESCAPE) app->cancelClearConfirmation();
+                return 0;
+            }
+            if (app->cleanupMenuOpen_ && wParam == VK_ESCAPE) {
+                app->cancelClearConfirmation();
+                return 0;
+            }
             if ((GetKeyState(VK_CONTROL) & 0x8000) && (wParam == 'K' || wParam == 'F')) {
                 if (app->orbMode_) app->enterPanelMode(true);
                 if (app->page_ == 2) app->page_ = 0;
@@ -2784,9 +3066,17 @@ private:
     bool searchFocus_ = false;
     bool darkMode_ = true;
     bool notificationsEnabled_ = true;
+    bool autoStartEnabled_ = false;
     bool history_ = false;
     bool hitClipEnabled_ = false;
     bool integrationMessageIsError_ = false;
+    bool cleanupMenuOpen_ = false;
+    bool cleanupSourceMenuOpen_ = false;
+    bool clearConfirmationOpen_ = false;
+    std::wstring pendingDataDirectory_;
+    std::wstring pendingClearScope_;
+    std::wstring pendingClearLabel_;
+    int pendingClearCount_ = 0;
     int opacityPercent_ = 100;
     int blurLevel_ = 0;
 };

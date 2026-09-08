@@ -1,4 +1,4 @@
-# AI Task Hub · Win32 便携版 0.3.0
+# AI Task Hub · Win32 便携版 0.3.1
 
 适用于 Windows 10 / 11 x64。使用 C++、Win32、Direct2D 和 SQLite，无需安装 Qt、Electron、Node.js 或 MinGW。
 

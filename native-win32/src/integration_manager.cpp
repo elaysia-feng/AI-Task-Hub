@@ -82,8 +82,12 @@ bool writeUtf8Atomic(const std::wstring &path, const std::string &content, std::
 bool backupConfig(const std::wstring &path, std::wstring &error) {
     if (!fileExists(path)) return true;
     // 每次改动前留存独立副本，不覆盖之前的恢复点。
-    const std::wstring backup = path + L".aihub-" + std::to_wstring(GetTickCount64()) + L".bak";
-    if (CopyFileW(path.c_str(), backup.c_str(), TRUE)) return true;
+    const std::wstring prefix = path + L".aihub-" + std::to_wstring(GetTickCount64());
+    for (int index = 0; index < 100; ++index) {
+        const std::wstring backup = prefix + (index == 0 ? L"" : L"-" + std::to_wstring(index)) + L".bak";
+        if (CopyFileW(path.c_str(), backup.c_str(), TRUE)) return true;
+        if (GetLastError() != ERROR_FILE_EXISTS) break;
+    }
     error = L"创建配置备份失败，未修改原配置：" + path;
     return false;
 }

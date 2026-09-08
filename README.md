@@ -95,6 +95,19 @@ npm run dev
 
 启动后，后端健康检查位于 `http://127.0.0.1:17891/api/health`。关闭主窗口会收成悬浮球；彻底退出请在托盘图标菜单中选择 **退出**。
 
+### Windows 原生低内存版（推荐）
+
+如果主要诉求是降低常驻内存，直接使用 `native/` 下的 C++/Qt 版本。它把界面、HTTP 事件服务、SQLite 和托盘收敛成一个进程，不启动 Electron/Chromium/Python，仍兼容现有适配器的 `POST /api/events` 协议。
+
+```powershell
+cmake -S native -B native/build -G Ninja -DCMAKE_PREFIX_PATH=E:/QT/6.8.3/mingw_64
+cmake --build native/build --parallel 2
+$env:PATH = "E:/QT/6.8.3/mingw_64/bin;E:/QT/Tools/mingw1310_64/bin;$env:PATH"
+./native/build/ai-task-hub-native.exe
+```
+
+原生版包含待处理/历史/设置、筛选搜索、详情时间线、打开项目、批量已读、清理、托盘通知和悬浮球；分发目录可运行 `./native/package-native.ps1` 生成，具体契约见 [`native/README.md`](native/README.md)。首次切换前请退出占用 `17891` 端口的旧 Electron/Python 版本。
+
 只启动后端：
 
 ```powershell
@@ -204,6 +217,17 @@ AIHUB_SQLITE_PATH=
 SQLite 数据文件默认位于 `%APPDATA%\AI Task Hub\data.sqlite`（打包版与开发版一致）。数据文件与表结构在首次启动时自动创建，无需手动建库；如需换位置，用 `AIHUB_SQLITE_PATH` 指定绝对路径即可。
 
 桌面端在 **设置 → 存储后端** 中可直接选择「直接用 SQLite / 本机 MySQL / 自动」，选择会写入 `%APPDATA%\AI Task Hub\config.env`，重启后端后生效；区块中会显示当前实际后端。实际运行中的后端可通过 `http://127.0.0.1:17891/api/status` 确认：`db.backend` 为 `mysql` 或 `sqlite`，并附带对应的连接信息（MySQL 为 host/port/database；SQLite 为数据文件路径）。
+
+### Win32/Direct2D 原生版
+
+需要低常驻内存时可直接构建 `native-win32`：
+
+```powershell
+.\native-win32\build-win32.ps1
+.\native-win32\dist\AI Task Hub Win32.exe
+```
+
+该版本用 Win32、Direct2D、DirectWrite、WIC、Winsock 和内置 SQLite 完整替代 Qt/QML/Electron/Python 桌面链路，沿用 `%APPDATA%\AI Task Hub\data.sqlite`、旧版主题壁纸、头像和 `/api/events` 协议。实测软件渲染模式约 25–30 MiB 私有内存、42–45 MiB 工作集，详见 [`native-win32/README.md`](native-win32/README.md)。
 
 **幂等语义**：任务按 `(source, externalTaskId)` 唯一约束去重。`external_task_id` 为 `NULL` 或空串的事件会按同一来源合并到同一条任务（数据库用生成列 `external_task_id_not_null = IFNULL(external_task_id, '')` + 唯一索引实现），而不是每次新建任务；MySQL 与 SQLite 两种后端行为一致。
 

@@ -190,8 +190,9 @@ class TaskRepository:
     def clear(self, statuses: Optional[tuple[str, ...]] = None) -> int:
         """清空任务，事件流水经外键 ON DELETE CASCADE 级联删除。
 
-        statuses 为 None 时清空全部；否则只删指定状态（供按 tab 独立清理：
-        queue=待处理四种状态，history=已查看/已忽略）。返回删除行数。
+        statuses 为 None 时清空全部；否则只删指定状态（供按范围独立清理：
+        completed=仅已完成未读，queue=待处理四种状态，history=已查看/已忽略）。
+        返回删除行数。
         """
         if statuses:
             placeholders = ",".join("%s" for _ in statuses)

@@ -34,7 +34,7 @@ if ($LASTEXITCODE -ne 0) { throw "sqlite3.c 编译失败（exit $LASTEXITCODE）
 $output = Join-Path $dist 'AI Task Hub Win32.next.exe'
 $objects = @((Join-Path $obj 'main.o'), (Join-Path $obj 'json_lite.o'), (Join-Path $obj 'sqlite3.o'), (Join-Path $obj 'task_store.o'), (Join-Path $obj 'http_server.o'), (Join-Path $obj 'integration_manager.o'))
 # 明确使用 Windows GUI 子系统；否则双击 exe 会被当成控制台程序并自动打开 Terminal。
-& $compiler '-mwindows' '-municode' '-static' '-static-libgcc' '-static-libstdc++' '-s' @objects '-o' $output '-ld2d1' '-ldwrite' '-lwindowscodecs' '-ldwmapi' '-lshlwapi' '-lshell32' '-lole32' '-luuid' '-lcomctl32' '-lcomdlg32' '-luser32' '-lgdi32' '-lws2_32'
+& $compiler '-mwindows' '-municode' '-static' '-static-libgcc' '-static-libstdc++' '-s' @objects '-o' $output '-ld2d1' '-ldwrite' '-lwindowscodecs' '-ldwmapi' '-lshlwapi' '-lshell32' '-lole32' '-luuid' '-lcomctl32' '-lcomdlg32' '-ladvapi32' '-luser32' '-lgdi32' '-lws2_32'
 if ($LASTEXITCODE -ne 0) { throw "链接失败（exit $LASTEXITCODE）" }
 if (-not $StageOnly) {
     $published = Join-Path $dist 'AI Task Hub Win32.exe'

@@ -10,8 +10,8 @@ export type TaskStatus =
 
 export type TaskSource = 'CHATGPT' | 'CLAUDE_CODE' | 'CODEX' | 'OTHER'
 
-/** 一键清理作用域：queue=只清待处理，history=只清历史，all=全部 */
-export type TaskClearScope = 'queue' | 'history' | 'all'
+/** 一键清理作用域：completed=只清已完成，queue=只清待处理，history=只清历史，all=全部 */
+export type TaskClearScope = 'completed' | 'queue' | 'history' | 'all'
 
 export interface HubTask {
   id: number
@@ -84,6 +84,14 @@ export interface TaskEventRecord {
   eventType: string
   occurredAt: string
   payload: Record<string, unknown>
+}
+
+/** AI 工具对任务的最终答复（尽力而为：缺本地会话记录时 content=null + 中文友好 error） */
+export interface AiReplyResult {
+  taskId: number
+  source: TaskSource
+  content: string | null
+  error: string | null
 }
 
 /** 存储后端配置值：写入 config.env 的 AIHUB_DB_BACKEND（sqlite=默认零依赖；mysql=严格 MySQL；auto=MySQL 优先连不上自动降级 SQLite） */
@@ -213,6 +221,8 @@ export interface AihubApi {
   installClaude(): Promise<InstallResult>
   installCodex(): Promise<InstallResult>
   getTaskEvents(taskId: number): Promise<TaskEventRecord[]>
+  /** 任务对应的最终 AI 答复（读本地会话记录；缺记录时 content=null，非法 id 返回 null） */
+  getTaskAiReply(taskId: number): Promise<AiReplyResult | null>
   /** 在系统文件管理器中打开路径：成功返回 ''，失败返回错误串或被拒路径 {err} */
   openPath(target: string): Promise<string | { err: string }>
   getWallpaper(): Promise<WallpaperState>

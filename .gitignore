@@ -43,6 +43,7 @@ yarn-error.log*
 logs/
 *.log
 adapters/codex/notify_debug.log
+adapters/codex/notify_debug.log.*
 adapters/claude-code/session_titles.json
 adapters/codex/forward_target.json
 
@@ -66,3 +67,9 @@ Desktop.ini
 
 # ========== 本地工具状态 ==========
 .omc/
+
+# ========== Qt 原生构建与本地验证产物 ==========
+native/build-*/
+native/dist-native-*/
+native/hover-preview-check.png
+native/qml/*.qmlc

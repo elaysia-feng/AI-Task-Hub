@@ -7,10 +7,11 @@ logger = logging.getLogger(__name__)
 
 from app.model.task import Task
 from app.api.websocket_api import ws_manager
-from shared.constants import ALL_STATUSES, HISTORY_STATUSES, QUEUE_STATUSES
+from shared.constants import ALL_STATUSES, COMPLETED_UNREAD_STATUSES, HISTORY_STATUSES, QUEUE_STATUSES
 
-# scope → 删除状态集合：queue=待处理四种状态，history=已查看/已忽略，all=全部（None）
+# scope → 删除状态集合：completed=仅已完成未读，queue=待处理四种状态，history=已查看/已忽略，all=全部（None）
 _CLEAR_SCOPES: dict[str, Optional[tuple[str, ...]]] = {
+    "completed": COMPLETED_UNREAD_STATUSES,
     "queue": QUEUE_STATUSES,
     "history": HISTORY_STATUSES,
     "all": None,
@@ -96,6 +97,39 @@ async def list_task_events(request: Request, task_id: int = Path(..., gt=0)) -> 
     return {"events": event_service.get_task_timeline(task_id)}
 
 
+@router.get("/{task_id}/ai-reply")
+def get_task_ai_reply(request: Request, task_id: int = Path(..., gt=0)) -> dict:
+    """任务对应的最终 AI 答复（尽力而为，不因会话记录缺失而报错）。
+
+    用 sync def：读本地会话记录是阻塞 IO，由 FastAPI 放线程池执行，不卡事件循环。
+    - CLAUDE_CODE / CODEX：按需读取本地会话记录（无 DB 迁移，存量任务立即可见）。
+    - CHATGPT：从任务最近事件里取扩展上报的 replyText。
+    - 缺会话记录 / 读取失败 → 200 + content=null + 中文友好 error，展示层出 muted 提示。
+    """
+    from app.service import ai_reply
+
+    task_service = request.app.state.task_service
+    task = task_service.get_task(task_id)
+    if task is None:
+        raise HTTPException(status_code=404, detail="任务不存在")
+
+    cached = ai_reply._cache_get(task_id)
+    if cached is not None:
+        return {"taskId": task_id, "source": task.source, **cached}
+
+    recent_events = (
+        request.app.state.event_service.get_task_timeline(task_id)
+        if task.source == "CHATGPT"
+        else None
+    )
+    result = ai_reply.get_ai_reply(task, recent_events)
+    # 只缓存成功内容：把「未找到答复」错误结果缓存 30s，会在任务恰好完成后仍显示陈旧
+    # 错误提示（用户重开详情也不刷新）。错误场景重读成本低，不缓存换取及时性。
+    if result["content"] is not None:
+        ai_reply._cache_put(task_id, result)
+    return {"taskId": task_id, "source": task.source, **result}
+
+
 @router.post("/read-all")
 async def mark_all_viewed(request: Request) -> dict:
     """一键已读：队列中全部完成/失败未读任务标记为已读，广播 tasks_read_all。"""
@@ -124,9 +158,24 @@ async def mark_ignored(request: Request, task_id: int = Path(..., gt=0)) -> dict
 async def clear_tasks(
     request: Request,
     confirm: bool = Query(False, description="必须为 true 才执行清理"),
-    scope: str = Query("all", description="queue=只清待处理 / history=只清历史 / all=全部"),
+    scope: str = Query(
+        "all",
+        description="completed=只清已完成 / queue=只清待处理 / history=只清历史 / all=全部",
+    ),
 ) -> dict:
-    """一键清理：按 tab 独立清空（queue/history），事件流水级联删除，广播 tasks_cleared。"""
+    """一键清理指定范围的任务，事件流水经外键级联删除并广播结果。
+
+    Args:
+        request: 当前 FastAPI 请求及任务服务上下文。
+        confirm: 是否明确确认执行删除。
+        scope: 删除范围，可选已完成、待处理、历史或全部。
+
+    Returns:
+        包含成功标记与实际删除数量的结果。
+
+    Raises:
+        HTTPException: 未确认删除或范围不受支持时抛出 400。
+    """
     if not confirm:
         raise HTTPException(status_code=400, detail="需要 confirm=true 才能执行清理")
     statuses = _CLEAR_SCOPES.get(scope)
