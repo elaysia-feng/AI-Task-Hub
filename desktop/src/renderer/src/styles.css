@@ -21,6 +21,8 @@
   --scrollbar: rgba(255, 255, 255, 0.1);
   --scrollbar-hover: rgba(255, 255, 255, 0.2);
   --hover-fill: rgba(255, 255, 255, 0.09);
+  --tab-fill: rgba(255, 255, 255, 0.1);
+  --tab-fill-active: rgba(255, 255, 255, 0.16);
   --card-shadow: rgba(0, 0, 0, 0.35);
   --toast-bg: rgba(24, 26, 34, 0.92);
 }
@@ -42,6 +44,8 @@
   --scrollbar: rgba(20, 25, 45, 0.14);
   --scrollbar-hover: rgba(20, 25, 45, 0.26);
   --hover-fill: rgba(20, 25, 45, 0.06);
+  --tab-fill: rgba(255, 255, 255, 0.58);
+  --tab-fill-active: rgba(255, 255, 255, 0.72);
   --card-shadow: rgba(30, 36, 64, 0.13);
   --toast-bg: rgba(255, 255, 255, 0.94);
 }
@@ -364,7 +368,7 @@ html[data-wallpaper='on'] .content-header h1 {
   border-radius: 999px;
   font-size: 11px;
   color: var(--text-secondary);
-  background: var(--card);
+  background: var(--tab-fill);
   border: 1px solid var(--border);
 }
 
@@ -642,12 +646,12 @@ html[data-wallpaper='on'] .content-header h1 {
   color: #b45309;
 }
 
-/* light 主题下卡片用实色底，避免半透明显灰 */
-[data-theme='light'] .card {
+/* 无壁纸时亮色卡片使用实色底；有壁纸时必须保留透出效果。 */
+[data-theme='light'][data-wallpaper='off'] .card {
   background: #ffffff;
 }
 
-[data-theme='light'] .card:hover {
+[data-theme='light'][data-wallpaper='off'] .card:hover {
   background: #ffffff;
 }
 
@@ -889,7 +893,7 @@ html[data-wallpaper='on'] .content-header h1 {
   padding: 0 16px;
   border-radius: var(--radius-pill);
   border: 1px solid var(--border);
-  background: var(--card);
+  background: var(--tab-fill);
   color: var(--text-secondary);
   font-family: var(--font);
   font-size: 12px;
@@ -1095,7 +1099,7 @@ html[data-wallpaper='on'] .content-header h1 {
 
 .filter-chip.active {
   color: var(--text);
-  background: var(--card);
+  background: var(--tab-fill-active);
   border-color: var(--border-strong);
 }
 
@@ -1146,7 +1150,7 @@ html[data-wallpaper='on'] .content-header h1 {
   padding: 0 9px 0 13px;
   border-radius: var(--radius-pill);
   border: 1px solid var(--border);
-  background: var(--card);
+  background: var(--tab-fill);
   transition: border-color 0.15s, box-shadow 0.15s, background 0.15s, transform 0.15s;
 }
 
@@ -1242,7 +1246,7 @@ html[data-wallpaper='on'] .content-header h1 {
   padding: 0 16px;
   border-radius: var(--radius-pill);
   border: 1px solid var(--border);
-  background: var(--card);
+  background: var(--tab-fill);
   color: var(--text);
   font-family: var(--font);
   font-size: 12.5px;
@@ -1592,7 +1596,7 @@ html[data-wallpaper='on'] .content-header h1 {
   padding: 0 28px 0 10px;
   border-radius: 8px;
   border: 1px solid var(--border);
-  background: var(--card);
+  background: var(--tab-fill);
   color: var(--text);
   font-size: 12.5px;
   cursor: pointer;
@@ -1631,6 +1635,11 @@ html[data-wallpaper='on'] .content-header h1 {
   justify-content: flex-start;
   line-height: 1.25;
   text-align: left;
+  background: var(--tab-fill);
+}
+
+.preset-choice:hover {
+  background: var(--tab-fill-active);
 }
 
 .preset-thumb {
@@ -1642,6 +1651,14 @@ html[data-wallpaper='on'] .content-header h1 {
   background-position: center;
   background-size: cover;
   box-shadow: inset 0 0 0 1px var(--border);
+}
+
+.wallpaper-preset-thumb {
+  background-image: var(--preset-preview-light, none);
+}
+
+[data-theme='dark'] .wallpaper-preset-thumb {
+  background-image: var(--preset-preview-dark, var(--preset-preview-light, none));
 }
 
 .icon-panel {

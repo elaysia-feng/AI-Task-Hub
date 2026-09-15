@@ -91,13 +91,22 @@ function makeAppearanceSection(): HTMLElement {
     const selectedPresetId = ws.selection.source === 'preset' ? ws.selection.presetId : null
     presetWrap.replaceChildren(
       ...ws.presets.map((preset) => {
-        const thumb = h('span', 'preset-thumb')
-        if (preset.previewDataUrl) thumb.style.backgroundImage = `url("${preset.previewDataUrl}")`
+        const thumb = h('span', 'preset-thumb wallpaper-preset-thumb')
+        if (preset.previewDataUrlLight) {
+          thumb.style.setProperty('--preset-preview-light', `url("${preset.previewDataUrlLight}")`)
+        }
+        if (preset.previewDataUrlDark) {
+          thumb.style.setProperty('--preset-preview-dark', `url("${preset.previewDataUrlDark}")`)
+        }
+        if (!preset.previewDataUrlLight && !preset.previewDataUrlDark && preset.previewDataUrl) {
+          thumb.style.backgroundImage = `url("${preset.previewDataUrl}")`
+        }
         const btn = h('button', 'btn preset-choice', [thumb, h('span', '', [preset.name])])
         btn.classList.toggle(
           'primary',
           selectedPresetId === preset.id,
         )
+        btn.setAttribute('aria-pressed', String(selectedPresetId === preset.id))
         btn.onclick = async () => {
           try {
             const next = await window.aihub.setWallpaperPreset(preset.id)
@@ -231,6 +240,7 @@ function makeIconPanel(): HTMLElement {
         const btn = h('button', 'btn icon-preset-btn preset-choice', [thumb, h('span', '', [p.name])])
         btn.dataset.presetId = p.id
         btn.classList.toggle('primary', s.prefs.source === 'preset' && s.prefs.presetId === p.id)
+        btn.setAttribute('aria-pressed', String(s.prefs.source === 'preset' && s.prefs.presetId === p.id))
         btn.onclick = async () => {
           try {
             render(await window.aihub.setUserIconPreset(p.id))

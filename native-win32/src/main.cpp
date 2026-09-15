@@ -156,6 +156,8 @@ struct Palette {
     D2D1_COLOR_F sidebar{};
     D2D1_COLOR_F card{};
     D2D1_COLOR_F cardHover{};
+    D2D1_COLOR_F tab{};
+    D2D1_COLOR_F tabActive{};
     D2D1_COLOR_F border{};
     D2D1_COLOR_F borderStrong{};
     D2D1_COLOR_F textPrimary{};
@@ -198,6 +200,8 @@ const Palette kPaletteDark = {
     colorFromArgb(0x99080a0e),   // sidebar
     colorFromArgb(0x7c10121a),   // card
     colorFromArgb(0x9c161a24),   // cardHover
+    colorFromArgb(0x5010121a),   // tab
+    colorFromArgb(0x70161a24),   // tabActive
     colorFromArgb(0x14ffffff),   // border
     colorFromArgb(0x24ffffff),   // borderStrong
     colorFromArgb(0xfff1f0ec),   // textPrimary
@@ -219,6 +223,8 @@ const Palette kPaletteLight = {
     colorFromArgb(0xf2f6f7fa),   // sidebar
     colorFromArgb(0xeafafcff),   // card
     colorFromArgb(0xf5ffffff),   // cardHover
+    colorFromArgb(0x88ffffff),   // tab
+    colorFromArgb(0xa8ffffff),   // tabActive
     colorFromArgb(0x3a243044),   // border
     colorFromArgb(0x64212a3a),   // borderStrong
     colorFromArgb(0xff202631),   // textPrimary
@@ -783,6 +789,28 @@ private:
         circleStroke(x + diameter / 2, y + diameter / 2, diameter / 2, 1.0f, palette().border);
     }
 
+    void drawBitmapCover(ID2D1Bitmap *bitmap, float x, float y, float width, float height,
+                         float opacity = 1.0f) {
+        if (!bitmap) {
+            fillRound(x, y, x + width, y + height, 8, palette().cardHover);
+            strokeRound(x, y, x + width, y + height, 8, 1.0f, palette().border);
+            return;
+        }
+        const D2D1_SIZE_F imageSize = bitmap->GetSize();
+        if (imageSize.width <= 0 || imageSize.height <= 0) return;
+        const float scale = std::max(width / imageSize.width, height / imageSize.height);
+        const float drawWidth = imageSize.width * scale;
+        const float drawHeight = imageSize.height * scale;
+        const float offsetX = x + (width - drawWidth) / 2.0f;
+        const float offsetY = y + (height - drawHeight) / 2.0f;
+        target()->PushAxisAlignedClip(D2D1::RectF(x, y, x + width, y + height),
+                                      D2D1_ANTIALIAS_MODE_PER_PRIMITIVE);
+        target()->DrawBitmap(bitmap, D2D1::RectF(offsetX, offsetY, offsetX + drawWidth, offsetY + drawHeight),
+                             opacity, D2D1_BITMAP_INTERPOLATION_MODE_LINEAR);
+        target()->PopAxisAlignedClip();
+        strokeRound(x, y, x + width, y + height, 8, 1.0f, palette().border);
+    }
+
     void drawWallpaper(int width, int height) {
         if (wallpaper_) {
             // 按比例铺满窗口并裁剪边缘，避免 16:9 壁纸被拉伸成旧版面板比例。
@@ -1028,6 +1056,8 @@ private:
         line(0, 46, static_cast<float>(width), 46, 1.0f, p.border);
         // 头像 + 标题副标题
         drawBitmapCircle(avatar_.Get(), 16, 10, 26);
+        addHit(HitPickIcon, rectFrom(10, 5, 48, 41));
+        if (hotHit_ == HitPickIcon) circleStroke(29, 23, 15, 1.4f, p.accentLine);
         text(L"AI Task Hub", 50, 12, 220, 32, 13.5f, p.textPrimary, true);
         text(L"多 AI 平台任务中心", 50, 30, 240, 44, 11.0f, p.muted);
         // 右侧状态与控制带起点 width - 280
@@ -1039,7 +1069,7 @@ private:
         const bool hotPill = hotHit_ == HitQueue && false; // 状态 pill 暂不参与 hover
         fillRound(static_cast<float>(pillX), static_cast<float>(pillY),
                   static_cast<float>(pillX + pillW), static_cast<float>(pillY + pillH), 12.5f,
-                  hotPill ? p.cardHover : p.card);
+                  hotPill ? p.cardHover : p.tab);
         strokeRound(static_cast<float>(pillX), static_cast<float>(pillY),
                     static_cast<float>(pillX + pillW), static_cast<float>(pillY + pillH), 12.5f, 1, p.border);
         circle(static_cast<float>(pillX + 12), static_cast<float>(pillY + 13), 3, onlineDot);
@@ -1187,7 +1217,7 @@ private:
         const bool hotClear = hotHit_ == HitCleanupMenu;
         fillRound(static_cast<float>(clearX), static_cast<float>(btnY),
                   static_cast<float>(clearX + 100), static_cast<float>(btnY + btnH), 17,
-                  hotClear ? p.cardHover : p.card);
+                  hotClear ? p.cardHover : p.tab);
         strokeRound(static_cast<float>(clearX), static_cast<float>(btnY),
                     static_cast<float>(clearX + 100), static_cast<float>(btnY + btnH), 17, 1, p.border);
         text(L"清理", static_cast<float>(clearX + 12), static_cast<float>(btnY + 9),
@@ -1198,7 +1228,7 @@ private:
         const bool hotMark = hotHit_ == HitMarkAll;
         fillRound(static_cast<float>(markX), static_cast<float>(btnY),
                   static_cast<float>(markX + 100), static_cast<float>(btnY + btnH), 17,
-                  hotMark ? p.cardHover : p.card);
+                  hotMark ? p.cardHover : p.tab);
         strokeRound(static_cast<float>(markX), static_cast<float>(btnY),
                     static_cast<float>(markX + 100), static_cast<float>(btnY + btnH), 17, 1, p.border);
         text(L"一键已读", static_cast<float>(markX + 12), static_cast<float>(btnY + 9),
@@ -1209,7 +1239,7 @@ private:
         const bool hotOrb = hotHit_ == HitOrb;
         fillRound(static_cast<float>(orbX), static_cast<float>(btnY),
                   static_cast<float>(orbX + 100), static_cast<float>(btnY + btnH), 17,
-                  hotOrb ? p.cardHover : p.card);
+                  hotOrb ? p.cardHover : p.tab);
         strokeRound(static_cast<float>(orbX), static_cast<float>(btnY),
                     static_cast<float>(orbX + 100), static_cast<float>(btnY + btnH), 17, 1, p.border);
         text(L"收起为悬浮球", static_cast<float>(orbX + 10), static_cast<float>(btnY + 9),
@@ -1307,7 +1337,7 @@ private:
             const bool selected = (i == 0 && statusFilter_.empty()) || statusFilter_ == opts[i].code;
             fillRound(static_cast<float>(x), static_cast<float>(top),
                       static_cast<float>(x + chipW), static_cast<float>(top + 30), 15,
-                      selected ? p.card : D2D1::ColorF(0, 0, 0, 0));
+                      selected ? p.tabActive : D2D1::ColorF(0, 0, 0, 0));
             strokeRound(static_cast<float>(x), static_cast<float>(top),
                         static_cast<float>(x + chipW), static_cast<float>(top + 30), 15, 1,
                         selected ? p.borderStrong : D2D1::ColorF(0, 0, 0, 0));
@@ -1351,7 +1381,7 @@ private:
             const bool selected = (i == 0 && sourceFilter_.empty()) || sourceFilter_ == sources[i].id;
             fillRound(static_cast<float>(x), static_cast<float>(srcY),
                       static_cast<float>(x + chipW), static_cast<float>(srcY + 30), 15,
-                      selected ? p.card : D2D1::ColorF(0, 0, 0, 0));
+                      selected ? p.tabActive : D2D1::ColorF(0, 0, 0, 0));
             strokeRound(static_cast<float>(x), static_cast<float>(srcY),
                         static_cast<float>(x + chipW), static_cast<float>(srcY + 30), 15, 1,
                         selected ? p.borderStrong : D2D1::ColorF(0, 0, 0, 0));
@@ -1374,7 +1404,7 @@ private:
         // 搜索框 40px 高圆角 999
         const int sX = left, sY = top + 80, sW = width, sH = 40;
         fillRound(static_cast<float>(sX), static_cast<float>(sY),
-                  static_cast<float>(sX + sW), static_cast<float>(sY + sH), 20, p.card);
+                  static_cast<float>(sX + sW), static_cast<float>(sY + sH), 20, p.tab);
         strokeRound(static_cast<float>(sX), static_cast<float>(sY),
                     static_cast<float>(sX + sW), static_cast<float>(sY + sH), 20, 1, p.border);
         text(L"\u2315", static_cast<float>(sX + 16), static_cast<float>(sY + 9),
@@ -1596,7 +1626,7 @@ private:
             const bool hotRead = hotHit_ == HitDetailRead;
             fillRound(static_cast<float>(readX), static_cast<float>(btnY),
                       static_cast<float>(readX + readW), static_cast<float>(btnY + 32), 14,
-                      hotRead ? p.cardHover : p.card);
+                      hotRead ? p.cardHover : p.tab);
             strokeRound(static_cast<float>(readX), static_cast<float>(btnY),
                         static_cast<float>(readX + readW), static_cast<float>(btnY + 32), 14, 1, p.border);
             textCentered(L"已读", static_cast<float>(readX), static_cast<float>(btnY),
@@ -1646,7 +1676,7 @@ private:
         const int buttonTop = top + 23;
         fillRound(static_cast<float>(buttonLeft), static_cast<float>(buttonTop),
                   static_cast<float>(buttonLeft + buttonWidth), static_cast<float>(buttonTop + 30), 15,
-                  hot ? p.accentSoft : p.card);
+                  hot ? p.accentSoft : p.tab);
         strokeRound(static_cast<float>(buttonLeft), static_cast<float>(buttonTop),
                     static_cast<float>(buttonLeft + buttonWidth), static_cast<float>(buttonTop + 30), 15, 1,
                     online ? p.success : p.border);
@@ -1667,7 +1697,7 @@ private:
         for (int i = 0; i < 3; ++i) {
             const int tabLeft = left + i * 132;
             const bool active = settingsTab_ == i;
-            fillRound(tabLeft, 118, tabLeft + 124, 150, 12, active ? p.accentSoft : p.card);
+            fillRound(tabLeft, 118, tabLeft + 124, 150, 12, active ? p.accentSoft : p.tab);
             strokeRound(tabLeft, 118, tabLeft + 124, 150, 12, 1, active ? p.accentLine : p.border);
             textCentered(tabs[i], tabLeft, 118, tabLeft + 124, 150, 12, active ? p.accent : p.textSecondary, active);
             addHit(HitSettingsTabBase + i, rectFrom(tabLeft, 118, tabLeft + 124, 150));
@@ -1719,7 +1749,7 @@ private:
                  static_cast<float>(right - 100), static_cast<float>(y + 66), 13, p.textPrimary, true);
             // 统一协议 pill
             fillRound(static_cast<float>(right - 80), static_cast<float>(y + 42),
-                      static_cast<float>(right - 20), static_cast<float>(y + 68), 13, p.card);
+                      static_cast<float>(right - 20), static_cast<float>(y + 68), 13, p.tab);
             strokeRound(static_cast<float>(right - 80), static_cast<float>(y + 42),
                         static_cast<float>(right - 20), static_cast<float>(y + 68), 13, 1, p.success);
             textCentered(L"统一协议", static_cast<float>(right - 80), static_cast<float>(y + 42),
@@ -1784,7 +1814,7 @@ private:
                 const bool hot = hotHit_ == hitId;
                 fillRound(static_cast<float>(x), static_cast<float>(buttonTop),
                           static_cast<float>(x + buttonWidth), static_cast<float>(buttonTop + 34), 16,
-                          hot ? p.cardHover : p.card);
+                          hot ? p.cardHover : p.tab);
                 strokeRound(static_cast<float>(x), static_cast<float>(buttonTop),
                             static_cast<float>(x + buttonWidth), static_cast<float>(buttonTop + 34), 16, 1,
                             danger ? p.danger : p.border);
@@ -1821,7 +1851,7 @@ private:
                 const int toggleTop = rowTop + 5;
                 fillRound(static_cast<float>(toggleLeft), static_cast<float>(toggleTop),
                           static_cast<float>(right - 20), static_cast<float>(toggleTop + 34), 17,
-                          enabled ? p.accentSoft : p.card);
+                          enabled ? p.accentSoft : p.tab);
                 strokeRound(static_cast<float>(toggleLeft), static_cast<float>(toggleTop),
                             static_cast<float>(right - 20), static_cast<float>(toggleTop + 34), 17, 1,
                             enabled ? p.accentLine : p.border);
@@ -1879,7 +1909,7 @@ private:
         const int plusX = right - 36;
         const auto drawButton = [&](int x, int y, const wchar_t *label, int id, bool hot) {
             fillRound(static_cast<float>(x), static_cast<float>(y), static_cast<float>(x + 30),
-                      static_cast<float>(y + 28), 14, hot ? p.cardHover : p.card);
+                      static_cast<float>(y + 28), 14, hot ? p.cardHover : p.tab);
             strokeRound(static_cast<float>(x), static_cast<float>(y), static_cast<float>(x + 30),
                         static_cast<float>(y + 28), 14, 1, p.border);
             textCentered(label, static_cast<float>(x), static_cast<float>(y), static_cast<float>(x + 30),
@@ -1930,15 +1960,23 @@ private:
                 : (selectedIcon == kThemes[i].id);
             fillRound(static_cast<float>(cx), static_cast<float>(cy),
                       static_cast<float>(cx + cellW), static_cast<float>(cy + cellH), 14,
-                      selected ? p.accentSoft : (darkMode_ ? p.card : colorFromArgb(0x50ffffffu)));
+                      selected ? p.accentSoft : p.tab);
             strokeRound(static_cast<float>(cx), static_cast<float>(cy),
                         static_cast<float>(cx + cellW), static_cast<float>(cy + cellH), 14, 1,
                         selected ? p.accentLine : p.border);
-            // 38×38 头像预览
+            // 壁纸预览使用当前明暗模式对应的壁纸，头像预览继续使用圆形人物图。
             const int prevX = cx + 9, prevY = cy + 9, prevS = 38;
-            const std::wstring path = presets + kThemes[i].id + L".png";
-            drawBitmapCircle(previewBitmap(path), static_cast<float>(prevX), static_cast<float>(prevY),
-                             static_cast<float>(prevS));
+            const std::wstring path = wallpaperMode
+                ? resourceDirectory() + L"\\themes\\" + kThemes[i].id + L"\\wallpaper-" +
+                    (darkMode_ ? L"dark" : L"light") + L".png"
+                : presets + kThemes[i].id + L".png";
+            if (wallpaperMode) {
+                drawBitmapCover(previewBitmap(path), static_cast<float>(prevX), static_cast<float>(prevY),
+                                static_cast<float>(prevS), static_cast<float>(prevS));
+            } else {
+                drawBitmapCircle(previewBitmap(path), static_cast<float>(prevX), static_cast<float>(prevY),
+                                 static_cast<float>(prevS));
+            }
             textCentered(kThemes[i].name, static_cast<float>(cx + 50), static_cast<float>(cy),
                  static_cast<float>(cx + cellW - 6), static_cast<float>(cy + cellH),
                  11, p.textPrimary);
@@ -1957,7 +1995,7 @@ private:
         const bool hotA = hotHit_ == HitPickWallpaper;
         fillRound(static_cast<float>(left), static_cast<float>(top),
                   static_cast<float>(left + aW), static_cast<float>(top + aH), 14,
-                  hotA ? p.cardHover : p.card);
+                  hotA ? p.cardHover : p.tab);
         strokeRound(static_cast<float>(left), static_cast<float>(top),
                     static_cast<float>(left + aW), static_cast<float>(top + aH), 14, 1, p.border);
         textCentered(L"选择本地壁纸…", static_cast<float>(left), static_cast<float>(top),
@@ -1969,7 +2007,7 @@ private:
         const bool hotB = hotHit_ == HitClearWallpaper;
         fillRound(static_cast<float>(bX), static_cast<float>(top),
                   static_cast<float>(bX + 100), static_cast<float>(top + aH), 14,
-                  hotB ? p.cardHover : p.card);
+                  hotB ? p.cardHover : p.tab);
         strokeRound(static_cast<float>(bX), static_cast<float>(top),
                     static_cast<float>(bX + 100), static_cast<float>(top + aH), 14, 1, p.border);
         textCentered(L"恢复默认", static_cast<float>(bX), static_cast<float>(top),
@@ -1989,7 +2027,7 @@ private:
         const bool hotA = hotHit_ == HitPickIcon;
         fillRound(static_cast<float>(left), static_cast<float>(top),
                   static_cast<float>(left + aW), static_cast<float>(top + aH), 14,
-                  hotA ? p.cardHover : p.card);
+                  hotA ? p.cardHover : p.tab);
         strokeRound(static_cast<float>(left), static_cast<float>(top),
                     static_cast<float>(left + aW), static_cast<float>(top + aH), 14, 1, p.border);
         textCentered(L"选择本地图片…", static_cast<float>(left), static_cast<float>(top),
@@ -2000,7 +2038,7 @@ private:
         const bool hotB = hotHit_ == HitClearIcon;
         fillRound(static_cast<float>(bX), static_cast<float>(top),
                   static_cast<float>(bX + 100), static_cast<float>(top + aH), 14,
-                  hotB ? p.cardHover : p.card);
+                  hotB ? p.cardHover : p.tab);
         strokeRound(static_cast<float>(bX), static_cast<float>(top),
                     static_cast<float>(bX + 100), static_cast<float>(top + aH), 14, 1, p.border);
         textCentered(L"恢复默认", static_cast<float>(bX), static_cast<float>(top),
@@ -2099,7 +2137,7 @@ private:
              12, p.accent, true);
         addHit(HitOrb, rectFrom(12, btnY, 12 + openW, btnY + 32));
         const int readX = 12 + openW + 8, readW = width - readX - 12;
-        fillRound(static_cast<float>(readX), static_cast<float>(btnY), static_cast<float>(readX + readW), static_cast<float>(btnY + 32), 14, p.card);
+        fillRound(static_cast<float>(readX), static_cast<float>(btnY), static_cast<float>(readX + readW), static_cast<float>(btnY + 32), 14, p.tab);
         strokeRound(static_cast<float>(readX), static_cast<float>(btnY), static_cast<float>(readX + readW), static_cast<float>(btnY + 32), 14, 1, p.border);
         textCentered(L"一键已读", static_cast<float>(readX), static_cast<float>(btnY),
              static_cast<float>(readX + readW), static_cast<float>(btnY + 32), 12, p.textSecondary);

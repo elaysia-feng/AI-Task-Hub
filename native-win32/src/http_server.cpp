@@ -250,11 +250,11 @@ std::string HttpServer::route(const std::string &method, const std::string &targ
     const std::string path = pathOnly(target);
     const auto query = queryParams(target);
     if (method == "GET" && path == "/api/health") {
-        return std::string("{\"status\":\"") + (store_.ready() ? "ok" : "degraded") + "\",\"service\":\"AI Task Hub Win32\",\"version\":\"0.3.1-win32\"}";
+        return std::string("{\"status\":\"") + (store_.ready() ? "ok" : "degraded") + "\",\"service\":\"AI Task Hub Win32\",\"version\":\"0.3.3-win32\"}";
     }
     if (method == "GET" && path == "/api/status") {
         const auto snapshot = store_.snapshot(1);
-        return std::string("{\"status\":\"") + (store_.ready() ? "ok" : "degraded") + "\",\"version\":\"0.3.1-win32\",\"runtime\":\"C++/Win32/Direct2D\",\"db\":{\"ok\":" + (store_.ready() ? "true" : "false") + ",\"backend\":\"sqlite\",\"database\":\"" + jsonlite::escapeUtf8(store_.databasePath()) + "\"},\"tasks\":" + std::to_string(snapshot.counts.total) + "}";
+        return std::string("{\"status\":\"") + (store_.ready() ? "ok" : "degraded") + "\",\"version\":\"0.3.3-win32\",\"runtime\":\"C++/Win32/Direct2D\",\"db\":{\"ok\":" + (store_.ready() ? "true" : "false") + ",\"backend\":\"sqlite\",\"database\":\"" + jsonlite::escapeUtf8(store_.databasePath()) + "\"},\"tasks\":" + std::to_string(snapshot.counts.total) + "}";
     }
     if (method == "GET" && path == "/api/integrations/status") {
         return integrations_.statusJson();

@@ -160,6 +160,9 @@ export interface WallpaperPresetMeta {
   /** 相对 resources/ 的 Light / Dark 背景图路径 */
   lightFile: string
   darkFile: string
+  /** 设置页按当前明暗主题展示对应的壁纸缩略图 */
+  previewDataUrlLight?: string | null
+  previewDataUrlDark?: string | null
   previewDataUrl?: string | null
 }
 

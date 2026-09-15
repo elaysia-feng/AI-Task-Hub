@@ -57,6 +57,10 @@ cardColor: darkMode ? "#7c10121a" : "#d9ffffff"
     readonly property color
 cardHoverColor: darkMode ? "#9c161a24" : "#ffffffff"
     readonly property color
+tabColor: darkMode ? "#5010141a" : "#88ffffff"
+    readonly property color
+tabActiveColor: darkMode ? "#70161a24" : "#a8ffffff"
+    readonly property color
 borderColor: darkMode ? "#14ffffff" : "#1714192d"
     readonly property color
 borderStrong: darkMode ? "#24ffffff" : "#2b14192d"
@@ -589,6 +593,11 @@ taskStore.userIconPath : nativeResourceDir + "/presets/default.png"
 fillMode: Image.PreserveAspectCrop
 asynchronous: true
                     }
+MouseArea {
+anchors.fill: parent
+cursorShape: Qt.PointingHandCursor
+onClicked: taskStore.pickUserIcon()
+                    }
                 }
 Label {
 text: "AI Task Hub"
@@ -607,7 +616,7 @@ Rectangle {
 Layout.preferredWidth: 68
 Layout.preferredHeight: 25
 radius: 13
-color: cardColor
+color: tabColor
 border.color: borderColor
 RowLayout {
 anchors.fill: parent
@@ -893,7 +902,7 @@ padding: 0
 background: Rectangle {
 radius: 17
 color: ghostButton.hovered ?
-cardHoverColor : cardColor
+cardHoverColor : tabColor
 border.color: ghostButton.hovered ?
 borderStrong : borderColor }
 contentItem: Label {
@@ -971,7 +980,7 @@ Rectangle {
 Layout.fillWidth: true
 Layout.preferredHeight: 40
 radius: 20
-color: cardColor
+color: tabColor
 border.color: borderColor
 RowLayout {
 anchors.fill: parent
@@ -1040,7 +1049,7 @@ currentIndex: window.sortOrder === "oldest" ? 1 : 0
 onActivated: window.sortOrder = currentText
 background: Rectangle {
 radius: 20
-color: cardColor
+color: tabColor
 border.color: borderColor }
 contentItem: Label {
 text: sortCombo.currentText === "oldest" ? "最早优先" : "最新优先"
@@ -1105,7 +1114,7 @@ Rectangle {
 anchors.fill: parent
 radius: 15
 color: window.statusFilter === filterItem.option.code ?
-cardColor : "transparent"
+tabActiveColor : "transparent"
 border.color: window.statusFilter === filterItem.option.code ?
 borderStrong : "transparent" }
 RowLayout {
@@ -1180,7 +1189,7 @@ Rectangle {
 anchors.fill: parent
 radius: 15
 color: window.sourceFilter === sourceItem.option.code ?
-cardColor : "transparent"
+tabActiveColor : "transparent"
 border.color: window.sourceFilter === sourceItem.option.code ?
 borderStrong : "transparent" }
 RowLayout {
@@ -1648,7 +1657,7 @@ onClicked: taskStore.setTheme(modelData)
 background: Rectangle {
 radius: 14
 color: themeChoice.selected ?
-accentSoft : cardColor
+accentSoft : tabColor
 border.color: themeChoice.selected ?
 accentLine : borderColor }
 contentItem: RowLayout {
@@ -1656,7 +1665,8 @@ spacing: 7
 Image {
 Layout.preferredWidth: 38
 Layout.preferredHeight: 38
-source: nativeResourceDir + "/presets/" + modelData + ".png"
+source: nativeResourceDir + "/themes/" + modelData + "/wallpaper-" +
+        (darkMode ? "dark" : "light") + ".png"
 fillMode: Image.PreserveAspectCrop
 asynchronous: true }
 Label {
@@ -1679,7 +1689,6 @@ GhostButton {
 text: "恢复默认"
 onClicked: {
                                 taskStore.clearWallpaper()
-                                taskStore.clearUserIcon()
                             }
                         }
 Label {
@@ -1727,7 +1736,7 @@ onClicked: taskStore.setUserIconPreset(modelData)
 background: Rectangle {
 radius: 14
 color: iconChoice.selected ?
-accentSoft : cardColor
+accentSoft : tabColor
 border.color: iconChoice.selected ?
 accentLine : borderColor }
 contentItem: RowLayout {

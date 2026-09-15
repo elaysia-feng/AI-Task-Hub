@@ -1,5 +1,5 @@
 param(
-    [string]$Version = '0.3.2',
+    [string]$Version = '0.3.3',
     [string]$Executable = (Join-Path $PSScriptRoot 'dist/AI Task Hub Win32.next.exe')
 )
 $ErrorActionPreference = 'Stop'

@@ -176,10 +176,26 @@ export function getWallpaperState(): WallpaperState {
 function presetPreviews(): WallpaperPresetMeta[] {
   if (cachedPresetPreviews) return cachedPresetPreviews
   cachedPresetPreviews = WALLPAPER_PRESETS.map((preset) => {
-    const icon = nativeImage.createFromPath(path.join(RESOURCES_DIR, 'presets', `${preset.id}.png`))
+    const preview = (file: string): string | null => {
+      const image = nativeImage.createFromPath(path.join(RESOURCES_DIR, file))
+      if (image.isEmpty()) return null
+      const { width, height } = image.getSize()
+      const scale = Math.min(1, 160 / Math.max(width, height))
+      const resized = scale < 1
+        ? image.resize({
+            width: Math.max(1, Math.round(width * scale)),
+            height: Math.max(1, Math.round(height * scale)),
+          })
+        : image
+      return resized.toDataURL()
+    }
+    const previewDataUrlLight = preview(preset.lightFile)
+    const previewDataUrlDark = preview(preset.darkFile)
     return {
       ...preset,
-      previewDataUrl: icon.isEmpty() ? null : icon.resize({ width: 96, height: 96 }).toDataURL(),
+      previewDataUrlLight,
+      previewDataUrlDark,
+      previewDataUrl: previewDataUrlLight ?? previewDataUrlDark,
     }
   })
   return cachedPresetPreviews
