@@ -74,10 +74,10 @@ Claude Code 的标准配置是 `.claude/settings.json`，不是 `.claudecode`。
 ```powershell
 .\native-win32\build-win32.ps1 -StageOnly
 .\native-win32\test-win32.ps1
-.\native-win32\package-portable.ps1 -Version 0.3.1
+.\native-win32\package-portable.ps1 -Version 0.3.2
 ```
 
-ZIP 与 SHA256 校验文件位于 `native-win32/release/`。发布使用独立标签 `win32-v0.3.1`，不会触发现有 Electron 的 `v*` 构建流程。MinGW 运行库已静态链接，无需分发 `libwinpthread-1.dll`。
+ZIP 与 SHA256 校验文件位于 `native-win32/release/`。发布使用独立标签 `win32-v0.3.2`，不会触发现有 Electron 的 `v*` 构建流程。MinGW 运行库已静态链接，无需分发 `libwinpthread-1.dll`。
 
 ## 资源与内存
 

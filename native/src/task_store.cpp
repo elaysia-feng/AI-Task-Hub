@@ -47,7 +47,8 @@ const QStringList kThemes{QStringLiteral("default"), QStringLiteral("rei-ayanami
                           QStringLiteral("mutsumi-wakaba"), QStringLiteral("sakiko-togawa"),
                           QStringLiteral("yui-hirasawa"), QStringLiteral("mio-akiyama"),
                           QStringLiteral("ritsu-tainaka"), QStringLiteral("tsumugi-kotobuki"),
-                          QStringLiteral("azusa-nakano")};
+                          QStringLiteral("azusa-nakano"), QStringLiteral("ayaka-kamisato"),
+                          QStringLiteral("aemeath"), QStringLiteral("shorekeeper")};
 
 QString bundledPresetPath(const QString &presetId) {
     const QString relative = QDir(QStringLiteral("presets")).filePath(presetId + QStringLiteral(".png"));

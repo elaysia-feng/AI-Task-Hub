@@ -38,9 +38,9 @@ orbTasksRevision: 0
     property var
 normalFlags: Qt.FramelessWindowHint | Qt.Window
     property var
-themeIds: ["default", "rei-ayanami", "tomo-ebizuka", "elaina", "mutsumi-wakaba", "sakiko-togawa", "yui-hirasawa", "mio-akiyama", "ritsu-tainaka", "tsumugi-kotobuki", "azusa-nakano"]
+themeIds: ["default", "rei-ayanami", "tomo-ebizuka", "elaina", "mutsumi-wakaba", "sakiko-togawa", "yui-hirasawa", "mio-akiyama", "ritsu-tainaka", "tsumugi-kotobuki", "azusa-nakano", "ayaka-kamisato", "aemeath", "shorekeeper"]
     property var
-themeNames: ["AI 看板娘", "绫波丽", "海老塚智", "伊蕾娜", "若叶睦", "丰川祥子", "平泽唯", "秋山澪", "田井中律", "琴吹紬", "中野梓"]
+themeNames: ["AI 看板娘", "绫波丽", "海老塚智", "伊蕾娜", "若叶睦", "丰川祥子", "平泽唯", "秋山澪", "田井中律", "琴吹紬", "中野梓", "神里绫华", "爱弥斯", "守岸人"]
     property int
 selectedId: 0
     property var

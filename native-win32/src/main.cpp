@@ -141,11 +141,12 @@ struct ThemeInfo {
     const wchar_t *name;
 };
 
-constexpr std::array<ThemeInfo, 11> kThemes{{
+constexpr std::array<ThemeInfo, 14> kThemes{{
     {L"default", L"AI 看板娘"}, {L"rei-ayanami", L"绫波丽"}, {L"tomo-ebizuka", L"海老塚智"},
-    {L"elaina", L"伊蕾娜"}, {L"mutsumi-wakaba", L"若叶睦"}, {L"sakiko-togawa", L"户川咲姬"},
+    {L"elaina", L"伊蕾娜"}, {L"mutsumi-wakaba", L"若叶睦"}, {L"sakiko-togawa", L"丰川祥子"},
     {L"yui-hirasawa", L"平泽唯"}, {L"mio-akiyama", L"秋山澪"}, {L"ritsu-tainaka", L"田井中律"},
     {L"tsumugi-kotobuki", L"琴吹紬"}, {L"azusa-nakano", L"中野梓"},
+    {L"ayaka-kamisato", L"神里绫华"}, {L"aemeath", L"爱弥斯"}, {L"shorekeeper", L"守岸人"},
 }};
 
 // 设计令牌：对齐 QML readonly property 数值。所有 RGB 在 #RRGGBB 位上；
@@ -281,6 +282,8 @@ enum HitId {
     HitNotifications = 43,
     HitAutoStart = 44,
     HitChangeDataDirectory = 45,
+    HitClearWallpaper = 46,
+    HitClearIcon = 47,
     HitCleanupBackdrop = 60,
     HitCleanupQueue = 61,
     HitCleanupCompleted = 62,
@@ -1671,7 +1674,11 @@ private:
         }
         const int contentTop = 166;
         const int contentBottom = height - 14;
-        const int presetCardHeight = width < 960 ? 372 : 300;
+        const int presetColumns = width < 960 ? 4 : 6;
+        const int presetRows = (static_cast<int>(kThemes.size()) + presetColumns - 1) / presetColumns;
+        const int presetGridHeight = presetRows * 64 + (presetRows - 1) * 8;
+        // 预留标题、网格与底部操作区，新增预设时不会与“恢复默认”按钮重叠。
+        const int presetCardHeight = 70 + presetGridHeight + 34 + 60;
         const int totalContentHeight = settingsTab_ == 0 ? presetCardHeight * 2 + 188 : (settingsTab_ == 1 ? 384 : 412);
         const int maxScroll = std::max(0, totalContentHeight - (contentBottom - contentTop));
         scrollOffset_ = std::clamp(scrollOffset_, 0, maxScroll);
@@ -1959,7 +1966,7 @@ private:
         addHit(HitPickWallpaper, rectFrom(left, top, left + aW, top + aH));
         // "恢复默认"
         const int bX = left + aW + gap;
-        const bool hotB = hotHit_ == HitClearAppearance;
+        const bool hotB = hotHit_ == HitClearWallpaper;
         fillRound(static_cast<float>(bX), static_cast<float>(top),
                   static_cast<float>(bX + 100), static_cast<float>(top + aH), 14,
                   hotB ? p.cardHover : p.card);
@@ -1968,7 +1975,7 @@ private:
         textCentered(L"恢复默认", static_cast<float>(bX), static_cast<float>(top),
                      static_cast<float>(bX + 100), static_cast<float>(top + aH),
                      12, p.textSecondary);
-        addHit(HitClearAppearance, rectFrom(bX, top, bX + 100, top + aH));
+        addHit(HitClearWallpaper, rectFrom(bX, top, bX + 100, top + aH));
         // 状态文字
         const std::wstring status = !store_.wallpaperPath().empty() ? L"已使用本地壁纸" : L"已使用内置主题";
         text(status, static_cast<float>(bX + 110), static_cast<float>(top + 9),
@@ -1990,7 +1997,7 @@ private:
                      12, p.textSecondary);
         addHit(HitPickIcon, rectFrom(left, top, left + aW, top + aH));
         const int bX = left + aW + gap;
-        const bool hotB = hotHit_ == HitClearAppearance;
+        const bool hotB = hotHit_ == HitClearIcon;
         fillRound(static_cast<float>(bX), static_cast<float>(top),
                   static_cast<float>(bX + 100), static_cast<float>(top + aH), 14,
                   hotB ? p.cardHover : p.card);
@@ -1999,7 +2006,11 @@ private:
         textCentered(L"恢复默认", static_cast<float>(bX), static_cast<float>(top),
                      static_cast<float>(bX + 100), static_cast<float>(top + aH),
                      12, p.textSecondary);
-        addHit(HitClearAppearance, rectFrom(bX, top, bX + 100, top + aH));
+        addHit(HitClearIcon, rectFrom(bX, top, bX + 100, top + aH));
+        const std::wstring status = !store_.userIconPath().empty() ? L"已使用本地图片" : L"已使用内置头像";
+        text(status, static_cast<float>(bX + 110), static_cast<float>(top + 9),
+             static_cast<float>(bX + 360), static_cast<float>(top + aH - 6),
+             11, p.muted);
     }
 
     void renderOrb(int width, int height) {
@@ -2372,7 +2383,8 @@ private:
         else if (id == HitCloseDetail) selectedId_ = 0;
         else if (id == HitPickWallpaper) pickImage(true);
         else if (id == HitPickIcon) pickImage(false);
-        else if (id == HitClearAppearance) { store_.clearWallpaper(); store_.clearUserIcon(); reloadImages(true); }
+        else if (id == HitClearWallpaper) { store_.clearWallpaper(); reloadImages(true); }
+        else if (id == HitClearIcon) { store_.clearUserIcon(); reloadImages(true); }
         else if (id == HitSearch) { searchFocus_ = true; SetFocus(hwnd_); }
         else if (id == HitStatusCycle) {
             static constexpr const wchar_t *filters[] = {L"", L"RUNNING", L"NEEDS_INPUT", L"COMPLETED_UNREAD", L"FAILED_UNREAD"};
@@ -2441,8 +2453,12 @@ private:
             }
             refreshIntegrationStatus();
         }
-        else if (id >= HitThemeBase && id < HitThemeBase + static_cast<int>(kThemes.size())) store_.setTheme(kThemes[static_cast<size_t>(id - HitThemeBase)].id);
-        else if (id >= HitIconBase && id < HitIconBase + static_cast<int>(kThemes.size())) store_.setUserIconPreset(kThemes[static_cast<size_t>(id - HitIconBase)].id);
+        else if (id >= HitThemeBase && id < HitThemeBase + static_cast<int>(kThemes.size())) {
+            if (store_.setTheme(kThemes[static_cast<size_t>(id - HitThemeBase)].id)) reloadImages(true);
+        }
+        else if (id >= HitIconBase && id < HitIconBase + static_cast<int>(kThemes.size())) {
+            if (store_.setUserIconPreset(kThemes[static_cast<size_t>(id - HitIconBase)].id)) reloadImages(true);
+        }
         else if (id >= HitCardBase) {
             const std::int64_t taskId = id - HitCardBase;
             selectedId_ = taskId;

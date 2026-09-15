@@ -1,4 +1,8 @@
-param([Parameter(Mandatory=$true)][string]$Executable, [Parameter(Mandatory=$true)][string]$OutputDirectory)
+param(
+    [Parameter(Mandatory=$true)][string]$Executable,
+    [Parameter(Mandatory=$true)][string]$OutputDirectory,
+    [switch]$AppearanceOnly
+)
 $ErrorActionPreference = 'Stop'
 Add-Type -AssemblyName System.Drawing
 Add-Type @'
@@ -14,6 +18,8 @@ public static class HubUiVerify {
     [DllImport("user32.dll")] public static extern bool SetCursorPos(int x,int y);
     [DllImport("user32.dll")] public static extern bool GetCursorPos(out Point point);
     [DllImport("user32.dll")] public static extern bool SetForegroundWindow(IntPtr hwnd);
+    [DllImport("user32.dll")] public static extern bool BringWindowToTop(IntPtr hwnd);
+    [DllImport("user32.dll")] public static extern bool ShowWindow(IntPtr hwnd, int command);
     [DllImport("user32.dll")] public static extern bool SetProcessDPIAware();
 }
 '@
@@ -36,6 +42,12 @@ function Rect {
 function Send([uint32]$message, [int64]$wp = 0, [int64]$lp = 0) {
     [HubUiVerify]::SendMessage($script:window, $message, [IntPtr]$wp, [IntPtr]$lp) | Out-Null
 }
+function Activate-Window {
+    [HubUiVerify]::ShowWindow($script:window, 5) | Out-Null
+    [HubUiVerify]::BringWindowToTop($script:window) | Out-Null
+    [HubUiVerify]::SetForegroundWindow($script:window) | Out-Null
+    Start-Sleep -Milliseconds 200
+}
 function Move-Pointer([int]$x, [int]$y) {
     $rect = Rect
     [HubUiVerify]::SetCursorPos($rect.Left + $x, $rect.Top + $y) | Out-Null
@@ -51,6 +63,7 @@ function Click([int]$x, [int]$y) {
 }
 function Resize([int]$width, [int]$height) {
     [HubUiVerify]::SetWindowPos($script:window, [IntPtr](-1), 40,40,$width,$height,0x40) | Out-Null
+    Activate-Window
     Start-Sleep -Milliseconds 250
 }
 function Shot([string]$name) {
@@ -73,10 +86,49 @@ try {
         if ($script:window -ne [IntPtr]::Zero) { break }
     }
     if ($script:window -eq [IntPtr]::Zero) { throw 'GUI 未出现' }
-    [HubUiVerify]::SetForegroundWindow($script:window) | Out-Null
+    Activate-Window
     Start-Sleep -Milliseconds 500
     $initial = Rect
     if ($initial.Right-$initial.Left -ne 52) { throw '启动悬浮球尺寸异常' }
+    if ($AppearanceOnly) {
+        Move-Pointer 26 26
+        Start-Sleep -Milliseconds 250
+        Click 50 327
+        Resize 1004 644
+        Click 68 198
+        $appearanceRect = Rect
+        Write-Output "appearance-window=$($appearanceRect.Left),$($appearanceRect.Top),$($appearanceRect.Right),$($appearanceRect.Bottom)"
+        Shot 'appearance-start'
+
+        # 14 个内置预设在 1004 宽窗口中分为 3 行，向下滚动后点击第二行的守岸人头像。
+        Move-Pointer 600 450
+        Send 0x20A (-1200 * 65536) 0
+        Start-Sleep -Milliseconds 250
+        Click 400 500
+        $iniPath = Join-Path ([IO.Path]::GetDirectoryName($Executable)) 'AI Task Hub.ini'
+        $ini = Get-Content -LiteralPath $iniPath -Raw -Encoding utf8
+        if ($ini -notmatch '(?m)^userIconPreset=shorekeeper\s*$') { throw '守岸人头像点击未落盘' }
+        Shot 'appearance-icon-shorekeeper'
+
+        # 回到顶部后点击第二行第一列的爱弥斯壁纸，确认壁纸选择同样会刷新并保存。
+        Send 0x20A (1200 * 65536) 0
+        Start-Sleep -Milliseconds 250
+        Click 250 410
+        $ini = Get-Content -LiteralPath $iniPath -Raw -Encoding utf8
+        if ($ini -notmatch '(?m)^themeId=aemeath\s*$') { throw '爱弥斯壁纸点击未落盘' }
+        Shot 'appearance-wallpaper-aemeath'
+
+        # 在保留爱弥斯壁纸的情况下恢复头像，确认头像恢复不会误清壁纸。
+        Send 0x20A (-1200 * 65536) 0
+        Start-Sleep -Milliseconds 250
+        Click 410 585
+        $ini = Get-Content -LiteralPath $iniPath -Raw -Encoding utf8
+        if ($ini -notmatch '(?m)^userIconPreset=\s*$' -or $ini -notmatch '(?m)^themeId=aemeath\s*$') {
+            throw '恢复默认头像影响了壁纸主题'
+        }
+        Write-Output 'PASS appearance preset selection, scoped reset and image refresh'
+        return
+    }
     Shot '01-orb'
     Memory 'orb-start'
     # 测试库由调用方准备；只向此隔离程序发送模拟事件。

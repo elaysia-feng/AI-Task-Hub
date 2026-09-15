@@ -116,6 +116,9 @@ int wmain(int argc, wchar_t **argv) {
             const auto completed = store.ingest(json("{\"source\":\"CODEX\",\"externalTaskId\":\"three\",\"eventType\":\"TASK_COMPLETED\",\"title\":\"待删除完成消息\"}"));
             check(completed > 0 && store.clear(L"completed") == 1, "completed-only deletion");
             check(store.events(completed).empty() && store.snapshot().counts.total == 1, "completed deletion cascades events");
+            check(store.setTheme(L"ayaka-kamisato") && store.themeId() == L"ayaka-kamisato", "new wallpaper preset persists");
+            check(store.setUserIconPreset(L"shorekeeper") && store.userIconPreset() == L"shorekeeper",
+                  "new icon preset persists");
             store.setDarkMode(false); store.setNotificationsEnabled(false);
             std::wstring migrationError;
             check(store.backupToDirectory(relocatedDatabase.wstring(), migrationError), "database snapshot migration");

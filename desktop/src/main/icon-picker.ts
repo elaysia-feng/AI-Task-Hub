@@ -40,6 +40,9 @@ export const ICON_PRESETS: UserIconPresetMeta[] = [
   { id: 'ritsu-tainaka', name: '田井中律', file: 'presets/ritsu-tainaka.png' },
   { id: 'tsumugi-kotobuki', name: '琴吹紬', file: 'presets/tsumugi-kotobuki.png' },
   { id: 'azusa-nakano', name: '中野梓', file: 'presets/azusa-nakano.png' },
+  { id: 'ayaka-kamisato', name: '神里绫华', file: 'presets/ayaka-kamisato.png' },
+  { id: 'aemeath', name: '爱弥斯', file: 'presets/aemeath.png' },
+  { id: 'shorekeeper', name: '守岸人', file: 'presets/shorekeeper.png' },
 ]
 
 export const DEFAULT_ICON_PREFS = { source: 'preset', presetId: 'default' } as const

@@ -241,7 +241,7 @@ std::wstring TaskStore::themeId() const {
     const std::wstring value = setting(L"themeId");
     return contains({L"default", L"rei-ayanami", L"tomo-ebizuka", L"elaina", L"mutsumi-wakaba",
                      L"sakiko-togawa", L"yui-hirasawa", L"mio-akiyama", L"ritsu-tainaka",
-                     L"tsumugi-kotobuki", L"azusa-nakano"}, value)
+                     L"tsumugi-kotobuki", L"azusa-nakano", L"ayaka-kamisato", L"aemeath", L"shorekeeper"}, value)
                ? value
                : L"default";
 }
@@ -250,7 +250,7 @@ std::wstring TaskStore::userIconPreset() const {
     const std::wstring value = setting(L"userIconPreset");
     if (contains({L"default", L"rei-ayanami", L"tomo-ebizuka", L"elaina", L"mutsumi-wakaba",
                      L"sakiko-togawa", L"yui-hirasawa", L"mio-akiyama", L"ritsu-tainaka",
-                     L"tsumugi-kotobuki", L"azusa-nakano"}, value))
+                     L"tsumugi-kotobuki", L"azusa-nakano", L"ayaka-kamisato", L"aemeath", L"shorekeeper"}, value))
         return value;
     const std::wstring configured = setting(L"userIconPath");
     const std::wstring marker = L"icon-preset-";
@@ -260,7 +260,7 @@ std::wstring TaskStore::userIconPreset() const {
         const std::wstring inferred = configured.substr(start + marker.size(), end == std::wstring::npos ? std::wstring::npos : end - start - marker.size());
         if (contains({L"default", L"rei-ayanami", L"tomo-ebizuka", L"elaina", L"mutsumi-wakaba",
                       L"sakiko-togawa", L"yui-hirasawa", L"mio-akiyama", L"ritsu-tainaka",
-                      L"tsumugi-kotobuki", L"azusa-nakano"}, inferred)) return inferred;
+                      L"tsumugi-kotobuki", L"azusa-nakano", L"ayaka-kamisato", L"aemeath", L"shorekeeper"}, inferred)) return inferred;
     }
     return L"default";
 }
@@ -739,7 +739,7 @@ void TaskStore::setNotificationsEnabled(bool enabled) { writeSetting(L"notificat
 bool TaskStore::setTheme(const std::wstring &theme) {
     if (!contains({L"default", L"rei-ayanami", L"tomo-ebizuka", L"elaina", L"mutsumi-wakaba",
                    L"sakiko-togawa", L"yui-hirasawa", L"mio-akiyama", L"ritsu-tainaka",
-                   L"tsumugi-kotobuki", L"azusa-nakano"}, theme)) return false;
+                   L"tsumugi-kotobuki", L"azusa-nakano", L"ayaka-kamisato", L"aemeath", L"shorekeeper"}, theme)) return false;
     writeSetting(L"themeId", theme);
     notifyChanged();
     return true;
@@ -748,7 +748,7 @@ bool TaskStore::setTheme(const std::wstring &theme) {
 bool TaskStore::setUserIconPreset(const std::wstring &preset) {
     if (!contains({L"default", L"rei-ayanami", L"tomo-ebizuka", L"elaina", L"mutsumi-wakaba",
                    L"sakiko-togawa", L"yui-hirasawa", L"mio-akiyama", L"ritsu-tainaka",
-                   L"tsumugi-kotobuki", L"azusa-nakano"}, preset)) return false;
+                   L"tsumugi-kotobuki", L"azusa-nakano", L"ayaka-kamisato", L"aemeath", L"shorekeeper"}, preset)) return false;
     writeSetting(L"userIconPath", L"");
     writeSetting(L"userIconPreset", preset);
     notifyChanged();

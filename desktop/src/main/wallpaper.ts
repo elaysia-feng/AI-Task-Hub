@@ -31,6 +31,9 @@ export const WALLPAPER_PRESETS: WallpaperPresetMeta[] = [
   { id: 'ritsu-tainaka', name: '田井中律', lightFile: 'themes/ritsu-tainaka/wallpaper-light.png', darkFile: 'themes/ritsu-tainaka/wallpaper-dark.png' },
   { id: 'tsumugi-kotobuki', name: '琴吹紬', lightFile: 'themes/tsumugi-kotobuki/wallpaper-light.png', darkFile: 'themes/tsumugi-kotobuki/wallpaper-dark.png' },
   { id: 'azusa-nakano', name: '中野梓', lightFile: 'themes/azusa-nakano/wallpaper-light.png', darkFile: 'themes/azusa-nakano/wallpaper-dark.png' },
+  { id: 'ayaka-kamisato', name: '神里绫华', lightFile: 'themes/ayaka-kamisato/wallpaper-light.png', darkFile: 'themes/ayaka-kamisato/wallpaper-dark.png' },
+  { id: 'aemeath', name: '爱弥斯', lightFile: 'themes/aemeath/wallpaper-light.png', darkFile: 'themes/aemeath/wallpaper-dark.png' },
+  { id: 'shorekeeper', name: '守岸人', lightFile: 'themes/shorekeeper/wallpaper-light.png', darkFile: 'themes/shorekeeper/wallpaper-dark.png' },
 ]
 
 let cachedPresetWallpaper: {
