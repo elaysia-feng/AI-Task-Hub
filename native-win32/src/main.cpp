@@ -3028,10 +3028,12 @@ private:
         case kRefreshMessage:
             app->refreshSnapshot();
             return 0;
-        case kTrayMessage:
-            if (lParam == WM_LBUTTONUP || lParam == WM_LBUTTONDBLCLK) app->enterPanelMode(false);
-            else if (lParam == NIN_BALLOONUSERCLICK) app->enterPanelMode(false);
-            else if (lParam == WM_RBUTTONUP) {
+        case kTrayMessage: {
+            // NOTIFYICON_VERSION_4 将托盘事件放在 lParam 低字中，不能直接比较整个 LPARAM。
+            const UINT trayEvent = LOWORD(static_cast<ULONG_PTR>(lParam));
+            if (trayEvent == WM_LBUTTONUP || trayEvent == WM_LBUTTONDBLCLK) app->enterPanelMode(false);
+            else if (trayEvent == NIN_BALLOONUSERCLICK) app->enterPanelMode(false);
+            else if (trayEvent == WM_RBUTTONUP || trayEvent == WM_CONTEXTMENU) {
                 POINT cursor{};
                 GetCursorPos(&cursor);
                 HMENU menu = CreatePopupMenu();
@@ -3047,6 +3049,7 @@ private:
                 else if (command == 3) PostMessageW(hwnd, WM_CLOSE, 0, 0);
             }
             return 0;
+        }
         case WM_CLOSE:
             DestroyWindow(hwnd);
             return 0;
