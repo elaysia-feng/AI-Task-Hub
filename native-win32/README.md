@@ -43,7 +43,7 @@
 - 卡片按钮绑定被点击的任务；历史和详情删除前二次确认；打开目标失败不标记已读。
 - 详情中的摘要、完整答复及事件列表独立滚动，底部操作固定；窄窗口改用单栏详情。
 - 悬停小球后可点击消息查看详情、打开面板或一键已读；拖动与点击分开判定，丢失鼠标捕获会取消操作。
-- 系统通知和 Windows 登录后自动启动均可独立开关；开机启动只写入当前用户启动项，不要求管理员权限。
+- 系统通知和任务状态应用内提醒卡片与 Windows 登录后自动启动均可独立开关；开机启动只写入当前用户启动项，不要求管理员权限。
 - 深浅色和通知偏好保存在当前数据库目录，迁移数据库时一起复制。
 
 ## 接入安全与限制
@@ -74,10 +74,10 @@ Claude Code 的标准配置是 `.claude/settings.json`，不是 `.claudecode`。
 ```powershell
 .\native-win32\build-win32.ps1 -StageOnly
 .\native-win32\test-win32.ps1
-.\native-win32\package-portable.ps1 -Version 0.3.4
+.\native-win32\package-portable.ps1 -Version 0.3.5
 ```
 
-ZIP 与 SHA256 校验文件位于 `native-win32/release/`。发布使用独立标签 `win32-v0.3.4`，不会触发现有 Electron 的 `v*` 构建流程。MinGW 运行库已静态链接，无需分发 `libwinpthread-1.dll`。
+ZIP 与 SHA256 校验文件位于 `native-win32/release/`。发布使用独立标签 `win32-v0.3.5`，不会触发现有 Electron 的 `v*` 构建流程。MinGW 运行库已静态链接，无需分发 `libwinpthread-1.dll`。
 
 ## 资源与内存
 

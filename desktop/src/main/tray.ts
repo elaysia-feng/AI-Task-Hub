@@ -35,7 +35,7 @@ export function createTray(callbacks: TrayCallbacks): TrayHandle {
         { label: `重启安装更新 (v${updateVersion})`, click: callbacks.onInstallUpdate },
       )
     }
-    items.push({ type: 'separator' }, { label: '退出', click: callbacks.onQuit })
+    items.push({ type: 'separator' }, { label: '结束进程', click: callbacks.onQuit })
     tray.setContextMenu(Menu.buildFromTemplate(items))
   }
   buildMenu(null)

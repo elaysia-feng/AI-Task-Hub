@@ -32,15 +32,20 @@ using Microsoft::WRL::ComPtr;
 namespace {
 
 constexpr wchar_t kWindowClass[] = L"AI_TASK_HUB_WIN32_WINDOW";
+constexpr wchar_t kNotificationClass[] = L"AI_TASK_HUB_WIN32_NOTIFICATION";
 constexpr UINT kRefreshMessage = WM_APP + 10;
 constexpr UINT kTrayMessage = WM_APP + 11;
+constexpr UINT kQuitMessage = WM_APP + 12;
 constexpr UINT_PTR kCollapseTimer = 42;
 constexpr UINT_PTR kRefreshTimer = 43;
 constexpr UINT_PTR kStartupActivateTimer = 44;
+constexpr UINT_PTR kNotificationTimer = 45;
 constexpr int kOrbSize = 52;
 constexpr int kOrbPanelWidth = 240;
 constexpr int kOrbPanelHeight = 360;
 constexpr int kOrbPanelInset = 10;
+constexpr int kNotificationWidth = 400;
+constexpr int kNotificationHeight = 116;
 // 与旧版截图的 1004×644 内容比例保持一致，启动时给用户一个稳定的宽屏工作区。
 constexpr int kPanelWidth = 1004;
 constexpr int kPanelHeight = 644;
@@ -383,6 +388,7 @@ public:
         autoStartEnabled_ = autoStartEnabled();
     }
     ~Win32App() {
+        hideNotificationPopup();
         if (hwnd_) Shell_NotifyIconW(NIM_DELETE, &tray_);
         server_.stop();
         destroyBacking();
@@ -391,6 +397,8 @@ public:
     int run(HINSTANCE instance) {
         instance_ = instance;
         SetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2);
+        // 给 Windows 通知区域一个稳定的应用身份，避免系统把通知归到无名进程并静默丢弃。
+        SetCurrentProcessExplicitAppUserModelID(L"AI.TaskHub.Win32");
         if (!registerWindowClass()) {
             showStartupError(L"注册窗口类失败");
             return 1;
@@ -475,7 +483,18 @@ private:
         klass.lpszClassName = kWindowClass;
         klass.hIcon = loadAppIcon(32);
         klass.hIconSm = loadAppIcon(16);
-        return RegisterClassExW(&klass) != 0 || GetLastError() == ERROR_CLASS_ALREADY_EXISTS;
+        if (RegisterClassExW(&klass) == 0 && GetLastError() != ERROR_CLASS_ALREADY_EXISTS) return false;
+
+        WNDCLASSEXW notificationClass{sizeof(WNDCLASSEXW)};
+        notificationClass.style = CS_HREDRAW | CS_VREDRAW;
+        notificationClass.lpfnWndProc = &Win32App::notificationProc;
+        notificationClass.hInstance = instance_;
+        notificationClass.hCursor = LoadCursorW(nullptr, IDC_HAND);
+        notificationClass.hbrBackground = nullptr;
+        notificationClass.lpszClassName = kNotificationClass;
+        notificationClass.hIcon = klass.hIcon;
+        notificationClass.hIconSm = klass.hIconSm;
+        return RegisterClassExW(&notificationClass) != 0 || GetLastError() == ERROR_CLASS_ALREADY_EXISTS;
     }
 
     HICON loadAppIcon(int size) const {
@@ -734,7 +753,8 @@ private:
         setBrush(valueColor);
         target()->DrawTextW(value.c_str(), static_cast<UINT32>(value.size()), format.Get(),
                             D2D1::RectF(left, top, right, bottom), brush_.Get(),
-                            D2D1_DRAW_TEXT_OPTIONS_ENABLE_COLOR_FONT | D2D1_DRAW_TEXT_OPTIONS_CLIP);
+                            static_cast<D2D1_DRAW_TEXT_OPTIONS>(D2D1_DRAW_TEXT_OPTIONS_ENABLE_COLOR_FONT |
+                                                                D2D1_DRAW_TEXT_OPTIONS_CLIP));
     }
     void textCentered(const std::wstring &value, float left, float top, float right, float bottom,
                       float size, D2D1_COLOR_F valueColor, bool bold = false) {
@@ -744,7 +764,8 @@ private:
         setBrush(valueColor);
         target()->DrawTextW(value.c_str(), static_cast<UINT32>(value.size()), format.Get(),
                             D2D1::RectF(left, top, right, bottom), brush_.Get(),
-                            D2D1_DRAW_TEXT_OPTIONS_ENABLE_COLOR_FONT | D2D1_DRAW_TEXT_OPTIONS_CLIP);
+                            static_cast<D2D1_DRAW_TEXT_OPTIONS>(D2D1_DRAW_TEXT_OPTIONS_ENABLE_COLOR_FONT |
+                                                                D2D1_DRAW_TEXT_OPTIONS_CLIP));
     }
     void circle(float x, float y, float radius, D2D1_COLOR_F value) {
         setBrush(value);
@@ -923,18 +944,169 @@ private:
         if (!tray_.hWnd || !notificationsEnabled_) return;
         std::wstring eventLabel = L"任务状态更新";
         DWORD infoFlags = NIIF_INFO;
+        COLORREF accent = RGB(34, 197, 94);
+        const wchar_t *icon = L"✓";
         if (task.eventType == L"TASK_COMPLETED") eventLabel = L"任务已完成";
-        else if (task.eventType == L"TASK_FAILED") { eventLabel = L"任务执行失败"; infoFlags = NIIF_ERROR; }
-        else if (task.eventType == L"TASK_NEEDS_INPUT") { eventLabel = L"任务等待输入"; infoFlags = NIIF_WARNING; }
+        else if (task.eventType == L"TASK_FAILED") {
+            eventLabel = L"任务执行失败";
+            infoFlags = NIIF_ERROR;
+            accent = RGB(239, 68, 68);
+            icon = L"!";
+        }
+        else if (task.eventType == L"TASK_NEEDS_INPUT") {
+            eventLabel = L"任务等待输入";
+            infoFlags = NIIF_WARNING;
+            accent = RGB(245, 158, 11);
+            icon = L"?";
+        }
         const std::wstring title = sourceLabel(task.source) + L" · " + eventLabel;
         std::wstring body = task.title.empty() ? L"未命名任务" : shorten(task.title, 100);
         if (!task.projectPath.empty()) body += L"\n" + shorten(task.projectPath, 120);
+
+        // 系统气泡受 Windows 通知设置和专注助手控制；应用内卡片作为稳定的可见反馈保底。
+        showNotificationPopup(title, body, accent, icon);
         NOTIFYICONDATAW notification = tray_;
         notification.uFlags = NIF_INFO;
         notification.dwInfoFlags = infoFlags;
         wcsncpy_s(notification.szInfoTitle, std::size(notification.szInfoTitle), title.c_str(), _TRUNCATE);
         wcsncpy_s(notification.szInfo, std::size(notification.szInfo), body.c_str(), _TRUNCATE);
-        Shell_NotifyIconW(NIM_MODIFY, &notification);
+        (void)Shell_NotifyIconW(NIM_MODIFY, &notification);
+    }
+
+    void hideNotificationPopup() {
+        if (!notificationHwnd_) return;
+        KillTimer(notificationHwnd_, kNotificationTimer);
+        ShowWindow(notificationHwnd_, SW_HIDE);
+    }
+
+    void showNotificationPopup(const std::wstring &title, const std::wstring &body,
+                               COLORREF accent, const wchar_t *icon) {
+        notificationTitle_ = title;
+        notificationBody_ = body;
+        notificationAccent_ = accent;
+        notificationIcon_ = icon;
+        if (!notificationHwnd_) {
+            notificationHwnd_ = CreateWindowExW(
+                WS_EX_TOPMOST | WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE,
+                kNotificationClass, L"AI Task Hub 通知", WS_POPUP,
+                0, 0, kNotificationWidth, kNotificationHeight,
+                hwnd_, nullptr, instance_, this);
+            if (!notificationHwnd_) return;
+            SetWindowRgn(notificationHwnd_, CreateRoundRectRgn(0, 0, kNotificationWidth + 1,
+                                                               kNotificationHeight + 1, 20, 20), TRUE);
+        }
+
+        RECT appRect{};
+        GetWindowRect(hwnd_, &appRect);
+        const HMONITOR monitor = MonitorFromWindow(hwnd_, MONITOR_DEFAULTTONEAREST);
+        MONITORINFO monitorInfo{sizeof(monitorInfo)};
+        GetMonitorInfoW(monitor, &monitorInfo);
+        const int x = monitorInfo.rcWork.right - kNotificationWidth - 22;
+        const int y = orbMode_
+            ? std::max(monitorInfo.rcWork.top + 18, appRect.bottom + 12)
+            : monitorInfo.rcWork.top + 18;
+        SetWindowPos(notificationHwnd_, HWND_TOPMOST, x, y, kNotificationWidth, kNotificationHeight,
+                     SWP_NOACTIVATE | SWP_SHOWWINDOW);
+        SetTimer(notificationHwnd_, kNotificationTimer, 5000, nullptr);
+        InvalidateRect(notificationHwnd_, nullptr, FALSE);
+    }
+
+    static LRESULT CALLBACK notificationProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam) {
+        Win32App *app = reinterpret_cast<Win32App *>(GetWindowLongPtrW(hwnd, GWLP_USERDATA));
+        if (message == WM_NCCREATE) {
+            const auto *create = reinterpret_cast<CREATESTRUCTW *>(lParam);
+            app = static_cast<Win32App *>(create->lpCreateParams);
+            SetWindowLongPtrW(hwnd, GWLP_USERDATA, reinterpret_cast<LONG_PTR>(app));
+        }
+        if (!app) return DefWindowProcW(hwnd, message, wParam, lParam);
+        switch (message) {
+        case WM_ERASEBKGND:
+            return 1;
+        case WM_MOUSEACTIVATE:
+            return MA_NOACTIVATE;
+        case WM_TIMER:
+            if (wParam == kNotificationTimer) app->hideNotificationPopup();
+            return 0;
+        case WM_LBUTTONUP:
+            app->hideNotificationPopup();
+            if (app->orbMode_) app->enterPanelMode(true);
+            ShowWindow(app->hwnd_, SW_SHOWNORMAL);
+            SetForegroundWindow(app->hwnd_);
+            return 0;
+        case WM_PAINT: {
+            PAINTSTRUCT paint{};
+            HDC dc = BeginPaint(hwnd, &paint);
+            RECT client{};
+            GetClientRect(hwnd, &client);
+            const bool dark = app->darkMode_;
+            const COLORREF background = dark ? RGB(20, 24, 33) : RGB(248, 250, 252);
+            const COLORREF border = dark ? RGB(71, 78, 92) : RGB(207, 215, 224);
+            const COLORREF titleColor = dark ? RGB(241, 240, 236) : RGB(32, 38, 49);
+            const COLORREF bodyColor = dark ? RGB(190, 195, 204) : RGB(79, 88, 102);
+
+            HBRUSH backgroundBrush = CreateSolidBrush(background);
+            FillRect(dc, &client, backgroundBrush);
+            DeleteObject(backgroundBrush);
+            HPEN borderPen = CreatePen(PS_SOLID, 1, border);
+            HGDIOBJ oldPen = SelectObject(dc, borderPen);
+            HGDIOBJ oldBrush = SelectObject(dc, GetStockObject(HOLLOW_BRUSH));
+            RoundRect(dc, 0, 0, client.right - 1, client.bottom - 1, 20, 20);
+            SelectObject(dc, oldBrush);
+            SelectObject(dc, oldPen);
+            DeleteObject(borderPen);
+
+            HBRUSH accentBrush = CreateSolidBrush(app->notificationAccent_);
+            RECT accentRect{0, 0, 5, client.bottom};
+            FillRect(dc, &accentRect, accentBrush);
+            DeleteObject(accentBrush);
+            HBRUSH iconBrush = CreateSolidBrush(app->notificationAccent_);
+            HGDIOBJ previousBrush = SelectObject(dc, iconBrush);
+            Ellipse(dc, 16, 17, 52, 53);
+            SelectObject(dc, previousBrush);
+            DeleteObject(iconBrush);
+
+            SetBkMode(dc, TRANSPARENT);
+            HFONT titleFont = CreateFontW(-MulDiv(13, GetDeviceCaps(dc, LOGPIXELSY), 72), 0, 0, 0,
+                                          FW_SEMIBOLD, FALSE, FALSE, FALSE, DEFAULT_CHARSET,
+                                          OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS, CLEARTYPE_QUALITY,
+                                          DEFAULT_PITCH | FF_SWISS, L"Microsoft YaHei UI");
+            HFONT bodyFont = CreateFontW(-MulDiv(12, GetDeviceCaps(dc, LOGPIXELSY), 72), 0, 0, 0,
+                                         FW_NORMAL, FALSE, FALSE, FALSE, DEFAULT_CHARSET,
+                                         OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS, CLEARTYPE_QUALITY,
+                                         DEFAULT_PITCH | FF_SWISS, L"Microsoft YaHei UI");
+            HFONT iconFont = CreateFontW(-MulDiv(18, GetDeviceCaps(dc, LOGPIXELSY), 72), 0, 0, 0,
+                                         FW_BOLD, FALSE, FALSE, FALSE, DEFAULT_CHARSET,
+                                         OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS, CLEARTYPE_QUALITY,
+                                         DEFAULT_PITCH | FF_SWISS, L"Segoe UI Symbol");
+            HGDIOBJ oldFont = SelectObject(dc, iconFont);
+            SetTextColor(dc, RGB(255, 255, 255));
+            RECT iconRect{16, 17, 52, 53};
+            DrawTextW(dc, app->notificationIcon_.c_str(), -1, &iconRect,
+                      DT_CENTER | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX);
+            SelectObject(dc, titleFont);
+            SetTextColor(dc, titleColor);
+            RECT titleRect{64, 16, client.right - 18, 40};
+            DrawTextW(dc, app->notificationTitle_.c_str(), -1, &titleRect,
+                      DT_SINGLELINE | DT_END_ELLIPSIS | DT_NOPREFIX);
+            SelectObject(dc, bodyFont);
+            SetTextColor(dc, bodyColor);
+            RECT bodyRect{64, 46, client.right - 18, client.bottom - 14};
+            DrawTextW(dc, app->notificationBody_.c_str(), -1, &bodyRect,
+                      DT_WORDBREAK | DT_END_ELLIPSIS | DT_NOPREFIX);
+            SelectObject(dc, oldFont);
+            DeleteObject(iconFont);
+            DeleteObject(titleFont);
+            DeleteObject(bodyFont);
+            EndPaint(hwnd, &paint);
+            return 0;
+        }
+        case WM_DESTROY:
+            KillTimer(hwnd, kNotificationTimer);
+            if (app->notificationHwnd_ == hwnd) app->notificationHwnd_ = nullptr;
+            return 0;
+        default:
+            return DefWindowProcW(hwnd, message, wParam, lParam);
+        }
     }
 
     // DEBUG: dump rendered BGRA buffer to PNG (one-shot, gated by env var or file flag).
@@ -2335,6 +2507,10 @@ private:
                     L"迁移完成", MB_OK | MB_ICONINFORMATION);
     }
 
+    void quitApplication() {
+        if (hwnd_) DestroyWindow(hwnd_);
+    }
+
     void performHit(int id) {
         if (id != HitSearch) searchFocus_ = false;
         if (id == HitCleanupBackdrop) {
@@ -2362,7 +2538,7 @@ private:
         }
         if (id == HitCleanupConfirmYes) { executeClearConfirmation(); return; }
         if (id == HitCleanupConfirmNo) { cancelClearConfirmation(); return; }
-        if (id == HitClose) { PostMessageW(hwnd_, WM_CLOSE, 0, 0); return; }
+        if (id == HitClose) { enterOrbMode(); return; }
         if (id == HitMinimize || id == HitEnterOrb) { enterOrbMode(); return; }
         if (id == HitCleanupMenu) { showCleanupMenu(); return; }
         if (id == HitMaximize) {
@@ -3040,18 +3216,21 @@ private:
                 AppendMenuW(menu, MF_STRING, 1, L"打开任务中心");
                 AppendMenuW(menu, MF_STRING, 2, L"收起为悬浮球");
                 AppendMenuW(menu, MF_SEPARATOR, 0, nullptr);
-                AppendMenuW(menu, MF_STRING, 3, L"退出");
+                AppendMenuW(menu, MF_STRING, 3, L"结束进程");
                 SetForegroundWindow(hwnd);
                 const int command = TrackPopupMenu(menu, TPM_RETURNCMD | TPM_NONOTIFY, cursor.x, cursor.y, 0, hwnd, nullptr);
                 DestroyMenu(menu);
                 if (command == 1) app->enterPanelMode(false);
                 else if (command == 2) app->enterOrbMode();
-                else if (command == 3) PostMessageW(hwnd, WM_CLOSE, 0, 0);
+                else if (command == 3) PostMessageW(hwnd, kQuitMessage, 0, 0);
             }
             return 0;
         }
+        case kQuitMessage:
+            app->quitApplication();
+            return 0;
         case WM_CLOSE:
-            DestroyWindow(hwnd);
+            app->enterOrbMode();
             return 0;
         case WM_DESTROY:
             KillTimer(hwnd, kCollapseTimer);
@@ -3073,6 +3252,7 @@ private:
 
     HINSTANCE instance_ = nullptr;
     HWND hwnd_ = nullptr;
+    HWND notificationHwnd_ = nullptr;
     NOTIFYICONDATAW tray_{};
     TaskStore store_;
     IntegrationManager integrations_;
@@ -3090,6 +3270,10 @@ private:
     std::wstring loadedWallpaper_;
     std::wstring loadedAvatar_;
     std::wstring serverWarning_;
+    std::wstring notificationTitle_;
+    std::wstring notificationBody_;
+    std::wstring notificationIcon_ = L"✓";
+    COLORREF notificationAccent_ = RGB(34, 197, 94);
     IntegrationStatus integrationStatus_{};
     std::wstring integrationMessage_;
     std::wstring sourceFilter_;

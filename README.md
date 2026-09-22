@@ -1,281 +1,57 @@
-<p align="center">
-  <img src="desktop/resources/icon.png" width="104" alt="AI Task Hub 图标">
-</p>
+# AI Task Hub
 
-<h1 align="center">AI Task Hub</h1>
+把 ChatGPT 网页、Claude Code 和 Codex 的任务事件集中到本地收件箱，查看任务状态、事件时间线和未读消息。
 
-<p align="center">
-  把 ChatGPT、Claude Code 与 Codex 的异步任务，收进一个漂亮的本地收件箱。
-</p>
+## 选择版本
 
-<p align="center">
-  <a href="https://github.com/elaysia-feng/AI-Task-Hub/actions/workflows/ci.yml"><img src="https://github.com/elaysia-feng/AI-Task-Hub/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
-  <img src="https://img.shields.io/badge/platform-Windows-2563EB?logo=windows11&logoColor=white" alt="Windows">
-  <img src="https://img.shields.io/badge/Electron-43-47848F?logo=electron&logoColor=white" alt="Electron 43">
-  <img src="https://img.shields.io/badge/FastAPI-local-009688?logo=fastapi&logoColor=white" alt="FastAPI">
-  <img src="https://img.shields.io/badge/license-MIT-E76F51" alt="MIT License">
-</p>
+仓库保留三套桌面实现，构建方式和运行依赖不同：
 
-<p align="center">
-  <picture>
-    <source media="(prefers-color-scheme: dark)" srcset="docs/images/app-settings-dark.png">
-    <img src="docs/images/app-settings-light.png" width="100%" alt="AI Task Hub 设置页实机截图">
-  </picture>
-</p>
+| 目录 | 实现 | 使用入口 |
+| --- | --- | --- |
+| `native-win32/` | C++、Win32、Direct2D、SQLite | [原生版构建与使用](native-win32/README.md) |
+| `desktop/` + `app/` | Electron 桌面端、Python FastAPI 后端 | 桌面脚本和后端依赖分别维护 |
+| `native/` | Qt 原生实现 | [Qt 版说明](native/README.md) |
 
-<p align="center"><sub>真实 Electron 窗口 · 14 套角色主题 · Light / Dark 自动适配 · 支持本地照片</sub></p>
+希望运行单进程 Windows 原生版时，从 `native-win32/` 开始；不要把 Electron 的 Node.js 和后端环境要求套用到该版本。
 
-## 它解决什么
+## Win32 版快速开始
 
-AI 任务跑久了，最容易错过的不是结果，而是“等待输入”“已经完成”“执行失败”这些关键节点。AI Task Hub 在本机把多个平台的事件统一成一条任务时间线，并通过桌面队列、悬浮球、托盘和 Windows 系统通知及时提醒你。
-
-| 任务收件箱 | 原生通知 | 个性化外观 |
-|---|---|---|
-| ChatGPT、Claude Code、Codex 汇入同一队列 | 完成、失败、等待输入时通知，点击直达任务 | 14 套头像与 28 张 Light / Dark 壁纸，也可选择本地照片 |
-| 搜索、来源筛选、状态筛选、排序 | 当前角色头像同步到通知、窗口与托盘 | 模糊、暗角、面板透明度可独立调节 |
-
-## 界面一览
-
-<table>
-  <tr>
-    <td width="50%"><img src="docs/images/app-settings-light.png" alt="AI Task Hub Light 模式"></td>
-    <td width="50%"><img src="docs/images/app-settings-dark.png" alt="AI Task Hub Dark 模式"></td>
-  </tr>
-  <tr>
-    <td align="center"><sub>Light：通透玻璃面板与明亮背景</sub></td>
-    <td align="center"><sub>Dark：低亮度背景与高对比内容层</sub></td>
-  </tr>
-</table>
-
-内置主题包括：AI 看板娘、绫波丽、海老塚智、伊蕾娜、若叶睦、丰川祥子、平泽唯、秋山澪、田井中律、琴吹紬、中野梓、神里绫华、爱弥斯和守岸人。每套主题都提供独立头像以及 Light / Dark 背景；也可以用自己的照片替换壁纸和应用头像。
-
-> 角色主题为非官方同人风格视觉预设，与原作版权方无关联。公开分发前请自行确认素材使用范围。
-
-## 核心能力
-
-- **统一任务队列**：WebSocket 实时接收多平台事件，保留完整生命周期时间线。
-- **Windows 系统通知**：使用当前应用头像、平台名称与任务摘要；点击通知或操作按钮打开任务中心。
-- **悬浮球与托盘**：关闭主窗口后继续后台工作，未读状态随时可见。
-- **快速定位**：支持状态、来源、关键词、排序组合筛选；`Ctrl+K` 或 `/` 聚焦搜索。
-- **一键接入**：设置页检测并配置 Claude Code hooks 与 Codex notify 链路。
-- **本地优先**：FastAPI 与存储后端（本机 MySQL 或本地 SQLite 文件）均运行在本机，平台适配器只向本地事件服务上报。
-- **运行自愈**：自动拉起后端、重连 WebSocket、检查 Electron 运行时并保留崩溃转储。
-- **自动更新**：安装版定时检查 GitHub Releases，下载后可重启安装。
-
-## 快速开始
-
-### 环境
-
-| 依赖 | 版本 | 说明 |
-|---|---|---|
-| Windows | 10 / 11 | 当前仅支持 Windows |
-| Node.js | 22+ | 桌面端与构建工具 |
-| Python | 3.12+ | 本地 FastAPI 服务 |
-| MySQL | 8.0+ | 可选。自动 / MySQL 模式需要；纯 SQLite 模式无需安装 |
-| SQLite | Python 标准库内置 | 默认使用，零依赖开箱即用；`auto` 模式 MySQL 不可用时自动兜底 |
-| NSIS | 3.x | 仅生成安装包时需要 |
-
-### 开发模式
-
-```powershell
-git clone https://github.com/elaysia-feng/AI-Task-Hub.git
-cd AI-Task-Hub
-
-# Python 与数据库配置
-uv venv
-uv pip install -r requirements.txt
-Copy-Item .env.example .env
-# 编辑 .env：默认 sqlite 零依赖直接可用；想用 MySQL 则填连接信息并把 AIHUB_DB_BACKEND 设为 mysql
-
-# 启动 Electron；后端会被自动探测并拉起
-cd desktop
-npm install
-npm run dev
-```
-
-启动后，后端健康检查位于 `http://127.0.0.1:17891/api/health`。关闭主窗口会收成悬浮球；彻底退出请在托盘图标菜单中选择 **退出**。
-
-### Windows 原生低内存版（推荐）
-
-如果主要诉求是降低常驻内存，直接使用 `native/` 下的 C++/Qt 版本。它把界面、HTTP 事件服务、SQLite 和托盘收敛成一个进程，不启动 Electron/Chromium/Python，仍兼容现有适配器的 `POST /api/events` 协议。
-
-```powershell
-cmake -S native -B native/build -G Ninja -DCMAKE_PREFIX_PATH=E:/QT/6.8.3/mingw_64
-cmake --build native/build --parallel 2
-$env:PATH = "E:/QT/6.8.3/mingw_64/bin;E:/QT/Tools/mingw1310_64/bin;$env:PATH"
-./native/build/ai-task-hub-native.exe
-```
-
-原生版包含待处理/历史/设置、筛选搜索、详情时间线、打开项目、批量已读、清理、托盘通知和悬浮球；分发目录可运行 `./native/package-native.ps1` 生成，具体契约见 [`native/README.md`](native/README.md)。首次切换前请退出占用 `17891` 端口的旧 Electron/Python 版本。
-
-只启动后端：
-
-```powershell
-.\.venv\Scripts\python.exe -m app.main
-```
-
-## 接入平台
-
-| 平台 | 接入方式 | 说明 |
-|---|---|---|
-| ChatGPT | 加载 `adapters/chatgpt-extension` 浏览器扩展 | 捕获网页任务状态并上报本机 |
-| Claude Code | 设置页点击接入 | 自动配置 hooks，保留现有设置 |
-| Codex | 设置页点击接入 | 使用 `notify_chain.py` 上报后再转发现有 notify |
-
-Codex 只支持一个 notify 命令，因此接入器会把旧命令保存到 `forward_target.json` 并继续链式转发。Codex runtime 路径变化后，适配器会重新解析可执行文件，避免升级后静默失效。
-
-## 工作原理
-
-```mermaid
-flowchart LR
-    subgraph AD["平台适配器"]
-        CG["ChatGPT 扩展"]
-        CC["Claude Code hooks"]
-        CX["Codex notify"]
-    end
-
-    subgraph BE["本地 FastAPI"]
-        API["POST /api/events"]
-        WS["/ws/tasks"]
-        DB[("MySQL / SQLite")]
-    end
-
-    subgraph DT["Electron 桌面端"]
-        Q["待处理 / 历史 / 详情"]
-        N["系统通知"]
-        O["悬浮球 / 托盘"]
-    end
-
-    CG & CC & CX --> API
-    API --> DB
-    API --> WS
-    WS --> Q
-    Q --> N
-    Q --> O
-```
-
-- 事件协议：[`shared/event_schema.json`](shared/event_schema.json)
-- 幂等规则：`(source, externalTaskId)` 唯一约束，重复事件合并。
-- 用户终态：完成或失败任务可以标记为 `VIEWED` 或 `IGNORED`。
-
-## 打包 Windows 应用
-
-```powershell
-cd desktop
-npm run dist:local
-```
-
-脚本会检查 Electron、NSIS 和后端可执行文件，并在缺少后端 exe 时自动调用 PyInstaller。产物位于 `desktop\dist\`：
-
-| 产物 | 用途 |
-|---|---|
-| `AI Task Hub Setup x.y.z.exe` | NSIS 安装向导 |
-| `AI-Task-Hub-Portable-x.y.z.exe` | 免安装便携版 |
-| `win-unpacked\AI Task Hub.exe` | 中间产物，本地打包不再刷新；直接交付物为两个 exe（Setup 安装版 + Portable 便携版） |
-
-开发版也可以在 **设置 → 应用更新 / 打包 → 生成 exe 安装包** 中执行同一流程。安装版不包含源码和打包工具，因此不会开放这个入口。
-
-## 配置
-
-开发版复制 `.env.example` 为 `.env`；安装版在 `%APPDATA%\AI Task Hub\config.env` 中配置。两种文件格式相同，后端启动时按下方优先级读取：
-
-```env
-# MySQL 连接（mysql / auto 模式使用）
-AIHUB_MYSQL_HOST=127.0.0.1
-AIHUB_MYSQL_PORT=3306
-AIHUB_MYSQL_USER=root
-AIHUB_MYSQL_PASSWORD=你的密码
-AIHUB_MYSQL_DB=ai_task_hub
-AIHUB_MYSQL_TEST_DB=ai_task_hub_test
-
-# 存储后端：sqlite（默认，推荐）/ mysql / auto
-AIHUB_DB_BACKEND=sqlite
-# SQLite 数据文件路径；留空使用默认 %APPDATA%\AI Task Hub\data.sqlite（自定义请填绝对路径）
-AIHUB_SQLITE_PATH=
-```
-
-默认后端端口为 `17891`。
-
-### 存储后端
-
-后端支持两种存储：本地 **SQLite 文件**（默认）与本机 **MySQL**（可选），由 `AIHUB_DB_BACKEND` 决定：
-
-| 值 | 行为 |
-|---|---|
-| `sqlite`（默认，推荐） | 直接用本地 SQLite 文件，无需任何外部服务，开箱即用（分发版默认） |
-| `mysql` | 严格 MySQL：连不上即启动失败 |
-| `auto` | 优先连接本机 MySQL，连接失败自动降级为 SQLite 并记录告警 |
-
-配置读取优先级（进程环境变量始终最高，不会被配置文件覆盖；配置文件只取首个存在的候选）：
-
-1. 进程环境变量；
-2. `AIHUB_CONFIG` 显式指定的文件（需绝对路径）；
-3. exe 同级目录的 `config.env` / `.env`（仅打包版）；
-4. `%APPDATA%\AI Task Hub\config.env`（桌面设置页的选择也写在这里）；
-5. 仓库根目录 `.env`（仅开发版）。
-
-SQLite 数据文件默认位于 `%APPDATA%\AI Task Hub\data.sqlite`（打包版与开发版一致）。数据文件与表结构在首次启动时自动创建，无需手动建库；如需换位置，用 `AIHUB_SQLITE_PATH` 指定绝对路径即可。
-
-桌面端在 **设置 → 存储后端** 中可直接选择「直接用 SQLite / 本机 MySQL / 自动」，选择会写入 `%APPDATA%\AI Task Hub\config.env`，重启后端后生效；区块中会显示当前实际后端。实际运行中的后端可通过 `http://127.0.0.1:17891/api/status` 确认：`db.backend` 为 `mysql` 或 `sqlite`，并附带对应的连接信息（MySQL 为 host/port/database；SQLite 为数据文件路径）。
-
-### Win32/Direct2D 原生版
-
-需要低常驻内存时可直接构建 `native-win32`：
+在 Windows 上准备原生版构建脚本要求的编译工具，然后从仓库根目录运行：
 
 ```powershell
 .\native-win32\build-win32.ps1
-.\native-win32\dist\AI Task Hub Win32.exe
+& '.\native-win32\dist\AI Task Hub Win32.exe'
 ```
 
-该版本用 Win32、Direct2D、DirectWrite、WIC、Winsock 和内置 SQLite 完整替代 Qt/QML/Electron/Python 桌面链路，沿用 `%APPDATA%\AI Task Hub\data.sqlite`、旧版主题壁纸、头像和 `/api/events` 协议。实测软件渲染模式约 25–30 MiB 私有内存、42–45 MiB 工作集，详见 [`native-win32/README.md`](native-win32/README.md)。
+主程序内置本地 HTTP 服务与 SQLite。Claude Code、Codex 的外部适配器仍需要系统 Python；ChatGPT 网页通过浏览器扩展上报事件。
 
-**幂等语义**：任务按 `(source, externalTaskId)` 唯一约束去重。`external_task_id` 为 `NULL` 或空串的事件会按同一来源合并到同一条任务（数据库用生成列 `external_task_id_not_null = IFNULL(external_task_id, '')` + 唯一索引实现），而不是每次新建任务；MySQL 与 SQLite 两种后端行为一致。
+## 使用流程
 
-## 验证
+1. 在设置中选择平台接入，按提示配置适配器或加载浏览器扩展。
+2. 在对应工具中执行任务，返回收件箱查看状态和事件时间线。
+3. 按来源、状态或关键词筛选任务，查看详情、标记已读或清理消息。
+4. 需要后台提醒时使用悬浮球、托盘、系统通知与应用内提醒卡片。
+
+“已配置”只说明接入配置已写入，真实事件到达后才能确认链路可用。浏览器扩展需要手动加载。
+
+## 数据与接入
+
+Win32 版默认把 `data.sqlite` 放在可执行文件目录，可在设置中迁移数据目录。迁移通过 SQLite 备份复制数据，重启生效并保留旧数据库。
+
+本地事件服务使用 `127.0.0.1:17891`。自动接入修改配置前会备份文件；复杂或损坏的配置会提示手工处理。详细行为见[原生版说明](native-win32/README.md)。
+
+## 开发与验证
+
+- `adapters/`：平台事件适配器。
+- `shared/`：共享事件协议。
+- `tests/`：Python 等现有回归测试。
+- `native-win32/`：原生 UI、本地服务、测试与打包脚本。
+
+原生版可先构建候选文件，再执行隔离测试：
 
 ```powershell
-# 后端
-.\.venv\Scripts\python.exe -m pytest -q
-
-# 桌面端
-cd desktop
-npm test
-npm run typecheck
-npm run build
-
-# 端到端冒烟
-cd ..
-.\.venv\Scripts\python.exe scripts\e2e_smoke.py
+.\native-win32\build-win32.ps1 -StageOnly
+.\native-win32\test-win32.ps1
 ```
 
-## 项目结构
-
-```text
-app/            FastAPI API、服务、仓储与数据库
-adapters/       ChatGPT、Claude Code、Codex 平台适配器
-desktop/        Electron 主进程、preload 与 renderer
-docs/images/    README 实机截图
-packaging/      PyInstaller 配置与 Windows 图标
-scripts/        冒烟、数据库诊断与辅助脚本
-shared/         统一事件协议
-tests/          后端与集成测试
-```
-
-## 常见问题
-
-| 症状 | 处理方式 |
-|---|---|
-| 双击 exe 没反应 | 应用是单实例；先从托盘退出已有实例 |
-| Windows 阻止首次运行 | 选择 **更多信息 → 仍要运行**，或给发布产物签名 |
-| 报错找不到 `makensis` | 安装 NSIS：`winget install NSIS.NSIS`，然后重开终端 |
-| Codex 接入后没有事件 | Codex 只在启动时读取配置；退出并重启所有 Codex 进程 |
-| ChatGPT 没有通知 | 确认扩展已加载、浏览器仍在运行、本地健康检查正常 |
-| 端口 `17891` 被拒绝 | 等待自动健康检查完成；仍失败时单独启动后端查看具体日志 |
-
-## 日志
-
-日志按天分文件：当天的日志写在 `backend.log`，跨天自动滚动为 `backend.log.YYYY-MM-DD`（保留最近 30 天）。日志目录在打包版为 `%APPDATA%\AI Task Hub\logs\`，开发版为仓库 `logs\`；桌面端可在 **设置 → 打开日志目录** 直接查看。
-
-## License
-
-MIT
+GUI 验证需要交互式 Windows 桌面，按原生版文档使用独立测试目录。

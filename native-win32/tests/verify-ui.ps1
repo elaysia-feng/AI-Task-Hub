@@ -198,9 +198,10 @@ try {
     Shot '12-small-appearance'
     Click 395 134
     Shot '13-small-integrations'
-    Click 898 23
-    # 860 宽窗口的最小化位置。
-    if ((Rect).Right-(Rect).Left -gt 52) { Click 754 23 }
+    # 860 宽窗口的关闭按钮只应收起为悬浮球，不能销毁窗口或结束进程。
+    Click 834 23
+    Start-Sleep -Milliseconds 300
+    if ((Rect).Right-(Rect).Left -ne 52) { throw '标题栏关闭没有收起为悬浮球' }
     Move-Pointer -10 -10
     Start-Sleep -Milliseconds 350
     Memory 'orb-after-panel'
@@ -217,7 +218,8 @@ try {
     Shot '14-orb-after-drag'
     Write-Output 'PASS GUI screenshots, resize, hover, card action, detail scroll, drag-click separation and HTTP smoke'
 } finally {
-    if ($script:window -ne [IntPtr]::Zero) { Send 0x10 }
+    # 普通 WM_CLOSE 现在按产品契约收起为悬浮球；测试退出走托盘专用退出消息。
+    if ($script:window -ne [IntPtr]::Zero) { Send 0x800c }
     [HubUiVerify]::SetCursorPos($cursor.X, $cursor.Y) | Out-Null
     $process.WaitForExit(5000) | Out-Null
 }
