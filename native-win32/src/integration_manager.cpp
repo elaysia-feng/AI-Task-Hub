@@ -424,8 +424,21 @@ bool IntegrationManager::materializeDirectory(const std::wstring &source, const 
             if (!name.empty()) {
                 const std::wstring from = (Path(source) / name).wstring();
                 const std::wstring to = (Path(target) / name).wstring();
-                if (!fileExists(from) || !CopyFileW(from.c_str(), to.c_str(), FALSE)) {
-                    error = L"复制适配器文件失败：" + from;
+                if (!fileExists(from)) {
+                    error = L"应用资源缺失：" + from;
+                    return false;
+                }
+                bool alreadyCurrent = false;
+                if (fileExists(to)) {
+                    std::ifstream sourceFile(Path(from), std::ios::binary);
+                    std::ifstream targetFile(Path(to), std::ios::binary);
+                    alreadyCurrent = sourceFile && targetFile &&
+                                     std::equal(std::istreambuf_iterator<char>(sourceFile), std::istreambuf_iterator<char>(),
+                                                std::istreambuf_iterator<char>(targetFile), std::istreambuf_iterator<char>());
+                }
+                if (!alreadyCurrent && !CopyFileW(from.c_str(), to.c_str(), FALSE)) {
+                    const DWORD copyError = GetLastError();
+                    error = L"复制适配器文件失败（Windows 错误 " + std::to_wstring(copyError) + L"）：" + from;
                     return false;
                 }
             }
