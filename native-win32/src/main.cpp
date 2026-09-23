@@ -486,7 +486,7 @@ private:
         if (RegisterClassExW(&klass) == 0 && GetLastError() != ERROR_CLASS_ALREADY_EXISTS) return false;
 
         WNDCLASSEXW notificationClass{sizeof(WNDCLASSEXW)};
-        notificationClass.style = CS_HREDRAW | CS_VREDRAW;
+        notificationClass.style = CS_HREDRAW | CS_VREDRAW | CS_DROPSHADOW;
         notificationClass.lpfnWndProc = &Win32App::notificationProc;
         notificationClass.hInstance = instance_;
         notificationClass.hCursor = LoadCursorW(nullptr, IDC_HAND);
@@ -901,6 +901,7 @@ private:
         darkMode_ = !darkMode_;
         store_.setDarkMode(darkMode_);
         if (hwnd_) InvalidateRect(hwnd_, nullptr, FALSE);
+        if (notificationHwnd_) InvalidateRect(notificationHwnd_, nullptr, FALSE);
     }
 
     void refreshSnapshot() {
@@ -993,7 +994,7 @@ private:
                 hwnd_, nullptr, instance_, this);
             if (!notificationHwnd_) return;
             SetWindowRgn(notificationHwnd_, CreateRoundRectRgn(0, 0, kNotificationWidth + 1,
-                                                               kNotificationHeight + 1, 20, 20), TRUE);
+                                                               kNotificationHeight + 1, 36, 36), TRUE);
         }
 
         RECT appRect{};
@@ -1039,10 +1040,21 @@ private:
             RECT client{};
             GetClientRect(hwnd, &client);
             const bool dark = app->darkMode_;
-            const COLORREF background = dark ? RGB(20, 24, 33) : RGB(248, 250, 252);
-            const COLORREF border = dark ? RGB(71, 78, 92) : RGB(207, 215, 224);
+            // 通知卡片沿用主界面的石墨/雾白表面与珊瑚强调色，状态图标保留任务语义。
+            const COLORREF background = dark ? RGB(24, 27, 29) : RGB(250, 251, 252);
+            const COLORREF border = dark ? RGB(59, 63, 65) : RGB(208, 213, 219);
+            const COLORREF headerColor = dark ? RGB(223, 118, 84) : RGB(176, 75, 50);
             const COLORREF titleColor = dark ? RGB(241, 240, 236) : RGB(32, 38, 49);
-            const COLORREF bodyColor = dark ? RGB(190, 195, 204) : RGB(79, 88, 102);
+            const COLORREF bodyColor = dark ? RGB(150, 153, 148) : RGB(102, 112, 125);
+            const COLORREF iconColor = dark
+                ? app->notificationAccent_
+                : RGB(GetRValue(app->notificationAccent_) * 54 / 100,
+                      GetGValue(app->notificationAccent_) * 54 / 100,
+                      GetBValue(app->notificationAccent_) * 54 / 100);
+            const COLORREF badgeBackground = RGB(
+                (GetRValue(app->notificationAccent_) * 42 + GetRValue(background) * 213) / 255,
+                (GetGValue(app->notificationAccent_) * 42 + GetGValue(background) * 213) / 255,
+                (GetBValue(app->notificationAccent_) * 42 + GetBValue(background) * 213) / 255);
 
             HBRUSH backgroundBrush = CreateSolidBrush(background);
             FillRect(dc, &client, backgroundBrush);
@@ -1050,27 +1062,27 @@ private:
             HPEN borderPen = CreatePen(PS_SOLID, 1, border);
             HGDIOBJ oldPen = SelectObject(dc, borderPen);
             HGDIOBJ oldBrush = SelectObject(dc, GetStockObject(HOLLOW_BRUSH));
-            RoundRect(dc, 0, 0, client.right - 1, client.bottom - 1, 20, 20);
+            RoundRect(dc, 0, 0, client.right - 1, client.bottom - 1, 36, 36);
             SelectObject(dc, oldBrush);
             SelectObject(dc, oldPen);
             DeleteObject(borderPen);
 
-            HBRUSH accentBrush = CreateSolidBrush(app->notificationAccent_);
-            RECT accentRect{0, 0, 5, client.bottom};
-            FillRect(dc, &accentRect, accentBrush);
-            DeleteObject(accentBrush);
-            HBRUSH iconBrush = CreateSolidBrush(app->notificationAccent_);
+            HBRUSH iconBrush = CreateSolidBrush(badgeBackground);
             HGDIOBJ previousBrush = SelectObject(dc, iconBrush);
-            Ellipse(dc, 16, 17, 52, 53);
+            Ellipse(dc, 18, 42, 50, 74);
             SelectObject(dc, previousBrush);
             DeleteObject(iconBrush);
 
             SetBkMode(dc, TRANSPARENT);
+            HFONT headerFont = CreateFontW(-MulDiv(11, GetDeviceCaps(dc, LOGPIXELSY), 72), 0, 0, 0,
+                                           FW_SEMIBOLD, FALSE, FALSE, FALSE, DEFAULT_CHARSET,
+                                           OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS, CLEARTYPE_QUALITY,
+                                           DEFAULT_PITCH | FF_SWISS, L"Microsoft YaHei UI");
             HFONT titleFont = CreateFontW(-MulDiv(13, GetDeviceCaps(dc, LOGPIXELSY), 72), 0, 0, 0,
                                           FW_SEMIBOLD, FALSE, FALSE, FALSE, DEFAULT_CHARSET,
                                           OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS, CLEARTYPE_QUALITY,
                                           DEFAULT_PITCH | FF_SWISS, L"Microsoft YaHei UI");
-            HFONT bodyFont = CreateFontW(-MulDiv(12, GetDeviceCaps(dc, LOGPIXELSY), 72), 0, 0, 0,
+            HFONT bodyFont = CreateFontW(-MulDiv(10, GetDeviceCaps(dc, LOGPIXELSY), 72), 0, 0, 0,
                                          FW_NORMAL, FALSE, FALSE, FALSE, DEFAULT_CHARSET,
                                          OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS, CLEARTYPE_QUALITY,
                                          DEFAULT_PITCH | FF_SWISS, L"Microsoft YaHei UI");
@@ -1079,22 +1091,39 @@ private:
                                          OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS, CLEARTYPE_QUALITY,
                                          DEFAULT_PITCH | FF_SWISS, L"Segoe UI Symbol");
             HGDIOBJ oldFont = SelectObject(dc, iconFont);
-            SetTextColor(dc, RGB(255, 255, 255));
-            RECT iconRect{16, 17, 52, 53};
+            SetTextColor(dc, iconColor);
+            RECT iconRect{18, 42, 50, 74};
             DrawTextW(dc, app->notificationIcon_.c_str(), -1, &iconRect,
                       DT_CENTER | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX);
+
+            SelectObject(dc, headerFont);
+            SetTextColor(dc, headerColor);
+            RECT headerRect{68, 15, client.right - 18, 35};
+            DrawTextW(dc, app->notificationTitle_.c_str(), -1, &headerRect,
+                      DT_SINGLELINE | DT_END_ELLIPSIS | DT_NOPREFIX);
+
+            std::wstring taskTitle = app->notificationBody_;
+            std::wstring projectPath;
+            const size_t pathSeparator = taskTitle.find(L'\n');
+            if (pathSeparator != std::wstring::npos) {
+                projectPath = taskTitle.substr(pathSeparator + 1);
+                taskTitle.resize(pathSeparator);
+            }
             SelectObject(dc, titleFont);
             SetTextColor(dc, titleColor);
-            RECT titleRect{64, 16, client.right - 18, 40};
-            DrawTextW(dc, app->notificationTitle_.c_str(), -1, &titleRect,
+            RECT taskRect{68, projectPath.empty() ? 48 : 42, client.right - 18, 68};
+            DrawTextW(dc, taskTitle.c_str(), -1, &taskRect,
                       DT_SINGLELINE | DT_END_ELLIPSIS | DT_NOPREFIX);
-            SelectObject(dc, bodyFont);
-            SetTextColor(dc, bodyColor);
-            RECT bodyRect{64, 46, client.right - 18, client.bottom - 14};
-            DrawTextW(dc, app->notificationBody_.c_str(), -1, &bodyRect,
-                      DT_WORDBREAK | DT_END_ELLIPSIS | DT_NOPREFIX);
+            if (!projectPath.empty()) {
+                SelectObject(dc, bodyFont);
+                SetTextColor(dc, bodyColor);
+                RECT pathRect{68, 73, client.right - 18, 95};
+                DrawTextW(dc, projectPath.c_str(), -1, &pathRect,
+                          DT_SINGLELINE | DT_END_ELLIPSIS | DT_NOPREFIX);
+            }
             SelectObject(dc, oldFont);
             DeleteObject(iconFont);
+            DeleteObject(headerFont);
             DeleteObject(titleFont);
             DeleteObject(bodyFont);
             EndPaint(hwnd, &paint);
