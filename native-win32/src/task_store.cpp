@@ -25,6 +25,39 @@ std::wstring wide(const unsigned char *value) {
     return value ? jsonlite::fromUtf8(reinterpret_cast<const char *>(value)) : std::wstring();
 }
 
+std::wstring codexTaskTitle(const std::wstring &title, const std::wstring &preview) {
+    const bool isGeneratedPrompt =
+        title.rfind(L"Write a brief catch-up for a user returning to this Codex", 0) == 0 ||
+        title.rfind(L"Generate a concise, single-line task title", 0) == 0;
+    if (!isGeneratedPrompt) return title;
+
+    jsonlite::Value response;
+    std::string parseError;
+    if (!jsonlite::parseUtf8(jsonlite::toUtf8(preview), response, parseError) || !response.isObject()) return title;
+
+    const auto *generatedTitle = response.get(L"title");
+    if (generatedTitle && generatedTitle->isString()) {
+        std::wstring result = generatedTitle->string();
+        while (!result.empty() && iswspace(result.front())) result.erase(result.begin());
+        while (!result.empty() && iswspace(result.back())) result.pop_back();
+        if (!result.empty()) return result;
+    }
+
+    const auto *recap = response.get(L"recap");
+    if (!recap || !recap->isString()) return title;
+    std::wstring result = recap->string();
+    for (auto &ch : result) if (ch == L'\r' || ch == L'\n' || ch == L'\t') ch = L' ';
+    const size_t separator = result.find_first_of(L"；;。.!?");
+    if (separator != std::wstring::npos) result.resize(separator);
+    if (result.rfind(L"目标是", 0) == 0) result.erase(0, 3);
+    else if (result.rfind(L"目标：", 0) == 0 || result.rfind(L"目标:", 0) == 0) result.erase(0, 3);
+    while (!result.empty() && iswspace(result.front())) result.erase(result.begin());
+    while (!result.empty() && iswspace(result.back())) result.pop_back();
+    if (result.empty()) return title;
+    if (result.size() > 50) result = result.substr(0, 50) + L"…";
+    return result;
+}
+
 void bindText(sqlite3_stmt *statement, int index, const std::wstring &value) {
     const std::string text = utf8(value);
     sqlite3_bind_text(statement, index, text.c_str(), static_cast<int>(text.size()), SQLITE_TRANSIENT);
@@ -354,6 +387,7 @@ HubTask TaskStore::readTask(void *rawStatement) const {
     task.eventType = readColumn(statement, 3);
     task.title = readColumn(statement, 4);
     task.contentPreview = readColumn(statement, 5);
+    if (task.source == L"CODEX") task.title = codexTaskTitle(task.title, task.contentPreview);
     task.projectPath = readColumn(statement, 6);
     task.openTarget = readColumn(statement, 7);
     task.openUrl = readColumn(statement, 8);
