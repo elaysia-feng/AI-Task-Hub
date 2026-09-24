@@ -5,6 +5,7 @@
 #include <shlobj.h>
 
 #include <algorithm>
+#include <cctype>
 #include <chrono>
 #include <filesystem>
 #include <iomanip>
@@ -207,6 +208,7 @@ bool TaskStore::initialize() {
         }
     }
     sqlite3_finalize(statement);
+    if (!migrateExternalTaskIdUniqueness()) return false;
     clearError();
     return true;
 }
@@ -229,7 +231,7 @@ bool TaskStore::ensureSchema() {
         "id INTEGER PRIMARY KEY AUTOINCREMENT, source TEXT NOT NULL, external_task_id TEXT, "
         "event_type TEXT NOT NULL, title TEXT, content_preview TEXT, project_path TEXT, open_target TEXT, "
         "open_url TEXT, status TEXT NOT NULL, created_at TEXT NOT NULL, completed_at TEXT, viewed_at TEXT, "
-        "external_task_id_not_null TEXT GENERATED ALWAYS AS (IFNULL(external_task_id,'')) STORED, "
+        "external_task_id_not_null TEXT GENERATED ALWAYS AS (NULLIF(external_task_id,'')) STORED, "
         "UNIQUE(source, external_task_id_not_null));"
         "CREATE INDEX IF NOT EXISTS idx_task_status ON task(status);"
         "CREATE INDEX IF NOT EXISTS idx_task_created_at ON task(created_at);"
@@ -244,6 +246,53 @@ bool TaskStore::ensureSchema() {
            exec("CREATE INDEX IF NOT EXISTS idx_task_created_at ON task(created_at);") &&
            exec("CREATE TABLE IF NOT EXISTS task_event (id INTEGER PRIMARY KEY AUTOINCREMENT, task_id INTEGER NOT NULL, event_type TEXT NOT NULL, raw_payload TEXT, created_at TEXT NOT NULL, FOREIGN KEY(task_id) REFERENCES task(id) ON DELETE CASCADE);") &&
            exec("CREATE INDEX IF NOT EXISTS idx_task_event_task ON task_event(task_id,id);");
+}
+
+bool TaskStore::migrateExternalTaskIdUniqueness() {
+    if (externalColumn_ != L"external_task_id") return true;
+    sqlite3_stmt *statement = nullptr;
+    std::string schema;
+    if (sqlite3_prepare_v2(db_, "SELECT sql FROM sqlite_master WHERE type='table' AND name='task'", -1,
+                           &statement, nullptr) == SQLITE_OK && sqlite3_step(statement) == SQLITE_ROW) {
+        const auto *value = sqlite3_column_text(statement, 0);
+        if (value) schema = reinterpret_cast<const char *>(value);
+    }
+    sqlite3_finalize(statement);
+    std::string normalized;
+    normalized.reserve(schema.size());
+    for (const unsigned char ch : schema) {
+        if (!std::isspace(ch)) normalized.push_back(static_cast<char>(std::tolower(ch)));
+    }
+    if (normalized.find("ifnull(external_task_id,'')") == std::string::npos) return true;
+
+    if (!exec("PRAGMA foreign_keys = OFF")) return false;
+    if (!exec("BEGIN IMMEDIATE")) {
+        exec("PRAGMA foreign_keys = ON");
+        return false;
+    }
+    bool ok = exec(
+        "CREATE TABLE task_replacement ("
+        "id INTEGER PRIMARY KEY AUTOINCREMENT, source TEXT NOT NULL, external_task_id TEXT, "
+        "event_type TEXT NOT NULL, title TEXT, content_preview TEXT, project_path TEXT, open_target TEXT, "
+        "open_url TEXT, status TEXT NOT NULL, created_at TEXT NOT NULL, completed_at TEXT, viewed_at TEXT, "
+        "external_task_id_not_null TEXT GENERATED ALWAYS AS (NULLIF(external_task_id,'')) STORED, "
+        "UNIQUE(source, external_task_id_not_null));") &&
+        exec("INSERT INTO task_replacement(id,source,external_task_id,event_type,title,content_preview,project_path,open_target,open_url,status,created_at,completed_at,viewed_at) "
+             "SELECT id,source,external_task_id,event_type,title,content_preview,project_path,open_target,open_url,status,created_at,completed_at,viewed_at FROM task;") &&
+        exec("DROP TABLE task;") &&
+        exec("ALTER TABLE task_replacement RENAME TO task;") &&
+        exec("CREATE INDEX IF NOT EXISTS idx_task_status ON task(status);") &&
+        exec("CREATE INDEX IF NOT EXISTS idx_task_created_at ON task(created_at);");
+    if (ok) {
+        if (!exec("COMMIT")) {
+            exec("ROLLBACK");
+            ok = false;
+        }
+    } else {
+        exec("ROLLBACK");
+    }
+    const bool foreignKeysEnabled = exec("PRAGMA foreign_keys = ON");
+    return ok && foreignKeysEnabled;
 }
 
 std::wstring TaskStore::columnName() const { return externalColumn_; }
@@ -518,6 +567,7 @@ std::int64_t TaskStore::ingest(const jsonlite::Value &event) {
         return 0;
     }
     const std::wstring externalId = bounded(event.get(L"externalTaskId"), kMaxExternalId);
+    const std::wstring turnId = bounded(event.get(L"turnId"), kMaxExternalId);
     const std::wstring titleInput = bounded(event.get(L"title"), kMaxTitle);
     const std::wstring preview = bounded(event.get(L"contentPreview"), kMaxPreview);
     const std::wstring reply = bounded(event.get(L"replyText"), kMaxReply);
@@ -545,14 +595,36 @@ std::int64_t TaskStore::ingest(const jsonlite::Value &event) {
     std::lock_guard lock(mutex_);
     if (!db_) return 0;
     if (!exec("BEGIN IMMEDIATE")) return 0;
-    const std::string findSql = "SELECT id FROM task WHERE source=? AND IFNULL(" + pathUtf8(externalColumn_) + ",'')=? LIMIT 1";
     sqlite3_stmt *find = nullptr;
     std::int64_t id = 0;
-    if (sqlite3_prepare_v2(db_, findSql.c_str(), -1, &find, nullptr) == SQLITE_OK) {
-        bindText(find, 1, source); bindText(find, 2, externalId);
-        if (sqlite3_step(find) == SQLITE_ROW) id = sqlite3_column_int64(find, 0);
+    if (!externalId.empty()) {
+        const std::string findSql = "SELECT id FROM task WHERE source=? AND " + pathUtf8(externalColumn_) + "=? LIMIT 1";
+        if (sqlite3_prepare_v2(db_, findSql.c_str(), -1, &find, nullptr) == SQLITE_OK) {
+            bindText(find, 1, source); bindText(find, 2, externalId);
+            if (sqlite3_step(find) == SQLITE_ROW) id = sqlite3_column_int64(find, 0);
+        }
     }
     sqlite3_finalize(find);
+    bool staleCompletion = false;
+    if (id != 0 && !turnId.empty() && (eventType == L"TASK_COMPLETED" || eventType == L"TASK_FAILED")) {
+        sqlite3_stmt *latestStart = nullptr;
+        if (sqlite3_prepare_v2(db_,
+                "SELECT raw_payload FROM task_event WHERE task_id=? AND event_type='TASK_STARTED' ORDER BY id DESC LIMIT 1",
+                -1, &latestStart, nullptr) == SQLITE_OK) {
+            sqlite3_bind_int64(latestStart, 1, id);
+            if (sqlite3_step(latestStart) == SQLITE_ROW) {
+                const auto *raw = sqlite3_column_text(latestStart, 0);
+                jsonlite::Value startedEvent;
+                std::string parseError;
+                if (raw && jsonlite::parseUtf8(reinterpret_cast<const char *>(raw), startedEvent, parseError)) {
+                    const auto *startedTurn = startedEvent.get(L"turnId");
+                    staleCompletion = startedTurn && startedTurn->isString() &&
+                                      !startedTurn->string().empty() && startedTurn->string() != turnId;
+                }
+            }
+        }
+        sqlite3_finalize(latestStart);
+    }
     sqlite3_stmt *statement = nullptr;
     bool ok = false;
     if (id == 0) {
@@ -567,14 +639,38 @@ std::int64_t TaskStore::ingest(const jsonlite::Value &event) {
             if (ok) id = sqlite3_last_insert_rowid(db_);
         }
     }
+    else if (staleCompletion) {
+        // 保留迟到事件用于审计，但不让旧轮次改变新轮次的任务状态。
+        ok = true;
+    }
     else {
-        const std::string sql = "UPDATE task SET event_type=?,title=CASE WHEN ?<>'' THEN ? ELSE title END,content_preview=CASE WHEN ?<>'' THEN ? ELSE content_preview END,project_path=CASE WHEN ?<>'' THEN ? ELSE project_path END,open_target=CASE WHEN ?<>'' THEN ? ELSE open_target END,open_url=CASE WHEN ?<>'' THEN ? ELSE open_url END,status=?,completed_at=CASE WHEN ? IN ('COMPLETED_UNREAD','FAILED_UNREAD') THEN ? ELSE completed_at END,viewed_at=CASE WHEN ?='VIEWED' THEN ? WHEN ? IN ('RUNNING','NEEDS_INPUT','COMPLETED_UNREAD','FAILED_UNREAD') THEN NULL ELSE viewed_at END WHERE id=?";
+        const std::string sql =
+            "UPDATE task SET event_type=?,title=CASE WHEN ?='TASK_STARTED' AND ?<>'' THEN ? "
+            "WHEN COALESCE(title,'')='' AND ?<>'' THEN ? ELSE title END,"
+            "content_preview=CASE WHEN ?<>'' THEN ? ELSE content_preview END,"
+            "project_path=CASE WHEN ?<>'' THEN ? ELSE project_path END,"
+            "open_target=CASE WHEN ?<>'' THEN ? ELSE open_target END,"
+            "open_url=CASE WHEN ?<>'' THEN ? ELSE open_url END,status=?,"
+            "completed_at=CASE WHEN ? IN ('COMPLETED_UNREAD','FAILED_UNREAD') THEN ? "
+            "WHEN ? IN ('RUNNING','NEEDS_INPUT') THEN NULL ELSE completed_at END,"
+            "viewed_at=CASE WHEN ?='VIEWED' THEN ? "
+            "WHEN ? IN ('RUNNING','NEEDS_INPUT','COMPLETED_UNREAD','FAILED_UNREAD') "
+            "THEN NULL ELSE viewed_at END WHERE id=?";
         if (sqlite3_prepare_v2(db_, sql.c_str(), -1, &statement, nullptr) == SQLITE_OK) {
             int i = 1;
-            bindText(statement, i++, eventType); bindText(statement, i++, titleInput); bindText(statement, i++, titleInput);
-            bindText(statement, i++, preview); bindText(statement, i++, preview); bindText(statement, i++, projectPath); bindText(statement, i++, projectPath);
-            bindText(statement, i++, openTarget); bindText(statement, i++, openTarget); bindText(statement, i++, openUrl); bindText(statement, i++, openUrl);
-            bindText(statement, i++, status); bindText(statement, i++, status); bindText(statement, i++, createdAt); bindText(statement, i++, status); bindText(statement, i++, createdAt); bindText(statement, i++, status); sqlite3_bind_int64(statement, i, id);
+            bindText(statement, i++, eventType);
+            bindText(statement, i++, eventType); bindText(statement, i++, titleInput);
+            bindText(statement, i++, titleInput); bindText(statement, i++, titleInput);
+            bindText(statement, i++, titleInput);
+            bindText(statement, i++, preview); bindText(statement, i++, preview);
+            bindText(statement, i++, projectPath); bindText(statement, i++, projectPath);
+            bindText(statement, i++, openTarget); bindText(statement, i++, openTarget);
+            bindText(statement, i++, openUrl); bindText(statement, i++, openUrl);
+            bindText(statement, i++, status);
+            bindText(statement, i++, status); bindText(statement, i++, createdAt);
+            bindText(statement, i++, status);
+            bindText(statement, i++, status); bindText(statement, i++, createdAt); bindText(statement, i++, status);
+            sqlite3_bind_int64(statement, i, id);
             ok = sqlite3_step(statement) == SQLITE_DONE;
         }
     }

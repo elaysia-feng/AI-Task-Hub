@@ -6,11 +6,15 @@
 struct IntegrationStatus {
     bool claudeInstalled = false;
     bool codexInstalled = false;
+    bool codexNotifyInstalled = false;
+    bool codexPromptHookInstalled = false;
+    std::wstring codexPromptHookBlockReason;
     bool chatgptPrepared = false;
     bool chatgptOnline = false;
     bool codexRunning = false;
     std::wstring claudeSettingsPath;
     std::wstring codexConfigPath;
+    std::wstring codexHooksPath;
     std::wstring chatgptExtensionDirectory;
     std::wstring pythonCommand;
 };

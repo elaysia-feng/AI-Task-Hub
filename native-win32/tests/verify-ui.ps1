@@ -16,10 +16,13 @@ public static class HubUiVerify {
     [DllImport("user32.dll")] public static extern IntPtr SendMessage(IntPtr hwnd, uint msg, IntPtr wp, IntPtr lp);
     [DllImport("user32.dll")] public static extern bool SetWindowPos(IntPtr hwnd, IntPtr after, int x,int y,int w,int h,uint flags);
     [DllImport("user32.dll")] public static extern bool SetCursorPos(int x,int y);
+    [DllImport("user32.dll")] public static extern bool ClientToScreen(IntPtr hwnd, ref Point point);
     [DllImport("user32.dll")] public static extern bool GetCursorPos(out Point point);
     [DllImport("user32.dll")] public static extern bool SetForegroundWindow(IntPtr hwnd);
     [DllImport("user32.dll")] public static extern bool BringWindowToTop(IntPtr hwnd);
     [DllImport("user32.dll")] public static extern bool ShowWindow(IntPtr hwnd, int command);
+    [DllImport("user32.dll")] public static extern bool UpdateWindow(IntPtr hwnd);
+    [DllImport("user32.dll")] public static extern bool PrintWindow(IntPtr hwnd, IntPtr hdcBlt, uint flags);
     [DllImport("user32.dll")] public static extern bool SetProcessDPIAware();
 }
 '@
@@ -48,18 +51,30 @@ function Activate-Window {
     [HubUiVerify]::SetForegroundWindow($script:window) | Out-Null
     Start-Sleep -Milliseconds 200
 }
-function Move-Pointer([int]$x, [int]$y) {
+function Move-Pointer([int]$x, [int]$y, [int]$wait = 150) {
     $rect = Rect
-    [HubUiVerify]::SetCursorPos($rect.Left + $x, $rect.Top + $y) | Out-Null
+    $screenPoint = New-Object HubUiVerify+Point
+    $screenPoint.X = $x; $screenPoint.Y = $y
+    [HubUiVerify]::ClientToScreen($script:window, [ref]$screenPoint) | Out-Null
+    [HubUiVerify]::SetCursorPos($screenPoint.X, $screenPoint.Y) | Out-Null
     Send 0x200 0 (($y -shl 16) -bor ($x -band 65535))
-    Start-Sleep -Milliseconds 150
+    # 命中区域随悬停状态重绘；同步处理一次 WM_PAINT，避免自动化点击落在上一帧命中表。
+    [HubUiVerify]::UpdateWindow($script:window) | Out-Null
+    Start-Sleep -Milliseconds $wait
 }
 function Click([int]$x, [int]$y) {
     Move-Pointer $x $y
     $point = ($y -shl 16) -bor ($x -band 65535)
     Send 0x201 1 $point
     Send 0x202 0 $point
+    [HubUiVerify]::UpdateWindow($script:window) | Out-Null
     Start-Sleep -Milliseconds 220
+}
+function Click-Local([int]$x, [int]$y) {
+    $point = ($y -shl 16) -bor ($x -band 65535)
+    Send 0x201 1 $point
+    Send 0x202 0 $point
+    [HubUiVerify]::UpdateWindow($script:window) | Out-Null
 }
 function Resize([int]$width, [int]$height) {
     [HubUiVerify]::SetWindowPos($script:window, [IntPtr](-1), 40,40,$width,$height,0x40) | Out-Null
@@ -71,7 +86,18 @@ function Shot([string]$name) {
     $bitmap = New-Object System.Drawing.Bitmap ($rect.Right-$rect.Left), ($rect.Bottom-$rect.Top)
     $graphics = [System.Drawing.Graphics]::FromImage($bitmap)
     try {
-        $graphics.CopyFromScreen($rect.Left, $rect.Top, 0, 0, $bitmap.Size)
+        $captured = $false
+        try {
+            # 交互桌面可用时优先截屏，得到与用户所见一致的结果。
+            $graphics.CopyFromScreen($rect.Left, $rect.Top, 0, 0, $bitmap.Size)
+            $captured = $true
+        } catch {
+            # 服务化/无桌面会话可能没有可用屏幕句柄，改用窗口自身绘制结果继续验证。
+            $hdc = $graphics.GetHdc()
+            try { $captured = [HubUiVerify]::PrintWindow($script:window, $hdc, 2) }
+            finally { $graphics.ReleaseHdc($hdc) }
+        }
+        if (-not $captured) { throw '窗口截图失败：CopyFromScreen 与 PrintWindow 均未返回成功' }
         $bitmap.Save((Join-Path $OutputDirectory ($name + '.png')), [System.Drawing.Imaging.ImageFormat]::Png)
     } finally { $graphics.Dispose(); $bitmap.Dispose() }
 }
@@ -154,10 +180,13 @@ try {
     foreach ($row in $rows) {
         Invoke-RestMethod 'http://127.0.0.1:17891/api/events' -Method Post -ContentType 'application/json; charset=utf-8' -Body ([Text.Encoding]::UTF8.GetBytes(($row | ConvertTo-Json -Compress))) | Out-Null
     }
-    Move-Pointer 26 26
-    Start-Sleep -Milliseconds 250
-    Shot '02-orb-expanded'
-    Click 50 327
+    Move-Pointer 26 26 20
+    $expandedOrb = Rect
+    if (($expandedOrb.Right - $expandedOrb.Left) -ne 240) { throw '悬浮球没有展开为概览面板' }
+    # 直接向展开态窗口发送按钮点击，避免自动化光标坐标在窗口重定位时触发收起计时器。
+    Click-Local 50 327
+    Start-Sleep -Milliseconds 220
+    Shot '02-panel-opened'
     Resize 1004 644
     Shot '03-tasks'
     Memory 'panel'
@@ -181,12 +210,15 @@ try {
     Shot '09-integrations'
     Click 524 134
     Shot '10-notifications'
-    Click 910 415
+    Click 910 484
     Click 818 23
     Shot '11-light'
+    # 先筛选 GPT 网页，避免任务排序或两列换行让固定坐标误点到其他来源。
     Click 68 110
-    Click 250 209
-    Click 484 417
+    Click 430 209
+    # 卡片动作常显，直接点击右下角忽略按钮，不依赖真实鼠标 hover。
+    Click-Local 484 417
+    Start-Sleep -Milliseconds 220
     $afterIgnore = Invoke-RestMethod 'http://127.0.0.1:17891/api/tasks?view=history&source=CHATGPT'
     if ($afterIgnore.tasks.Count -ne 1) { throw '卡片忽略操作没有命中 GPT 消息' }
     $codexQueue = Invoke-RestMethod 'http://127.0.0.1:17891/api/tasks?view=queue&source=CODEX'

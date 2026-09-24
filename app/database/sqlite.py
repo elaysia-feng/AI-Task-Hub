@@ -151,6 +151,7 @@ class SQLiteDatabase:
 
         SQLite DDL 参与事务：任一语句失败则整批回滚，无需像 MySQL 那样手动 DROP。
         """
+        self._migrate_external_task_id_uniqueness()
         statements = [
             stmt.strip()
             for stmt in _SCHEMA_PATH.read_text(encoding="utf-8").split(";")
@@ -159,6 +160,60 @@ class SQLiteDatabase:
         with self.transaction():
             for stmt in statements:
                 self._conn.execute(stmt)
+
+    def _migrate_external_task_id_uniqueness(self) -> None:
+        """允许无平台 ID 的任务独立保存，同时保留稳定 ID 的唯一约束。"""
+        row = self._conn.execute(
+            "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'task'"
+        ).fetchone()
+        schema = row["sql"] if row else None
+        if not schema:
+            return
+        normalized = re.sub(r"\s+", "", schema.lower())
+        if "ifnull(external_task_id,'')" not in normalized:
+            return
+
+        self._conn.execute("PRAGMA foreign_keys = OFF")
+        try:
+            with self.transaction():
+                self._conn.execute(
+                    """
+                    CREATE TABLE task_replacement (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        source TEXT NOT NULL,
+                        external_task_id TEXT,
+                        event_type TEXT NOT NULL,
+                        title TEXT,
+                        content_preview TEXT,
+                        project_path TEXT,
+                        open_target TEXT,
+                        open_url TEXT,
+                        status TEXT NOT NULL,
+                        created_at TEXT NOT NULL,
+                        completed_at TEXT,
+                        viewed_at TEXT,
+                        external_task_id_not_null TEXT GENERATED ALWAYS AS (NULLIF(external_task_id, '')) STORED,
+                        UNIQUE (source, external_task_id_not_null)
+                    )
+                    """
+                )
+                self._conn.execute(
+                    """
+                    INSERT INTO task_replacement (
+                        id, source, external_task_id, event_type, title, content_preview,
+                        project_path, open_target, open_url, status, created_at, completed_at, viewed_at
+                    )
+                    SELECT id, source, external_task_id, event_type, title, content_preview,
+                           project_path, open_target, open_url, status, created_at, completed_at, viewed_at
+                    FROM task
+                    """
+                )
+                self._conn.execute("DROP TABLE task")
+                self._conn.execute("ALTER TABLE task_replacement RENAME TO task")
+                self._conn.execute("CREATE INDEX idx_task_status ON task (status)")
+                self._conn.execute("CREATE INDEX idx_task_created_at ON task (created_at)")
+        finally:
+            self._conn.execute("PRAGMA foreign_keys = ON")
 
     @staticmethod
     def _prepare(sql: str) -> str:

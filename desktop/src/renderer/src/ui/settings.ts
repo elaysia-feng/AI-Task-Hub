@@ -370,29 +370,49 @@ function claudeCard(info: IntegrationsStatus): HTMLElement {
 }
 
 function codexCard(info: IntegrationsStatus): HTMLElement {
-  const { installed, stale, exeRunning, processCount } = info.codex
-  const installBtn = h('button', 'btn primary', ['一键接入'])
-  installBtn.disabled = installed
+  const { installed, promptHookInstalled, promptHookError, stale, exeRunning, processCount } = info.codex
+  const fullyInstalled = installed && promptHookInstalled
+  const installBtn = h('button', 'btn primary', [fullyInstalled ? '已接入' : installed ? '补全状态' : '一键接入'])
+  installBtn.disabled = fullyInstalled
   installBtn.onclick = async () => {
     installBtn.disabled = true
-    const res = await window.aihub.installCodex()
-    if (res.success) {
+    let succeeded = false
+    try {
+      const res = await window.aihub.installCodex()
+      if (res.success) {
+        succeeded = true
+        invalidateIntegrationsCache()
+        const extra = res.forwardTarget ? '（原 notify 命令已保留转发）' : ''
+        showToast(
+          res.changed
+            ? `Codex 接入已更新${extra}；首次使用请在 Codex CLI 执行 /hooks 并信任提问钩子`
+            : 'Codex 已接入；首次使用请在 Codex CLI 执行 /hooks 并信任提问钩子',
+          'var(--st-done)',
+        )
+        refreshSettings()
+      } else {
+        showToast(res.error ?? '接入失败', 'var(--st-fail)')
+      }
+    } catch (error) {
+      showToast(error instanceof Error ? `接入失败：${error.message}` : '接入失败，请检查本地服务状态', 'var(--st-fail)')
       invalidateIntegrationsCache()
-      const extra = res.forwardTarget ? '（原 notify 命令已保留转发）' : ''
-      showToast(res.changed ? `Codex 接入完成${extra}` : 'Codex 已接入，无需变更', 'var(--st-done)')
       refreshSettings()
-    } else {
-      showToast(res.error ?? '接入失败', 'var(--st-fail)')
-      installBtn.disabled = false
+    } finally {
+      if (!succeeded) installBtn.disabled = false
     }
   }
 
   const rows: Array<Node | string> = [
-    h('div', 'int-card-head', [statusDot(stale ? 'warn' : installed), h('span', 'int-name', ['Codex'])]),
-    h('div', 'int-desc', ['改写 config.toml 的 notify 为链式转发（保留原命令）']),
+    h('div', 'int-card-head', [statusDot(stale ? 'warn' : fullyInstalled ? true : installed ? 'warn' : false), h('span', 'int-name', ['Codex'])]),
+    h('div', 'int-desc', ['提问时标为运行中，notify 完成后收尾；保留原 notify 转发']),
     h('div', 'int-path', [info.codex.configPath]),
-    h('div', 'int-status', [installed ? '已接入' : '未接入']),
+    h('div', 'int-status', [fullyInstalled ? '提问与完成状态均已配置' : installed ? '缺少提问状态 hook' : '未接入']),
   ]
+  if (promptHookInstalled) {
+    rows.push(h('div', 'int-warn', ['首次使用前，请在 Codex CLI 执行 /hooks 并信任此 hook；组织策略仍可能限制用户 hook 的运行']))
+  } else if (promptHookError) {
+    rows.push(h('div', 'int-warn', [promptHookError]))
+  }
   if (stale) {
     rows.push(
       h('div', 'int-warn', [

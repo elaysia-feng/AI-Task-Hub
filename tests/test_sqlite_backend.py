@@ -110,16 +110,12 @@ class TestIdempotency:
             "SELECT COUNT(*) AS c FROM task WHERE source = 'CODEX' AND external_task_id = 'raw-id'"
         )["c"] == 1
 
-    def test_null_external_task_id_dedups_per_source(self, task_service, db):
-        """NULL external_task_id 折叠为空串占位（generated column），同源合并。
-
-        设计决策：与 MySQL 语义一致（见 task_repository.get_by_external_id 注释），
-        避免 NULL 绕过幂等去重造成重复任务。
-        """
+    def test_null_external_task_id_creates_separate_tasks(self, task_service, db):
+        """没有稳定会话 ID 时，数据库唯一键不应把同源事件折叠。"""
         first = task_service.handle_event(make_event(externalTaskId=None))
         second = task_service.handle_event(make_event(externalTaskId=None))
-        assert first.id == second.id
-        assert db.query_one("SELECT COUNT(*) AS c FROM task")["c"] == 1
+        assert first.id != second.id
+        assert db.query_one("SELECT COUNT(*) AS c FROM task")["c"] == 2
 
     def test_null_external_task_id_different_sources_separate(self, task_service, db):
         codex = task_service.handle_event(make_event(externalTaskId=None, source="CODEX"))

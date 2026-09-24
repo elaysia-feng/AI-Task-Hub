@@ -105,6 +105,7 @@ public:
 private:
     bool initialize();
     bool ensureSchema();
+    bool migrateExternalTaskIdUniqueness();
     bool exec(const char *sql) const;
     std::wstring columnName() const;
     std::wstring setting(const wchar_t *key) const;

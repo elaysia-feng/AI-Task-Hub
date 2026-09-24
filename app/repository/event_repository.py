@@ -1,4 +1,5 @@
 import logging
+import json
 from datetime import datetime
 from typing import Optional
 
@@ -57,6 +58,24 @@ class EventRepository:
             rows,
         )
         return cursor.rowcount
+
+    def latest_started_turn_id(self, task_id: int) -> Optional[str]:
+        """读取最近一次开始事件的轮次 ID，用于过滤迟到的旧完成通知。"""
+        row = self._db.query_one(
+            "SELECT raw_payload FROM task_event "
+            "WHERE task_id = %s AND event_type = 'TASK_STARTED' ORDER BY id DESC LIMIT 1",
+            (task_id,),
+        )
+        if not row:
+            return None
+        payload = row.get("raw_payload")
+        if isinstance(payload, str):
+            try:
+                payload = json.loads(payload)
+            except json.JSONDecodeError:
+                return None
+        turn_id = payload.get("turnId") if isinstance(payload, dict) else None
+        return turn_id if isinstance(turn_id, str) and turn_id else None
 
     def list_by_task(self, task_id: int) -> list[dict]:
         return self._db.query_all(

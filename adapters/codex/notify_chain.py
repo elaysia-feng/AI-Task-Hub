@@ -154,11 +154,12 @@ def forward(payload_json: str) -> None:
 
 def main() -> None:
     debug_log({"stage": "invoked", "argv": sys.argv[1:], "cwd": os.getcwd()})
+    payload_json = sys.argv[-1] if len(sys.argv) > 1 else "{}"
     try:
-        payload_json = sys.argv[-1] if len(sys.argv) > 1 else "{}"
         payload = json.loads(payload_json)
     except Exception as exc:
         debug_log({"stage": "parse_failed", "error": str(exc), "argv": sys.argv[1:]})
+        forward(payload_json)
         sys.exit(0)
 
     try:
@@ -167,17 +168,17 @@ def main() -> None:
             result = post_event(event)
             if result != "ok":
                 # Hub 可能尚在启动（桌面端拉起后端的启动竞态）或瞬时抖动：短延时重试一次，
-                # 仍失败才跳过转发。总开销 ≤ ~2.5s，符合「不阻塞 Codex」的边界（review HIGH）
+                # 总开销 ≤ ~2.5s，符合「不阻塞 Codex」的边界（review HIGH）
                 time.sleep(0.5)
                 result = post_event(event)
             debug_log({"stage": "posted", "result": result, "payload_type": payload.get("type")})
-            # skip forward if post_event failed to avoid split-brain
-            if result == "ok":
-                forward(payload_json)
         else:
             debug_log({"stage": "skipped", "reason": "converter returned None", "payload_type": payload.get("type"), "payload_keys": sorted(payload.keys())})
     except Exception as exc:
         debug_log({"stage": "error", "error": str(exc)})
+    finally:
+        # 即使 Hub 上报失败或事件被过滤，也继续转发给用户原有的 notify 命令。
+        forward(payload_json)
 
     sys.exit(0)
 

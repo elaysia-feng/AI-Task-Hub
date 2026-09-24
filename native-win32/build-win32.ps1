@@ -54,6 +54,6 @@ $staleCache = Join-Path $adapterOutput 'claude-code\session_titles.json'
 if (Test-Path -LiteralPath $staleCache -PathType Leaf) {
     Move-Item -LiteralPath $staleCache -Destination (Join-Path $obj ('session_titles.packaging-backup-' + [guid]::NewGuid().ToString('N') + '.json'))
 }
-Copy-Item -LiteralPath (Join-Path $root 'adapters\codex\notify_chain.py'), (Join-Path $root 'adapters\codex\event_converter.py') -Destination (Join-Path $adapterOutput 'codex') -Force
+Copy-Item -LiteralPath (Join-Path $root 'adapters\codex\notify_chain.py'), (Join-Path $root 'adapters\codex\event_converter.py'), (Join-Path $root 'adapters\codex\prompt_hook.py') -Destination (Join-Path $adapterOutput 'codex') -Force
 Copy-Item -LiteralPath (Join-Path $root 'adapters\chatgpt-extension\background.js'), (Join-Path $root 'adapters\chatgpt-extension\content.js'), (Join-Path $root 'adapters\chatgpt-extension\manifest.json'), (Join-Path $root 'adapters\chatgpt-extension\README.md') -Destination (Join-Path $adapterOutput 'chatgpt-extension') -Force
 Write-Output "Built: $output"

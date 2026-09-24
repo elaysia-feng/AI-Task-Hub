@@ -1,7 +1,6 @@
 -- AI Task Hub SQLite Schema
 -- 主键：INTEGER PRIMARY KEY AUTOINCREMENT；时间字段：TEXT（ISO-8601，存本地时间）
--- (source, external_task_id_not_null) 唯一约束用于跨平台事件幂等去重；NULL/空串经
--- generated column 归一到 ''，同源 NULL/空串事件合并去重到同一条任务（非「每次新建」）
+-- 稳定外部 ID 按 (source, external_task_id_not_null) 去重；缺少 ID 时 generated column 为 NULL，允许每个事件独立建任务。
 
 CREATE TABLE IF NOT EXISTS task (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -17,7 +16,7 @@ CREATE TABLE IF NOT EXISTS task (
     created_at TEXT NOT NULL,
     completed_at TEXT,
     viewed_at TEXT,
-    external_task_id_not_null TEXT GENERATED ALWAYS AS (IFNULL(external_task_id, '')) STORED,
+    external_task_id_not_null TEXT GENERATED ALWAYS AS (NULLIF(external_task_id, '')) STORED,
     UNIQUE (source, external_task_id_not_null)
 );
 

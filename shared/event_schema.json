@@ -20,6 +20,10 @@
       "type": ["string", "null"],
       "description": "平台侧的任务/会话 ID，用于幂等去重。缺省时服务端视为新任务。"
     },
+    "turnId": {
+      "type": ["string", "null"],
+      "description": "平台侧当前轮次 ID，用于拒绝迟到的旧轮次完成事件。"
+    },
     "title": {
       "type": ["string", "null"],
       "description": "任务标题"

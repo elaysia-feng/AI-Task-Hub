@@ -49,9 +49,12 @@ class TaskService:
 
         with self._tasks.transaction():
             task: Optional[Task] = None
-            # 总是尝试按 (source, external_task_id) 去重；NULL 也会折叠为空串命中幂等约束。
-            # 用 FOR UPDATE 锁定读：唯一索引上对不存在的键取 gap lock，并发相同事件串行化（M8）
-            task = self._tasks.get_by_external_id(event.source, event.external_task_id, for_update=True)
+            # 只有平台提供稳定 ID 时才去重；缺少 ID 的事件按协议各自创建新任务。
+            task = (
+                self._tasks.get_by_external_id(event.source, event.external_task_id, for_update=True)
+                if event.external_task_id
+                else None
+            )
 
             if task is None:
                 new_status = _EVENT_TO_STATUS.get(event.event_type)
@@ -78,11 +81,18 @@ class TaskService:
                 )
                 task = self._tasks.insert(task)
             else:
-                self._apply_event(task, event, event_time)
-                if not self._tasks.update(task):
-                    # 任务更新失败 → 整体回滚，事件不落库，避免「事件已提交但任务状态未更新」的不一致（M1）
-                    logger.error("task update failed for id=%s in handle_event, rolling back", task.id)
-                    raise RuntimeError(f"task update failed for id={task.id}")
+                latest_turn_id = (
+                    self._events.latest_started_turn_id(task.id)
+                    if event.event_type in _COMPLETED_EVENTS and event.turn_id
+                    else None
+                )
+                stale_completion = bool(latest_turn_id and latest_turn_id != event.turn_id)
+                if not stale_completion:
+                    self._apply_event(task, event, event_time)
+                    if not self._tasks.update(task):
+                        # 任务更新失败 → 整体回滚，事件不落库，避免「事件已提交但任务状态未更新」的不一致（M1）
+                        logger.error("task update failed for id=%s in handle_event, rolling back", task.id)
+                        raise RuntimeError(f"task update failed for id={task.id}")
 
             self._events.insert(
                 task_id=task.id,
@@ -99,8 +109,10 @@ class TaskService:
         if new_status is None:
             new_status = task.status  # 未知 event_type 保持现状，不崩
         task.status = new_status
-        # 新事件带来更完整的上下文时覆盖旧值
-        for field in ("title", "content_preview", "project_path", "open_target", "open_url"):
+        # 新提问可以更换会话标题；完成通知只补缺失标题，避免旧历史消息覆盖本轮标题。
+        if event.title and (event.event_type == EventType.TASK_STARTED.value or not task.title):
+            task.title = event.title
+        for field in ("content_preview", "project_path", "open_target", "open_url"):
             value = getattr(event, field)
             if value:
                 setattr(task, field, value)
@@ -116,6 +128,8 @@ class TaskService:
             EventType.TASK_STARTED.value,
             EventType.TASK_NEEDS_INPUT.value,
         ):
+            # 同一会话开始新一轮后，清除上一轮完成时间，避免活跃任务仍显示旧完成时间。
+            task.completed_at = None
             task.viewed_at = None  # 重新进入活跃态 → 清除已读标记
 
     def list_by_status(self, status: str, limit: int = 200, offset: int = 0) -> tuple[list[Task], bool]:

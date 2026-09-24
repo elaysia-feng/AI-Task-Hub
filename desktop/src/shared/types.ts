@@ -120,7 +120,10 @@ export interface IntegrationsStatus {
   claudeCode: { installed: boolean; settingsPath: string }
   codex: {
     installed: boolean
+    promptHookInstalled: boolean
+    promptHookError?: string | null
     configPath: string
+    hooksConfigPath: string
     forwardTarget: boolean
     exeRunning: boolean
     stale: boolean

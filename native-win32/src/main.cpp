@@ -40,6 +40,7 @@ constexpr UINT_PTR kCollapseTimer = 42;
 constexpr UINT_PTR kRefreshTimer = 43;
 constexpr UINT_PTR kStartupActivateTimer = 44;
 constexpr UINT_PTR kNotificationTimer = 45;
+constexpr UINT_PTR kTrayRetryTimer = 46;
 constexpr int kOrbSize = 52;
 constexpr int kOrbPanelWidth = 240;
 constexpr int kOrbPanelHeight = 360;
@@ -389,7 +390,7 @@ public:
     }
     ~Win32App() {
         hideNotificationPopup();
-        if (hwnd_) Shell_NotifyIconW(NIM_DELETE, &tray_);
+        removeTrayIcon();
         server_.stop();
         destroyBacking();
     }
@@ -399,6 +400,7 @@ public:
         SetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2);
         // 给 Windows 通知区域一个稳定的应用身份，避免系统把通知归到无名进程并静默丢弃。
         SetCurrentProcessExplicitAppUserModelID(L"AI.TaskHub.Win32");
+        taskbarCreatedMessage_ = RegisterWindowMessageW(L"TaskbarCreated");
         if (!registerWindowClass()) {
             showStartupError(L"注册窗口类失败");
             return 1;
@@ -500,7 +502,8 @@ private:
     HICON loadAppIcon(int size) const {
         const std::wstring path = resourceDirectory() + L"\\icon.ico";
         if (GetFileAttributesW(path.c_str()) != INVALID_FILE_ATTRIBUTES) {
-            return static_cast<HICON>(LoadImageW(nullptr, path.c_str(), IMAGE_ICON, size, size, LR_LOADFROMFILE));
+            const auto icon = static_cast<HICON>(LoadImageW(nullptr, path.c_str(), IMAGE_ICON, size, size, LR_LOADFROMFILE));
+            if (icon) return icon;
         }
         return LoadIconW(nullptr, IDI_APPLICATION);
     }
@@ -529,9 +532,42 @@ private:
         tray_.uCallbackMessage = kTrayMessage;
         tray_.hIcon = loadAppIcon(32);
         wcscpy_s(tray_.szTip, L"AI Task Hub · Win32 原生");
-        Shell_NotifyIconW(NIM_ADD, &tray_);
+        registerTrayIcon();
+    }
+
+    void registerTrayIcon() {
+        if (!hwnd_) return;
+        if (!taskbarCreatedMessage_) taskbarCreatedMessage_ = RegisterWindowMessageW(L"TaskbarCreated");
+        const DWORD primaryMessage = trayRegistered_ ? NIM_MODIFY : NIM_ADD;
+        BOOL registered = Shell_NotifyIconW(primaryMessage, &tray_);
+        if (!registered) {
+            trayRegistered_ = false;
+            Shell_NotifyIconW(NIM_DELETE, &tray_);
+            registered = Shell_NotifyIconW(NIM_ADD, &tray_);
+        }
+        if (!registered) {
+            trayRegistered_ = false;
+            SetTimer(hwnd_, kTrayRetryTimer, 1000, nullptr);
+            return;
+        }
+        trayRegistered_ = true;
         tray_.uVersion = NOTIFYICON_VERSION_4;
-        Shell_NotifyIconW(NIM_SETVERSION, &tray_);
+        const BOOL versioned = Shell_NotifyIconW(NIM_SETVERSION, &tray_);
+        if (!versioned) {
+            SetTimer(hwnd_, kTrayRetryTimer, 1000, nullptr);
+            return;
+        }
+        if (!taskbarCreatedMessage_) {
+            SetTimer(hwnd_, kTrayRetryTimer, 5000, nullptr);
+            return;
+        }
+        KillTimer(hwnd_, kTrayRetryTimer);
+    }
+
+    void removeTrayIcon() {
+        if (hwnd_) KillTimer(hwnd_, kTrayRetryTimer);
+        if (hwnd_ && trayRegistered_) Shell_NotifyIconW(NIM_DELETE, &tray_);
+        trayRegistered_ = false;
     }
 
     std::wstring resourceDirectory() const {
@@ -971,7 +1007,7 @@ private:
         notification.dwInfoFlags = infoFlags;
         wcsncpy_s(notification.szInfoTitle, std::size(notification.szInfoTitle), title.c_str(), _TRUNCATE);
         wcsncpy_s(notification.szInfo, std::size(notification.szInfo), body.c_str(), _TRUNCATE);
-        (void)Shell_NotifyIconW(NIM_MODIFY, &notification);
+        if (!Shell_NotifyIconW(NIM_MODIFY, &notification)) registerTrayIcon();
     }
 
     void hideNotificationPopup() {
@@ -1688,32 +1724,30 @@ private:
         text(shorten(task.projectPath, 40), static_cast<float>(x + 21), static_cast<float>(footY),
              static_cast<float>(x + width - 130), static_cast<float>(footY + 16),
              10.5f, p.muted);
-        if (hot) {
-            // mini 忽略
-            const int igX = x + width - 124, igY = footY - 4, igW = 50, igH = 22;
-            fillRound(static_cast<float>(igX), static_cast<float>(igY),
-                      static_cast<float>(igX + igW), static_cast<float>(igY + igH), 11,
-                      D2D1::ColorF(0, 0, 0, 0));
-            strokeRound(static_cast<float>(igX), static_cast<float>(igY),
-                        static_cast<float>(igX + igW), static_cast<float>(igY + igH), 11, 1, p.border);
-            textCentered(history_ ? L"删除" : L"忽略",
-                 static_cast<float>(igX), static_cast<float>(igY),
-                 static_cast<float>(igX + igW), static_cast<float>(igY + igH),
-                 11, p.textSecondary);
-            addHit(HitCardIgnore, rectFrom(igX, igY, igX + igW, igY + igH), task.id);
-            // primary 打开
-            const int opX = x + width - 66, opY = footY - 4, opW = 54, opH = 22;
-            fillRound(static_cast<float>(opX), static_cast<float>(opY),
-                      static_cast<float>(opX + opW), static_cast<float>(opY + opH), 11,
-                      p.accentSoft);
-            strokeRound(static_cast<float>(opX), static_cast<float>(opY),
-                        static_cast<float>(opX + opW), static_cast<float>(opY + opH), 11, 1,
-                        p.accentLine);
-            textCentered(L"打开", static_cast<float>(opX), static_cast<float>(opY),
-                 static_cast<float>(opX + opW), static_cast<float>(opY + opH),
-                 11, p.accent, true);
-            addHit(HitCardOpen, rectFrom(opX, opY, opX + opW, opY + opH), task.id);
-        }
+        // 操作按钮保持常显：避免必须先触发 hover 才能发现或命中按钮，键鼠和辅助自动化都能稳定操作。
+        const int igX = x + width - 124, igY = footY - 4, igW = 50, igH = 22;
+        fillRound(static_cast<float>(igX), static_cast<float>(igY),
+                  static_cast<float>(igX + igW), static_cast<float>(igY + igH), 11,
+                  hot ? p.cardHover : p.tab);
+        strokeRound(static_cast<float>(igX), static_cast<float>(igY),
+                    static_cast<float>(igX + igW), static_cast<float>(igY + igH), 11, 1, p.border);
+        textCentered(history_ ? L"删除" : L"忽略",
+             static_cast<float>(igX), static_cast<float>(igY),
+             static_cast<float>(igX + igW), static_cast<float>(igY + igH),
+             11, p.textSecondary);
+        addHit(HitCardIgnore, rectFrom(igX, igY, igX + igW, igY + igH), task.id);
+        // primary 打开
+        const int opX = x + width - 66, opY = footY - 4, opW = 54, opH = 22;
+        fillRound(static_cast<float>(opX), static_cast<float>(opY),
+                  static_cast<float>(opX + opW), static_cast<float>(opY + opH), 11,
+                  hot ? p.accentSoft : blend(p.accentSoft, 0.72f));
+        strokeRound(static_cast<float>(opX), static_cast<float>(opY),
+                    static_cast<float>(opX + opW), static_cast<float>(opY + opH), 11, 1,
+                    p.accentLine);
+        textCentered(L"打开", static_cast<float>(opX), static_cast<float>(opY),
+             static_cast<float>(opX + opW), static_cast<float>(opY + opH),
+             11, p.accent, true);
+        addHit(HitCardOpen, rectFrom(opX, opY, opX + opW, opY + opH), task.id);
     }
 
     void renderDetail(int width, int height, int left, int top, int right) {
@@ -1963,10 +1997,16 @@ private:
                                     integrationStatus_.claudeInstalled ? L"已配置" : L"未配置",
                                     integrationStatus_.claudeInstalled ? L"更新接入" : L"一键接入",
                                     HitIntegrationClaude, integrationStatus_.claudeInstalled);
+            const std::wstring codexState = integrationStatus_.codexInstalled
+                ? L"已登记，首次用前 /hooks 信任；运行受组织策略约束"
+                : !integrationStatus_.codexPromptHookBlockReason.empty()
+                    ? integrationStatus_.codexPromptHookBlockReason
+                    : integrationStatus_.codexNotifyInstalled ? L"缺少提问时的开始状态钩子" : L"未配置";
             renderIntegrationAction(actionLeft, actionTop + 96, actionWidth, L"Codex",
-                                    L"%USERPROFILE%\\.codex\\config.toml",
-                                    integrationStatus_.codexInstalled ? L"已配置" : L"未配置",
-                                    integrationStatus_.codexInstalled ? L"更新接入" : L"一键接入",
+                                    L"%USERPROFILE%\\.codex\\config.toml + hooks.json",
+                                    codexState.c_str(),
+                                    integrationStatus_.codexInstalled ? L"更新接入" :
+                                    integrationStatus_.codexNotifyInstalled ? L"补全状态" : L"一键接入",
                                     HitIntegrationCodex, integrationStatus_.codexInstalled);
             renderIntegrationAction(actionLeft, actionTop + 192, actionWidth, L"ChatGPT 网页",
                                     L"Chrome / Edge → 扩展 → 开发者模式 → 加载已解压的扩展",
@@ -2537,6 +2577,7 @@ private:
     }
 
     void quitApplication() {
+        removeTrayIcon();
         if (hwnd_) DestroyWindow(hwnd_);
     }
 
@@ -2987,6 +3028,11 @@ private:
             app->hwnd_ = hwnd;
         }
         if (!app) return DefWindowProcW(hwnd, message, wParam, lParam);
+        if (app->taskbarCreatedMessage_ && message == app->taskbarCreatedMessage_) {
+            app->trayRegistered_ = false;
+            app->registerTrayIcon();
+            return 0;
+        }
         switch (message) {
         case WM_ERASEBKGND: return 1;
         case WM_PAINT: {
@@ -3229,6 +3275,9 @@ private:
                     InvalidateRect(hwnd, nullptr, FALSE);
                 }
             }
+            else if (wParam == kTrayRetryTimer) {
+                app->registerTrayIcon();
+            }
             return 0;
         case kRefreshMessage:
             app->refreshSnapshot();
@@ -3262,6 +3311,7 @@ private:
             app->enterOrbMode();
             return 0;
         case WM_DESTROY:
+            app->removeTrayIcon();
             KillTimer(hwnd, kCollapseTimer);
             KillTimer(hwnd, kRefreshTimer);
             PostQuitMessage(0);
@@ -3282,7 +3332,9 @@ private:
     HINSTANCE instance_ = nullptr;
     HWND hwnd_ = nullptr;
     HWND notificationHwnd_ = nullptr;
+    UINT taskbarCreatedMessage_ = 0;
     NOTIFYICONDATAW tray_{};
+    bool trayRegistered_ = false;
     TaskStore store_;
     IntegrationManager integrations_;
     HttpServer server_;

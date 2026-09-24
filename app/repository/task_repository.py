@@ -109,19 +109,17 @@ class TaskRepository:
         """按 (source, external_task_id) 查找现有任务。
 
         说明：
-        - MySQL 中 `column = NULL` 永远为 FALSE，所以必须使用占位列
-          `external_task_id_not_null` 做 NULL 安全查询，否则会绕过幂等去重。
-        - `None` 和空字符串 `""` 在本方法中共享同一个去重占位（均折叠为 `""`），
-          因此用 `external_task_id=""` 创建的任务与用 `None` 创建的任务会命中同一条
-          现有记录。这是设计决策而非 bug，有此需求时请在应用层区分。
+        - 仅稳定的非空 ID 参与去重；无 ID 事件没有可用的会话键，应各自创建任务。
+        - MySQL 使用生成列 `external_task_id_not_null` 实现稳定 ID 唯一约束。
         - `for_update=True` 需在事务内使用：唯一索引上对「尚不存在的键」做锁定读
           会取 gap lock，串行化并发到达的相同事件，消除「先查后插」的 TOCTOU（M8）。
         """
-        normalized = external_task_id or ""
+        if not external_task_id:
+            return None
         sql = "SELECT * FROM task WHERE source = %s AND external_task_id_not_null = %s"
         if for_update:
             sql += " FOR UPDATE"
-        row = self._db.query_one(sql, (source, normalized))
+        row = self._db.query_one(sql, (source, external_task_id))
         return Task.model_validate(row) if row else None
 
     def list_by_status(

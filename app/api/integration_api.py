@@ -1,7 +1,7 @@
 """接入集成 API：桌面端向导/体检读取三平台适配器状态，并执行一键接入。
 
 - Claude Code：向 ~/.claude/settings.json 合并 UserPromptSubmit/Notification/Stop 钩子（幂等）
-- Codex：改写 ~/.codex/config.toml 的 notify 为链式转发（原命令存入 forward_target.json）
+- Codex：保留原 notify 转发，并通过 ~/.codex/hooks.json 在提问时上报运行状态
 - ChatGPT：接收 Chrome 扩展心跳（5min），判断扩展在线状态
 """
 
@@ -12,6 +12,7 @@ import os
 import shutil
 import sys
 import time
+from collections.abc import Iterable, Mapping
 from pathlib import Path
 from threading import Lock
 from typing import Any
@@ -151,6 +152,7 @@ def _codex_forward_target() -> Path:
 
 _CLAUDE_HOOK_MARKER = "claude_adapter.py"
 _CODEX_CHAIN_MARKER = "notify_chain.py"
+_CODEX_PROMPT_HOOK_MARKER = "prompt_hook.py"
 _CODEX_PROCESS_CACHE_TTL_SEC = 15.0
 _codex_process_cache_at = 0.0
 _codex_process_cache: list[dict[str, Any]] = []
@@ -297,26 +299,201 @@ def install_claude_code() -> dict[str, Any]:
 # ---------- Codex ----------
 
 def _as_command_list(notify: Any) -> list[str]:
+    """把 TOML notify 字符串或数组规范为命令参数列表。"""
     if isinstance(notify, str):
         return [notify]
-    if isinstance(notify, list):
+    if not isinstance(notify, (str, bytes, dict)) and hasattr(notify, "__iter__"):
         return [str(x) for x in notify]
     return []
+
+
+def _path_key(path: str | Path) -> str:
+    """比较配置中的本地路径，兼容 Windows 大小写和分隔符差异。"""
+    return os.path.normcase(os.path.normpath(os.fspath(path))).casefold()
+
+
+def _codex_notify_installed(
+    commands: list[str], chain: Path | None = None, python: str | None = None
+) -> bool:
+    """只把当前解释器和当前链脚本都匹配的 notify 视为已安装。"""
+    chain = chain or _codex_chain()
+    python = python or _adapter_python()
+    return bool(
+        chain
+        and python
+        and chain.is_file()
+        and len(commands) == 2
+        and _path_key(commands[0]) == _path_key(python)
+        and _CODEX_CHAIN_MARKER in commands[1]
+        and _path_key(commands[1]) == _path_key(chain)
+    )
 
 
 def _codex_installed() -> bool:
     if not CODEX_CONFIG.exists():
         return False
     try:
-        return _CODEX_CHAIN_MARKER in CODEX_CONFIG.read_text(encoding="utf-8")
-    except OSError:
+        doc = tomlkit.parse(CODEX_CONFIG.read_text(encoding="utf-8"))
+        return _codex_notify_installed(_as_command_list(doc.get("notify")))
+    except Exception:
         return False
+
+
+def _codex_hooks_config_path() -> Path:
+    return CODEX_CONFIG.with_name("hooks.json")
+
+
+def _has_codex_prompt_hook(config: dict[str, Any], expected_command: str | None = None) -> bool:
+    """检查 UserPromptSubmit 中是否登记当前 AI Task Hub 命令。"""
+    hooks = config.get("hooks")
+    entries = hooks.get("UserPromptSubmit") if isinstance(hooks, dict) else None
+    if not isinstance(entries, list):
+        return False
+    for entry in entries:
+        handlers = entry.get("hooks") if isinstance(entry, dict) else None
+        if not isinstance(handlers, list):
+            continue
+        for handler in handlers:
+            if not isinstance(handler, dict):
+                continue
+            commands = [str(handler.get(field) or "") for field in ("command", "commandWindows", "command_windows")]
+            if any(_CODEX_PROMPT_HOOK_MARKER in command for command in commands) and (
+                expected_command is None or expected_command in commands
+            ):
+                return True
+    return False
+
+
+def _toml_value(table: Any, key: str) -> Any:
+    """兼容读取 tomlkit 表和普通映射中的字段。"""
+    return table.get(key) if hasattr(table, "get") else None
+
+
+def _codex_prompt_hook_policy_error(config_doc: Any) -> str | None:
+    """读取本地可见的用户设置和组织策略，避免把被禁用的 hook 报成已接入。"""
+    features = _toml_value(config_doc, "features")
+    user_hooks = _toml_value(features, "hooks")
+    if user_hooks is None:
+        user_hooks = _toml_value(features, "codex_hooks")
+    program_data = os.environ.get("PROGRAMDATA")
+    if not program_data and os.name == "nt":
+        program_data = r"C:\ProgramData"
+
+    managed_hooks: bool | None = None
+    managed_only = False
+    if program_data:
+        requirements_path = Path(program_data) / "OpenAI" / "Codex" / "requirements.toml"
+        if requirements_path.exists():
+            try:
+                requirements = tomlkit.parse(requirements_path.read_text(encoding="utf-8"))
+            except Exception:
+                return "无法读取 Codex 组织策略，不能确认提问 hook 是否允许"
+            managed_features = _toml_value(requirements, "features")
+            managed_hooks = _toml_value(managed_features, "hooks")
+            if managed_hooks is None:
+                managed_hooks = _toml_value(managed_features, "codex_hooks")
+            managed_only = _toml_value(requirements, "allow_managed_hooks_only") is True
+
+    if managed_hooks is False:
+        return "Codex 组织策略已禁用 hooks，提问状态 hook 不会运行"
+    if managed_only:
+        return "Codex 组织策略仅允许托管 hooks，AI Task Hub 的用户 hook 不会运行"
+    if user_hooks is False and managed_hooks is not True:
+        return "Codex config.toml 中 features.hooks/codex_hooks=false，提问状态 hook 不会运行"
+    return None
+
+
+def _codex_prompt_hook_status() -> tuple[bool, str | None]:
+    """返回本地 hook 配置状态及已知的路径或策略问题。"""
+    path = _codex_hooks_config_path()
+    config_doc: Any = tomlkit.document()
+    if CODEX_CONFIG.exists():
+        try:
+            config_doc = tomlkit.parse(CODEX_CONFIG.read_text(encoding="utf-8"))
+        except Exception:
+            return False, "无法解析 Codex config.toml，不能确认提问 hook 是否允许"
+    policy_error = _codex_prompt_hook_policy_error(config_doc)
+    if policy_error:
+        return False, policy_error
+    if not path.exists():
+        return False, None
+    try:
+        config = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return False, "Codex hooks.json 无法读取或解析"
+    chain = _codex_chain()
+    python = _adapter_python()
+    prompt_hook = chain.with_name(_CODEX_PROMPT_HOOK_MARKER) if chain else None
+    if not isinstance(config, dict) or chain is None or prompt_hook is None or not prompt_hook.is_file() or python is None:
+        return False, None
+    expected_command = f'"{python}" "{prompt_hook}"'
+    if _has_codex_prompt_hook(config, expected_command):
+        return True, None
+    if _has_codex_prompt_hook(config):
+        return False, "hooks.json 中仍指向旧版提问 hook 路径，请重新接入以更新路径"
+    return False, None
+
+
+def _codex_prompt_hook_installed() -> bool:
+    """兼容状态调用方，只返回当前 hook 是否有效登记。"""
+    return _codex_prompt_hook_status()[0]
+
+
+def _ensure_codex_prompt_hook(entries: list[Any], command: str) -> bool:
+    """更新已有 AI Task Hub hook 的路径，保留其他 hook 配置。"""
+    changed = False
+    matched = False
+    for entry in entries:
+        handlers = entry.get("hooks") if isinstance(entry, dict) else None
+        if not isinstance(handlers, list):
+            continue
+        for handler in handlers:
+            if not isinstance(handler, dict):
+                continue
+            fields = ("command", "commandWindows", "command_windows")
+            if not any(_CODEX_PROMPT_HOOK_MARKER in str(handler.get(field) or "") for field in fields):
+                continue
+            matched = True
+            if handler.get("type") != "command":
+                handler["type"] = "command"
+                changed = True
+            for field in fields[:2]:
+                if handler.get(field) != command:
+                    handler[field] = command
+                    changed = True
+            if "command_windows" in handler and handler["command_windows"] != command:
+                handler["command_windows"] = command
+                changed = True
+    if matched:
+        return changed
+
+    entry = {"hooks": [{"type": "command", "command": command, "commandWindows": command, "timeout": 3}]}
+    entries.append(entry)
+    return True
+
+
+def _write_bytes_atomic(path: Path, content: bytes) -> None:
+    """先写临时文件再替换配置，避免留下截断文件。"""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temp_path = path.with_name(path.name + ".aihub.tmp")
+    try:
+        temp_path.write_bytes(content)
+        temp_path.replace(path)
+    finally:
+        try:
+            temp_path.unlink(missing_ok=True)
+        except OSError:
+            pass
 
 
 @router.post("/codex/install")
 @_serialized
 def install_codex() -> dict[str, Any]:
-    """config.toml 的 notify 改写为链式适配器；原 notify 命令存入 forward_target.json 继续转发。"""
+    """安装完成通知与提问状态 hook，并保留已有 notify 命令的转发。
+
+    Returns:
+        包含安装结果的对象；失败时附带 error，成功时说明是否改动和是否接管原 notify。
+    """
     python = _adapter_python()
     if python is None:
         return {
@@ -327,6 +504,9 @@ def install_codex() -> dict[str, Any]:
     chain = _codex_chain()
     if chain is None:
         return {"success": False, "changed": False, "error": "未找到 Codex 适配器脚本（应用资源缺失），请重新安装应用"}
+    prompt_hook = chain.with_name(_CODEX_PROMPT_HOOK_MARKER)
+    if not prompt_hook.is_file():
+        return {"success": False, "changed": False, "error": "未找到 Codex 提问状态 hook（应用资源缺失），请重新安装应用"}
     forward_target = _codex_forward_target()
 
     doc: Any = tomlkit.document()
@@ -336,37 +516,150 @@ def install_codex() -> dict[str, Any]:
         except Exception:
             return {"success": False, "changed": False, "error": "config.toml 解析失败，请手工检查"}
 
-    existing = _as_command_list(doc.get("notify"))
-    if any(_CODEX_CHAIN_MARKER in c for c in existing):
+    notify_value = doc.get("notify")
+    if notify_value is not None and (
+        isinstance(notify_value, Mapping)
+        or not isinstance(notify_value, (str, Iterable))
+        or (not isinstance(notify_value, str) and any(not isinstance(item, str) for item in notify_value))
+    ):
+        return {"success": False, "changed": False, "error": "config.toml 的 notify 必须是字符串或字符串数组，未修改配置"}
+    existing = _as_command_list(notify_value)
+    notify_installed = _codex_notify_installed(existing, chain, python)
+    policy_error = _codex_prompt_hook_policy_error(doc)
+    if policy_error:
+        return {"success": False, "changed": False, "error": policy_error}
+
+    hooks_config_path = _codex_hooks_config_path()
+    hooks_config: dict[str, Any] = {}
+    if hooks_config_path.exists():
+        try:
+            loaded = json.loads(hooks_config_path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            return {"success": False, "changed": False, "error": "hooks.json 解析失败，请手工检查"}
+        if not isinstance(loaded, dict):
+            return {"success": False, "changed": False, "error": "hooks.json 顶层必须是对象，未修改配置"}
+        hooks_config = loaded
+
+    prompt_command = f'"{python}" "{prompt_hook}"'
+    if "hooks" not in hooks_config:
+        hooks = {}
+        hooks_config["hooks"] = hooks
+    else:
+        hooks = hooks_config["hooks"]
+    if not isinstance(hooks, dict):
+        return {"success": False, "changed": False, "error": "hooks.json 的 hooks 字段必须是对象，未修改配置"}
+    if "UserPromptSubmit" not in hooks:
+        entries = []
+        hooks["UserPromptSubmit"] = entries
+    else:
+        entries = hooks["UserPromptSubmit"]
+    if not isinstance(entries, list):
+        return {"success": False, "changed": False, "error": "hooks.json 的 UserPromptSubmit 字段必须是数组，未修改配置"}
+
+    if not notify_installed:
+        doc["notify"] = [python, str(chain)]
+
+    hooks_changed = _ensure_codex_prompt_hook(entries, prompt_command)
+    if notify_installed and not hooks_changed:
         return {"success": True, "changed": False}
 
-    if existing and not forward_target.exists():
-        forward_target.parent.mkdir(parents=True, exist_ok=True)
-        forward_target.write_text(
-            json.dumps({"command": existing}, ensure_ascii=False, indent=2) + "\n",
-            encoding="utf-8",
-        )
-        logger.info("原 Codex notify 命令已保存至 %s", forward_target)
+    try:
+        config_existed = CODEX_CONFIG.exists()
+        original_config = CODEX_CONFIG.read_bytes() if config_existed else None
+        forward_existed = forward_target.exists()
+        original_forward = forward_target.read_bytes() if forward_existed else None
+    except OSError as exc:
+        return {"success": False, "changed": False, "error": f"无法备份 Codex 配置：{exc}"}
+    forward_changed = False
 
-    doc["notify"] = [python, str(chain)]
-    CODEX_CONFIG.parent.mkdir(parents=True, exist_ok=True)
-    CODEX_CONFIG.write_text(tomlkit.dumps(doc), encoding="utf-8")
-    logger.info("Codex notify 链式配置已写入 %s", CODEX_CONFIG)
-    return {"success": True, "changed": True, "forwardTarget": bool(existing)}
+    # 升级旧适配器时迁移它旁边保存的原 notify，保证切换脚本路径后仍能转发。
+    old_chain = next((Path(command) for command in existing if _CODEX_CHAIN_MARKER in command), None)
+    if old_chain is not None and _path_key(old_chain) != _path_key(chain) and not forward_existed:
+        old_forward = old_chain.parent / "forward_target.json"
+        if old_forward.is_file():
+            try:
+                shutil.copy2(old_forward, forward_target)
+                forward_changed = True
+            except OSError as exc:
+                try:
+                    forward_target.unlink(missing_ok=True)
+                except OSError:
+                    pass
+                return {"success": False, "changed": False, "error": f"迁移旧 notify 转发配置失败：{exc}"}
+    elif existing and old_chain is None and not forward_existed:
+        try:
+            _write_bytes_atomic(
+                forward_target,
+                (json.dumps({"command": existing}, ensure_ascii=False, indent=2) + "\n").encode("utf-8"),
+            )
+            forward_changed = True
+            logger.info("原 Codex notify 命令已保存至 %s", forward_target)
+        except OSError as exc:
+            return {"success": False, "changed": False, "error": f"保存原 notify 命令失败：{exc}"}
+
+    config_written = False
+    try:
+        if not notify_installed:
+            _write_bytes_atomic(CODEX_CONFIG, tomlkit.dumps(doc).encode("utf-8"))
+            config_written = True
+            logger.info("Codex notify 链式配置已写入 %s", CODEX_CONFIG)
+        if hooks_changed:
+            _write_bytes_atomic(
+                hooks_config_path,
+                (json.dumps(hooks_config, ensure_ascii=False, indent=2) + "\n").encode("utf-8"),
+            )
+    except Exception as exc:
+        rollback_errors: list[str] = []
+        if config_written:
+            try:
+                if original_config is None:
+                    CODEX_CONFIG.unlink(missing_ok=True)
+                else:
+                    _write_bytes_atomic(CODEX_CONFIG, original_config)
+            except OSError as rollback_exc:
+                rollback_errors.append(f"恢复 config.toml 失败：{rollback_exc}")
+        if forward_changed:
+            try:
+                if original_forward is None:
+                    forward_target.unlink(missing_ok=True)
+                else:
+                    _write_bytes_atomic(forward_target, original_forward)
+            except OSError as rollback_exc:
+                rollback_errors.append(f"恢复 notify 转发文件失败：{rollback_exc}")
+        detail = f"配置写入失败：{exc}"
+        if rollback_errors:
+            detail += "；" + "；".join(rollback_errors)
+        return {"success": False, "changed": False, "error": detail}
+
+    return {
+        "success": True,
+        "changed": not notify_installed or hooks_changed or forward_changed,
+        "forwardTarget": forward_target.exists(),
+    }
 
 
 @router.get("/codex/stale-check")
 def codex_stale_check() -> dict[str, Any]:
-    """检测早于 config.toml 修改时间启动的 Codex 进程（它们未加载新 notify 配置）。"""
+    """检测早于 Codex notify 或 hook 配置启动的进程。
+
+    Returns:
+        包含接入标志、配置路径、运行进程和过期进程列表的状态对象。
+    """
     installed = _codex_installed()
-    config_mtime = CODEX_CONFIG.stat().st_mtime if CODEX_CONFIG.exists() else None
+    config_paths = (CODEX_CONFIG, _codex_hooks_config_path())
+    config_mtimes = [path.stat().st_mtime for path in config_paths if path.exists()]
+    config_mtime = max(config_mtimes) if config_mtimes else None
     processes = _codex_processes()
     stale = [
         p for p in processes
         if config_mtime is not None and p.get("createTime") and p["createTime"] < config_mtime
     ]
+    prompt_hook_installed, prompt_hook_error = _codex_prompt_hook_status()
     return {
         "installed": installed,
+        "promptHookInstalled": prompt_hook_installed,
+        "promptHookError": prompt_hook_error,
+        "hooksConfigPath": str(_codex_hooks_config_path()),
         "exeRunning": bool(processes),
         "processCount": len(processes),
         "staleProcesses": stale,

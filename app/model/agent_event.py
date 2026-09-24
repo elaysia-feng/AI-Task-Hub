@@ -37,6 +37,7 @@ class AgentEvent(BaseModel):
     source: TaskSource
     event_type: EventType
     external_task_id: Optional[str] = None
+    turn_id: Optional[str] = None
     title: Optional[str] = None
     content_preview: Optional[str] = None
     reply_text: Optional[str] = None

@@ -39,9 +39,11 @@ int wmain(int argc, wchar_t **argv) {
         GetModuleFileNameW(nullptr, executable, 32768);
         SetEnvironmentVariableW(L"AIHUB_PYTHON", executable);
         const auto profile = root / L"profile", data = root / L"data", assets = root / L"assets";
+        SetEnvironmentVariableW(L"PROGRAMDATA", (root / L"program-data").c_str());
         put(assets / L"claude-code/claude_adapter.py", "# inert fixture\n");
         put(assets / L"codex/notify_chain.py", "# inert fixture\n");
         put(assets / L"codex/event_converter.py", "# inert fixture\n");
+        put(assets / L"codex/prompt_hook.py", "# inert fixture\n");
         for (const auto *name : {L"manifest.json", L"background.js", L"content.js", L"README.md"})
             put(assets / L"chatgpt-extension" / name, "{}");
         IntegrationManager manager(profile.wstring(), data.wstring(), assets.wstring());
@@ -116,6 +118,19 @@ int wmain(int argc, wchar_t **argv) {
             const auto completed = store.ingest(json("{\"source\":\"CODEX\",\"externalTaskId\":\"three\",\"eventType\":\"TASK_COMPLETED\",\"title\":\"待删除完成消息\"}"));
             check(completed > 0 && store.clear(L"completed") == 1, "completed-only deletion");
             check(store.events(completed).empty() && store.snapshot().counts.total == 1, "completed deletion cascades events");
+            const auto codexSession = store.ingest(json("{\"source\":\"CODEX\",\"externalTaskId\":\"codex-session\",\"eventType\":\"TASK_STARTED\",\"title\":\"排查 Docker 镜像拉取超时\"}"));
+            check(codexSession > 0 && store.snapshot().counts.running == 1, "Codex prompt starts as running");
+            check(store.ingest(json("{\"source\":\"CODEX\",\"externalTaskId\":\"codex-session\",\"eventType\":\"TASK_COMPLETED\",\"title\":\"Generate a concise, single-line task title\",\"contentPreview\":\"{\\\"title\\\":\\\"内部生成标题\\\"}\"}")) == codexSession,
+                  "Codex completion reuses session task");
+            auto codexTask = store.tasks(L"queue", L"", L"CODEX", L"", 20, 0);
+            check(codexTask.size() == 1 && codexTask[0].title == L"排查 Docker 镜像拉取超时" &&
+                  codexTask[0].status == L"COMPLETED_UNREAD", "completion preserves submitted prompt title");
+            check(store.ingest(json("{\"source\":\"CODEX\",\"externalTaskId\":\"codex-session\",\"eventType\":\"TASK_STARTED\",\"title\":\"配置腾讯镜像源\"}")) == codexSession,
+                  "next Codex prompt reuses session task");
+            codexTask = store.tasks(L"queue", L"", L"CODEX", L"", 20, 0);
+            check(codexTask.size() == 1 && codexTask[0].title == L"配置腾讯镜像源" &&
+                  codexTask[0].status == L"RUNNING" && codexTask[0].completedAt.empty(),
+                  "next prompt updates title and clears completed state");
             check(store.setTheme(L"ayaka-kamisato") && store.themeId() == L"ayaka-kamisato", "new wallpaper preset persists");
             check(store.setUserIconPreset(L"shorekeeper") && store.userIconPreset() == L"shorekeeper",
                   "new icon preset persists");

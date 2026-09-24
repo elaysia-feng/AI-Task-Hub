@@ -21,6 +21,7 @@ def claude_settings(monkeypatch, tmp_path):
 def codex_paths(monkeypatch, tmp_path):
     config = tmp_path / "codex" / "config.toml"
     forward = tmp_path / "forward_target.json"
+    monkeypatch.setenv("PROGRAMDATA", str(tmp_path / "program-data"))
     monkeypatch.setattr(integration_api, "CODEX_CONFIG", config)
     monkeypatch.setattr(integration_api, "_codex_forward_target", lambda: forward)
     return config, forward
@@ -76,7 +77,10 @@ def test_codex_install_from_scratch(client, codex_paths):
 def test_codex_stale_check_flags_old_processes(client, codex_paths, monkeypatch):
     config, _ = codex_paths
     config.parent.mkdir(parents=True)
-    config.write_text('notify = ["notify_chain.py"]\n', encoding="utf-8")
+    chain = integration_api._codex_chain()
+    python = integration_api._adapter_python()
+    python_path = python.replace("\\", "/")
+    config.write_text(f'notify = ["{python_path}", "{chain.as_posix()}"]\n', encoding="utf-8")
     old = time.time() - 3 * 24 * 3600
     monkeypatch.setattr(
         integration_api, "_codex_processes",
@@ -203,6 +207,7 @@ def _freeze(monkeypatch, tmp_path):
     cx = bundled / "adapters" / "codex"
     cx.mkdir(parents=True)
     (cx / "notify_chain.py").write_text("print('chain')", encoding="utf-8")
+    (cx / "prompt_hook.py").write_text("print('prompt hook')", encoding="utf-8")
     (cx / "forward_target.json").write_text('{"command":["dev-only"]}', encoding="utf-8")
     monkeypatch.setattr(integration_api, "user_data_dir", lambda: user_base)
     monkeypatch.setattr(sys, "frozen", True, raising=False)

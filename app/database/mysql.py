@@ -187,6 +187,36 @@ class Database:
                         "schema cleanup after init failure also failed; schema may be partially initialised"
                     )
             raise
+        self._migrate_external_task_id_uniqueness()
+
+    def _migrate_external_task_id_uniqueness(self) -> None:
+        """将旧的空 ID 占位迁移为 NULL，使无 ID 事件可以分别建任务。"""
+        with self._conn.cursor() as cursor:
+            cursor.execute(
+                """
+                SELECT generation_expression
+                FROM information_schema.columns
+                WHERE table_schema = DATABASE()
+                  AND table_name = 'task'
+                  AND column_name = 'external_task_id_not_null'
+                """
+            )
+            row = cursor.fetchone()
+        expression = str((row or {}).get("generation_expression") or "").lower()
+        if "ifnull" not in expression:
+            return
+        with self._lock:
+            with self._conn.cursor() as cursor:
+                cursor.execute(
+                    """
+                    ALTER TABLE task
+                        DROP INDEX uk_source_external,
+                        MODIFY COLUMN external_task_id_not_null VARCHAR(128)
+                            GENERATED ALWAYS AS (NULLIF(external_task_id, '')) STORED
+                            COMMENT '用于唯一约束占位，缺少 ID 时为 NULL',
+                        ADD UNIQUE KEY uk_source_external (source, external_task_id_not_null)
+                    """
+                )
 
     def _cursor(self):
         # 长时间空闲后 MySQL 会断开连接：ping 失败则整体重建连接
