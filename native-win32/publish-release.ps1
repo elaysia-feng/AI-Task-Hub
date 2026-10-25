@@ -47,6 +47,9 @@ if ($DryRun) {
 
 # 凭据取自 Git Credential Manager（推送同一个仓库时已登录），不落盘、不打印。
 function Get-GitHubToken {
+    # PowerShell 7 管道给原生命令时默认带 UTF-8 BOM，git 会把首行读成
+    # "﻿protocol" 而报 missing protocol field，这里先关掉 BOM。
+    $OutputEncoding = [Text.UTF8Encoding]::new($false)
     $filled = "protocol=https`nhost=github.com`n`n" | git credential fill
     $line = $filled | Where-Object { $_ -like 'password=*' } | Select-Object -First 1
     if (-not $line) { throw '未找到 GitHub 凭据（git credential fill 没有返回密码）' }
@@ -55,27 +58,65 @@ function Get-GitHubToken {
 
 $token = Get-GitHubToken
 $api = 'https://api.github.com/repos/elaysia-feng/AI-Task-Hub'
-$headers = @{
-    Authorization = "Bearer $token"
-    Accept = 'application/vnd.github+json'
-    'X-GitHub-Api-Version' = '2022-11-28'
+$uploads = 'https://uploads.github.com/repos/elaysia-feng/AI-Task-Hub'
+$auth = "Authorization: Bearer $token"
+$accept = 'Accept: application/vnd.github+json'
+$work = Join-Path ([IO.Path]::GetTempPath()) ('aihub-release-' + [guid]::NewGuid().ToString('N'))
+New-Item -ItemType Directory -Path $work -Force | Out-Null
+
+try {
+    # 大文件上传走 curl：本机代理会让 .NET 的 HttpClient 偶发 "unexpected EOF"，
+    # curl 的 --retry 对这种瞬断更耐打。
+    $curl = (Get-Command curl.exe -ErrorAction SilentlyContinue).Source
+    if (-not $curl) { throw '未找到 curl.exe' }
+
+    # 1) 找已有发行（重跑时复用），没有就新建
+    $releaseJson = Join-Path $work 'release.json'
+    & $curl -sS --retry 5 --retry-delay 3 --retry-all-errors --max-time 120 `
+        -H $auth -H $accept "$api/releases/tags/$Tag" -o $releaseJson -w '%{http_code}' | Out-Null
+    $release = $null
+    if (Test-Path $releaseJson) {
+        $parsed = Get-Content $releaseJson -Raw | ConvertFrom-Json
+        if ($parsed.id) { $release = $parsed }
+    }
+    if (-not $release) {
+        $payloadFile = Join-Path $work 'payload.json'
+        $payload = @{
+            tag_name = $Tag
+            name = $Title
+            body = $notes
+            draft = $false
+            prerelease = $false
+        } | ConvertTo-Json -Depth 4
+        [IO.File]::WriteAllText($payloadFile, $payload, [Text.UTF8Encoding]::new($false))
+        & $curl -sS --retry 5 --retry-delay 3 --retry-all-errors --max-time 120 -X POST `
+            -H $auth -H $accept -H 'X-GitHub-Api-Version: 2022-11-28' -H 'Content-Type: application/json' `
+            --data-binary "@$payloadFile" -o $releaseJson "$api/releases" | Out-Null
+        $release = Get-Content $releaseJson -Raw | ConvertFrom-Json
+        if (-not $release.id) { throw "创建发行失败：$(Get-Content $releaseJson -Raw)" }
+    }
+    Write-Output "Release: $($release.html_url)"
+
+    # 2) 上传资产（已存在的同名资产先删掉再传，便于重跑）
+    $existing = @{}
+    if ($release.assets) { foreach ($item in $release.assets) { $existing[$item.name] = $item.id } }
+    foreach ($asset in $assets) {
+        $fileName = [IO.Path]::GetFileName($asset)
+        if ($existing.ContainsKey($fileName)) {
+            & $curl -sS --retry 5 --retry-delay 2 --retry-all-errors --max-time 60 -X DELETE `
+                -H $auth "$api/releases/assets/$($existing[$fileName])" -o NUL | Out-Null
+            Write-Output "Removed old asset: $fileName"
+        }
+        $uri = "$uploads/releases/$($release.id)/assets?name=$([uri]::EscapeDataString($fileName))"
+        $out = Join-Path $work 'upload.json'
+        & $curl -sS --retry 5 --retry-delay 5 --retry-all-errors --max-time 1800 -X POST `
+            -H $auth -H 'Content-Type: application/octet-stream' `
+            --data-binary "@$asset" -o $out $uri | Out-Null
+        $uploaded = Get-Content $out -Raw | ConvertFrom-Json
+        if (-not $uploaded.id) { throw "上传 $fileName 失败：$(Get-Content $out -Raw)" }
+        Write-Output ("Uploaded: {0} ({1} bytes)" -f $uploaded.name, $uploaded.size)
+    }
+    Write-Output 'Done.'
+} finally {
+    if (Test-Path -LiteralPath $work) { Remove-Item -LiteralPath $work -Recurse -Force }
 }
-
-$payload = @{
-    tag_name = $Tag
-    name = $Title
-    body = $notes
-    draft = $false
-    prerelease = $false
-} | ConvertTo-Json -Depth 4
-
-$release = Invoke-RestMethod -Method Post -Uri "$api/releases" -Headers $headers -Body $payload -ContentType 'application/json'
-Write-Output "Release: $($release.html_url)"
-
-foreach ($asset in $assets) {
-    $fileName = [IO.Path]::GetFileName($asset)
-    $uri = "https://uploads.github.com/repos/elaysia-feng/AI-Task-Hub/releases/$($release.id)/assets?name=$([uri]::EscapeDataString($fileName))"
-    Invoke-RestMethod -Method Post -Uri $uri -Headers @{ Authorization = "Bearer $token" } -InFile $asset -ContentType 'application/octet-stream' | Out-Null
-    Write-Output "Uploaded: $fileName"
-}
-Write-Output 'Done.'

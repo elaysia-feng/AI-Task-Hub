@@ -79,17 +79,28 @@ Claude Code 的标准配置是 `.claude/settings.json`，不是 `.claudecode`。
 
 `tests/verify-ui.ps1` 用于隔离版 GUI 截图与交互验证，需要先关闭现有窗口，并提供复制到独立空目录的测试 exe；不能直接用于日常安装目录。脚本会创建空测试库并检查服务返回的数据库位置，避免迁入真实 AppData 旧库。
 
-## 便携版打包
+## 打包与发布
 
 先生成发布候选，再从源码白名单打包（不会直接复制含个人数据的 `dist`）：
 
 ```powershell
 .\native-win32\build-win32.ps1 -StageOnly
 .\native-win32\test-win32.ps1
-.\native-win32\package-portable.ps1 -Version 0.3.5
+.\native-win32\package-portable.ps1 -Version 0.3.7   # 便携版 ZIP
+.\native-win32\package-installer.ps1 -Version 0.3.7  # NSIS 安装程序 Setup.exe
 ```
 
-ZIP 与 SHA256 校验文件位于 `native-win32/release/`。发布使用独立标签 `win32-v0.3.5`，不会触发现有 Electron 的 `v*` 构建流程。MinGW 运行库已静态链接，无需分发 `libwinpthread-1.dll`。
+两条打包线共用 `package-common.ps1` 里的文件清单，保证便携版与安装版内容一致。安装程序按用户安装（不需要管理员权限），默认装到 `%LOCALAPPDATA%\Programs\AI Task Hub Win32`；卸载只删程序文件，保留 `data.sqlite` 与个人配置。NSIS 脚本 `installer/AI-Task-Hub-Win32.nsi` 必须是 **UTF-8 with BOM**——NSIS 按系统代码页读脚本，缺 BOM 会报 `Bad text encoding`。
+
+产物与 SHA256 校验文件位于 `native-win32/release/`。发布：
+
+```powershell
+git tag -a win32-v0.3.7 -m "AI Task Hub Win32 v0.3.7"
+git push origin win32-v0.3.7
+.\native-win32\publish-release.ps1 -Version 0.3.7 -NotesFile <发行说明.md>
+```
+
+`publish-release.ps1` 调 GitHub API 建发行并上传资产（凭据取自 Git Credential Manager，不落盘不打印；大文件走 curl + 重试，本机代理会让 .NET 的 HttpClient 偶发 `unexpected EOF`）。发行标签使用独立的 `win32-v*` 前缀，不会触发现有 Electron 的 `v*` 构建流程。MinGW 运行库已静态链接，无需分发 `libwinpthread-1.dll`。
 
 ## 资源与内存
 
