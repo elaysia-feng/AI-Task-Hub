@@ -87,7 +87,8 @@ class TestIdempotency:
         assert first.id == second.id
         assert db.query_one("SELECT COUNT(*) AS c FROM task")["c"] == 1
         assert second.status == "FAILED_UNREAD"
-        assert second.title == "后续事件补全"
+        # 标题只在 TASK_STARTED 或任务尚无标题时更新，完成类事件不覆盖已有标题
+        assert second.title == "后端契约任务"
 
     def test_insert_or_ignore_skips_duplicate_key(self, db):
         """唯一约束 (source, external_task_id_not_null) 直接拦截重复插入。"""
