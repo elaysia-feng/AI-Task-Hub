@@ -1,5 +1,7 @@
 #include "http_server.h"
 
+#include "app_version.h"
+
 #include <winsock2.h>
 #include <ws2tcpip.h>
 
@@ -250,11 +252,11 @@ std::string HttpServer::route(const std::string &method, const std::string &targ
     const std::string path = pathOnly(target);
     const auto query = queryParams(target);
     if (method == "GET" && path == "/api/health") {
-        return std::string("{\"status\":\"") + (store_.ready() ? "ok" : "degraded") + "\",\"service\":\"AI Task Hub Win32\",\"version\":\"0.3.6-win32\"}";
+        return std::string("{\"status\":\"") + (store_.ready() ? "ok" : "degraded") + "\",\"service\":\"AI Task Hub Win32\",\"version\":\"" + jsonlite::toUtf8(kAppVersion) + "\"}";
     }
     if (method == "GET" && path == "/api/status") {
         const auto snapshot = store_.snapshot(1);
-        return std::string("{\"status\":\"") + (store_.ready() ? "ok" : "degraded") + "\",\"version\":\"0.3.6-win32\",\"runtime\":\"C++/Win32/Direct2D\",\"db\":{\"ok\":" + (store_.ready() ? "true" : "false") + ",\"backend\":\"sqlite\",\"database\":\"" + jsonlite::escapeUtf8(store_.databasePath()) + "\"},\"tasks\":" + std::to_string(snapshot.counts.total) + "}";
+        return std::string("{\"status\":\"") + (store_.ready() ? "ok" : "degraded") + "\",\"version\":\"" + jsonlite::toUtf8(kAppVersion) + "\",\"runtime\":\"C++/Win32/Direct2D\",\"db\":{\"ok\":" + (store_.ready() ? "true" : "false") + ",\"backend\":\"sqlite\",\"database\":\"" + jsonlite::escapeUtf8(store_.databasePath()) + "\"},\"tasks\":" + std::to_string(snapshot.counts.total) + "}";
     }
     if (method == "GET" && path == "/api/integrations/status") {
         return integrations_.statusJson();
@@ -357,7 +359,8 @@ std::string HttpServer::route(const std::string &method, const std::string &targ
                                   : (scope.rfind(L"queue:source:", 0) == 0 ? 13 : 7);
         const std::wstring source = sourceScope ? scope.substr(sourceStart) : L"";
         const bool validSource = source == L"CHATGPT" || source == L"CLAUDE_CODE" ||
-                                 source == L"CODEX" || source == L"OTHER";
+                                 source == L"CODEX" || source == L"ZCODE" ||
+                                 source == L"MINIMAX_CODE" || source == L"OTHER";
         if ((!simpleScope && !sourceScope) || (sourceScope && !validSource)) {
             status = 400; statusText = "Bad Request"; return jsonError("unknown scope");
         }

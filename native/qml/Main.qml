@@ -142,11 +142,18 @@ IGNORED: "已忽略"})[status] || status
         return ({CHATGPT: "ChatGPT 网页",
 CLAUDE_CODE: "Claude Code",
 CODEX: "Codex",
+ZCODE: "ZCode",
+MINIMAX_CODE: "MiniMax Code",
 OTHER: "其他"})[source] || source
     }
 
     function sourceColor(source) {
-        return source === "CHATGPT" ? "#10a37f" : (source === "CLAUDE_CODE" ? "#d97757" : (source === "CODEX" ? "#4f8ff7" : "#8b5cf6"))
+        if (source === "CHATGPT") return "#10a37f"
+        if (source === "CLAUDE_CODE") return "#d97757"
+        if (source === "CODEX") return "#4f8ff7"
+        if (source === "ZCODE") return "#00b8d9"
+        if (source === "MINIMAX_CODE") return "#ff7a45"
+        return "#8b5cf6"
     }
 
     function statusColor(status) {
@@ -851,7 +858,7 @@ font.pixelSize: 10
 elide: Text.ElideRight
 Layout.fillWidth: true }
 Label {
-text: "Claude Code · Codex ·\nChatGPT"
+text: "Claude Code · Codex · ZCode ·\nMiniMax Code · ChatGPT"
 color: mutedText
 font.pixelSize: 11
 lineHeight: 1.45
@@ -1173,6 +1180,12 @@ color: "#d97757"},
             {code: "CODEX",
 label: "Codex",
 color: "#4f8ff7"},
+            {code: "ZCODE",
+label: "ZCode",
+color: "#00b8d9"},
+            {code: "MINIMAX_CODE",
+label: "MiniMax Code",
+color: "#ff7a45"},
             {code: "OTHER",
 label: "其他",
 color: "#8b5cf6"}
@@ -1794,7 +1807,7 @@ spacing: 9
 RowLayout {
 width: parent.width
 Label {
-text: "ChatGPT 网页 · Claude Code · Codex"
+text: "ChatGPT 网页 · Claude Code · Codex · ZCode · MiniMax Code"
 color: primaryText
 font.pixelSize: 13
 font.bold: true
@@ -1805,13 +1818,13 @@ color: success
 font.pixelSize: 11
 font.bold: true } }
 Label {
-text: "三种适配器继续使用同一份 AgentEvent 协议：POST /api/events。"
+text: "所有适配器继续使用同一份 AgentEvent 协议：POST /api/events。"
 color: secondaryText
 font.pixelSize: 12
 wrapMode: Text.WordWrap
 width: parent.width }
 Label {
-text: "来源：CHATGPT · CLAUDE_CODE · CODEX · OTHER    事件：started / needs_input / completed / failed"
+text: "来源：CHATGPT · CLAUDE_CODE · CODEX · ZCODE · MINIMAX_CODE · OTHER    事件：started / needs_input / completed / failed"
 color: mutedText
 font.pixelSize: 11
 wrapMode: Text.WordWrap

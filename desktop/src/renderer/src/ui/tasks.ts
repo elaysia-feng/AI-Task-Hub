@@ -44,6 +44,8 @@ const SOURCE_OPTIONS: Array<{ value: TaskSource | 'all'; label: string }> = [
   { value: 'CHATGPT', label: 'ChatGPT' },
   { value: 'CLAUDE_CODE', label: 'Claude Code' },
   { value: 'CODEX', label: 'Codex' },
+  { value: 'ZCODE', label: 'ZCode' },
+  { value: 'MINIMAX_CODE', label: 'MiniMax Code' },
   { value: 'OTHER', label: '其他' },
 ]
 

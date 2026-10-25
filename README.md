@@ -1,6 +1,6 @@
 # AI Task Hub
 
-把 ChatGPT 网页、Claude Code 和 Codex 的任务事件集中到本地收件箱，查看任务状态、事件时间线和未读消息。
+把 ChatGPT 网页、Claude Code、Codex、ZCode 和 MiniMax Code 的任务事件集中到本地收件箱，查看任务状态、事件时间线和未读消息。
 
 ## 选择版本
 
@@ -31,6 +31,16 @@
 2. 在对应工具中执行任务，返回收件箱查看状态和事件时间线。
 3. 按来源、状态或关键词筛选任务，查看详情、标记已读或清理消息。
 4. 需要后台提醒时使用悬浮球、托盘、系统通知与应用内提醒卡片。
+
+各平台的接入位置：
+
+| 平台 | 接入方式 |
+| --- | --- |
+| ChatGPT 网页 | 浏览器扩展上报事件（需手动加载） |
+| Claude Code | `~/.claude/settings.json` 的 UserPromptSubmit / Notification / Stop 钩子 |
+| Codex | `~/.codex/config.toml` 的 notify 转发 + `~/.codex/hooks.json` 提问钩子 |
+| ZCode | `~/.zcode/cli/config.json` 的 `hooks.events.*` 进程钩子 |
+| MiniMax Code | `<数据目录>/plugins/ai-task-hub-bridge/` 本地插件钩子 |
 
 “已配置”只说明接入配置已写入，真实事件到达后才能确认链路可用。浏览器扩展需要手动加载。
 

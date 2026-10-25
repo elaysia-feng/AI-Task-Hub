@@ -32,6 +32,10 @@ a = Analysis(
         # 物化时排除（见 _codex_chain() 的 exclude 集合）
         (os.path.join(ROOT, "adapters", "claude-code"), "adapters/claude-code"),
         (os.path.join(ROOT, "adapters", "codex"), "adapters/codex"),
+        # ZCode 适配器（写入 ~/.zcode/cli/config.json）与 MiniMax Code 插件素材
+        # （复制进 <dataDir>/plugins/ai-task-hub-bridge/）；session_titles.json 为运行时产物
+        (os.path.join(ROOT, "adapters", "zcode"), "adapters/zcode"),
+        (os.path.join(ROOT, "adapters", "minimax-code"), "adapters/minimax-code"),
     ],
     hiddenimports=hiddenimports,
     hookspath=[],

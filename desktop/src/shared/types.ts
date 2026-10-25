@@ -8,7 +8,7 @@ export type TaskStatus =
   | 'VIEWED'
   | 'IGNORED'
 
-export type TaskSource = 'CHATGPT' | 'CLAUDE_CODE' | 'CODEX' | 'OTHER'
+export type TaskSource = 'CHATGPT' | 'CLAUDE_CODE' | 'CODEX' | 'ZCODE' | 'MINIMAX_CODE' | 'OTHER'
 
 /** 一键清理作用域：completed=只清已完成，queue=只清待处理，history=只清历史，all=全部 */
 export type TaskClearScope = 'completed' | 'queue' | 'history' | 'all'
@@ -135,6 +135,8 @@ export interface IntegrationsStatus {
     version: string | null
     extensionDir: string
   }
+  zcode: { installed: boolean; configPath: string; hooksEnabled: boolean }
+  minimaxCode: { installed: boolean; pluginPath: string; dataDir: string }
   backend: { version: string; python: string }
 }
 
@@ -226,6 +228,10 @@ export interface AihubApi {
   getIntegrations(): Promise<IntegrationsStatus | null>
   installClaude(): Promise<InstallResult>
   installCodex(): Promise<InstallResult>
+  installZcode(): Promise<InstallResult>
+  installMiniMaxCode(): Promise<InstallResult>
+  /** 设置页「应用更新」展示当前版本 */
+  getAppVersion(): Promise<string>
   getTaskEvents(taskId: number): Promise<TaskEventRecord[]>
   /** 任务对应的最终 AI 答复（读本地会话记录；缺记录时 content=null，非法 id 返回 null） */
   getTaskAiReply(taskId: number): Promise<AiReplyResult | null>

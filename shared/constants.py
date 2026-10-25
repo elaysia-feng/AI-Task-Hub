@@ -31,5 +31,7 @@ SOURCE_LABELS = {
     "CHATGPT": "ChatGPT",
     "CLAUDE_CODE": "Claude Code",
     "CODEX": "Codex",
+    "ZCODE": "ZCode",
+    "MINIMAX_CODE": "MiniMax Code",
     "OTHER": "其他",
 }

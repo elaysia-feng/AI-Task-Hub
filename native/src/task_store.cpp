@@ -37,7 +37,8 @@ const QStringList kStatuses{
     QStringLiteral("COMPLETED_UNREAD"), QStringLiteral("FAILED_UNREAD"),
     QStringLiteral("VIEWED"), QStringLiteral("IGNORED")};
 const QStringList kSources{QStringLiteral("CHATGPT"), QStringLiteral("CLAUDE_CODE"),
-                           QStringLiteral("CODEX"), QStringLiteral("OTHER")};
+                           QStringLiteral("CODEX"), QStringLiteral("ZCODE"),
+                           QStringLiteral("MINIMAX_CODE"), QStringLiteral("OTHER")};
 const QStringList kEventTypes{
     QStringLiteral("TASK_STARTED"), QStringLiteral("TASK_NEEDS_INPUT"),
     QStringLiteral("TASK_COMPLETED"), QStringLiteral("TASK_FAILED"),

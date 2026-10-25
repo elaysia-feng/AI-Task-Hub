@@ -20,6 +20,8 @@ using Path = std::filesystem::path;
 constexpr const wchar_t *kClaudeMarker = L"claude_adapter.py";
 constexpr const wchar_t *kCodexMarker = L"notify_chain.py";
 constexpr const wchar_t *kCodexPromptHookMarker = L"prompt_hook.py";
+constexpr const wchar_t *kZcodeMarker = L"zcode_adapter.py";
+constexpr const wchar_t *kMinimaxMarker = L"minimax_adapter.py";
 constexpr long long kHeartbeatTtlSeconds = 10 * 60;
 
 bool fileExists(const std::wstring &path) {
@@ -56,7 +58,7 @@ bool readUtf8(const std::wstring &path, std::string &result) {
     return true;
 }
 
-bool writeUtf8Atomic(const std::wstring &path, const std::string &content, std::wstring &error) {
+bool writeBytesAtomic(const std::wstring &path, const std::string &content, std::wstring &error) {
     try {
         const Path target(path);
         std::filesystem::create_directories(target.parent_path());
@@ -84,6 +86,10 @@ bool writeUtf8Atomic(const std::wstring &path, const std::string &content, std::
         error = L"创建配置目录失败：" + path;
         return false;
     }
+}
+
+bool writeUtf8Atomic(const std::wstring &path, const std::string &content, std::wstring &error) {
+    return writeBytesAtomic(path, content, error);
 }
 
 bool backupConfig(const std::wstring &path, std::wstring &error) {
@@ -656,6 +662,104 @@ long long unixSeconds() {
         std::chrono::system_clock::now().time_since_epoch()).count());
 }
 
+// 模板占位符按 JSON 文本转义后替换，反斜杠必须成对写出才不会截断路径。
+std::string escapeJsonText(const std::wstring &value) {
+    const std::string raw = jsonlite::toUtf8(value);
+    std::string result;
+    result.reserve(raw.size() + 8);
+    for (const char ch : raw) {
+        if (ch == '\\') result += "\\\\";
+        else if (ch == '\"') result += "\\\"";
+        else result.push_back(ch);
+    }
+    return result;
+}
+
+std::string replaceAllText(std::string text, const std::string &from, const std::string &to) {
+    if (from.empty()) return text;
+    size_t position = 0;
+    while ((position = text.find(from, position)) != std::string::npos) {
+        text.replace(position, from.size(), to);
+        position += to.size();
+    }
+    return text;
+}
+
+// ZCode 的钩子必须指向当前物化出来的适配器，路径变化时才算需要重新接入。
+bool zcodeHookPointsTo(const jsonlite::Value &hook, const std::wstring &adapterPath) {
+    if (!hook.isObject()) return false;
+    const jsonlite::Value *args = hook.get(L"args");
+    if (args && args->isArray()) {
+        for (const auto &item : args->array()) {
+            if (item.isString() && normalizedPath(item.string()) == normalizedPath(adapterPath)) return true;
+        }
+    }
+    const jsonlite::Value *command = hook.get(L"command");
+    if (command && command->isString() && normalizedPath(command->string()) == normalizedPath(adapterPath)) return true;
+    return false;
+}
+
+// 判断钩子是否指向我们的适配器脚本，用于原位刷新而不是追加第二条记录。
+bool zcodeHookReferencesAdapter(const jsonlite::Value &hook) {
+    if (!hook.isObject()) return false;
+    const jsonlite::Value *command = hook.get(L"command");
+    if (command && command->isString() && command->string().find(kZcodeMarker) != std::wstring::npos) return true;
+    const jsonlite::Value *args = hook.get(L"args");
+    if (args && args->isArray()) {
+        for (const auto &item : args->array()) {
+            if (item.isString() && item.string().find(kZcodeMarker) != std::wstring::npos) return true;
+        }
+    }
+    return false;
+}
+
+// ZCode 的配置结构是严格的：条目只允许 matcher/hooks，钩子只允许 type/command/args/enabled/timeoutMs。
+jsonlite::Value makeZcodeHook(const std::wstring &command, const std::wstring &script) {
+    jsonlite::Value::Object hook{
+        {L"type", jsonlite::Value(L"process")},
+        {L"command", jsonlite::Value(command)},
+        {L"args", jsonlite::Value(jsonlite::Value::Array{jsonlite::Value(script)})},
+        {L"timeoutMs", jsonlite::Value(8000)},
+    };
+    return jsonlite::Value(std::move(hook));
+}
+
+jsonlite::Value makeZcodeEntry(const std::wstring &command, const std::wstring &script) {
+    jsonlite::Value::Array hookList;
+    hookList.emplace_back(makeZcodeHook(command, script));
+    return jsonlite::Value(jsonlite::Value::Object{{L"hooks", jsonlite::Value(std::move(hookList))}});
+}
+
+// 已经登记过的钩子原位刷新，第三方钩子保持原样，同一事件不会追加第二条记录。
+bool refreshZcodeEventHooks(jsonlite::Value::Array &entries, const std::wstring &command,
+                             const std::wstring &script) {
+    bool matched = false;
+    const jsonlite::Value replacement = makeZcodeHook(command, script);
+    for (auto &entry : entries) {
+        if (!entry.isObject()) continue;
+        auto &object = std::get<jsonlite::Value::Object>(entry.data);
+        auto hooksIt = object.find(L"hooks");
+        if (hooksIt == object.end() || !hooksIt->second.isArray()) continue;
+        auto &hooks = std::get<jsonlite::Value::Array>(hooksIt->second.data);
+        for (auto &hook : hooks) {
+            if (!zcodeHookReferencesAdapter(hook)) continue;
+            hook = replacement;
+            matched = true;
+        }
+    }
+    return matched;
+}
+
+// 插件文件内容一致时不重复写盘，重复点击「一键接入」保持幂等。
+bool writePluginFile(const std::wstring &path, const std::string &content, bool &changed,
+                     std::wstring &error) {
+    std::string existing;
+    if (fileExists(path) && readRaw(path, existing) && existing == content) return true;
+    if (!writeBytesAtomic(path, content, error)) return false;
+    changed = true;
+    return true;
+}
+
 } // namespace
 
 IntegrationManager::IntegrationManager(std::wstring profile, std::wstring data, std::wstring adapters)
@@ -710,6 +814,23 @@ std::wstring IntegrationManager::claudeAdapterDirectory() const {
 
 std::wstring IntegrationManager::codexAdapterDirectory() const {
     return (Path(userDataDirectory()) / L"adapters" / L"codex").wstring();
+}
+
+std::wstring IntegrationManager::zcodeAdapterDirectory() const {
+    return (Path(userDataDirectory()) / L"adapters" / L"zcode").wstring();
+}
+
+std::wstring IntegrationManager::minimaxCodeDataDirectory() const {
+    // 优先使用 MiniMax Code 显式指定的数据目录，其次是 Mavis 兼容目录，最后回退到用户目录。
+    std::wstring configured = getEnvironment(L"MINIMAX_DATA_DIR");
+    if (!configured.empty()) return configured;
+    configured = getEnvironment(L"MAVIS_DATA_DIR");
+    if (!configured.empty()) return configured;
+    return (Path(userProfileDirectory()) / L".minimax").wstring();
+}
+
+std::wstring IntegrationManager::minimaxCodePluginDirectory() const {
+    return (Path(minimaxCodeDataDirectory()) / L"plugins" / L"ai-task-hub-bridge").wstring();
 }
 
 std::wstring IntegrationManager::chatgptExtensionDirectory() const {
@@ -791,6 +912,9 @@ IntegrationStatus IntegrationManager::status() const {
     result.claudeSettingsPath = (Path(profile) / L".claude" / L"settings.json").wstring();
     result.codexConfigPath = (Path(profile) / L".codex" / L"config.toml").wstring();
     result.codexHooksPath = (Path(profile) / L".codex" / L"hooks.json").wstring();
+    result.zcodeConfigPath = (Path(profile) / L".zcode" / L"cli" / L"config.json").wstring();
+    result.minimaxCodeDataDir = minimaxCodeDataDirectory();
+    result.minimaxCodePluginPath = minimaxCodePluginDirectory();
     result.chatgptExtensionDirectory = chatgptExtensionDirectory();
     result.pythonCommand = findPython();
 
@@ -848,6 +972,46 @@ IntegrationStatus IntegrationManager::status() const {
     }
     result.codexInstalled = result.codexNotifyInstalled && result.codexPromptHookInstalled;
     result.chatgptPrepared = fileExists((Path(result.chatgptExtensionDirectory) / L"manifest.json").wstring());
+
+    std::string zcodeText;
+    if (readUtf8(result.zcodeConfigPath, zcodeText)) {
+        jsonlite::Value zcodeConfig;
+        std::string zcodeError;
+        if (jsonlite::parseUtf8(zcodeText, zcodeConfig, zcodeError) && zcodeConfig.isObject()) {
+            const auto *hooks = zcodeConfig.get(L"hooks");
+            const auto *enabled = hooks && hooks->isObject() ? hooks->get(L"enabled") : nullptr;
+            result.zcodeHooksEnabled = enabled && enabled->isBool() && enabled->boolean();
+            const auto *events = hooks && hooks->isObject() ? hooks->get(L"events") : nullptr;
+            const std::wstring expectedScript = (Path(zcodeAdapterDirectory()) / L"zcode_adapter.py").wstring();
+            // 「已接入」= 三个事件都登记了当前适配器；hooks.enabled 是 ZCode 的全局开关，
+            // 单独用 zcodeHooksEnabled 汇报，用户关掉开关时钩子已就绪但不会触发。
+            bool complete = events && events->isObject();
+            for (const auto *event : {L"UserPromptSubmit", L"PermissionRequest", L"Stop"}) {
+                const auto *entries = events && events->isObject() ? events->get(event) : nullptr;
+                bool found = false;
+                if (entries && entries->isArray()) {
+                    for (const auto &entry : entries->array()) {
+                        if (!entry.isObject()) continue;
+                        const auto *hookList = entry.get(L"hooks");
+                        if (!hookList || !hookList->isArray()) continue;
+                        for (const auto &hook : hookList->array()) {
+                            if (!zcodeHookPointsTo(hook, expectedScript)) continue;
+                            found = true;
+                            break;
+                        }
+                        if (found) break;
+                    }
+                }
+                complete = complete && found;
+            }
+            result.zcodeInstalled = complete;
+        }
+    }
+    result.minimaxCodeInstalled =
+        fileExists((Path(result.minimaxCodePluginPath) / L".minimax-plugin" / L"plugin.json").wstring()) &&
+        fileExists((Path(result.minimaxCodePluginPath) / L"hooks" / L"hooks.json").wstring()) &&
+        fileExists((Path(result.minimaxCodePluginPath) / L"scripts" / L"minimax_adapter.py").wstring()) &&
+        fileExists((Path(result.minimaxCodePluginPath) / L"icon.png").wstring());
 
     if (readUtf8(heartbeatPath(), text)) {
         jsonlite::Value heartbeat;
@@ -1082,6 +1246,179 @@ IntegrationResult IntegrationManager::installCodex() {
     return result;
 }
 
+IntegrationResult IntegrationManager::installZcode() {
+    std::lock_guard<std::mutex> lock(writeMutex_);
+    IntegrationResult result;
+    const std::wstring python = findPython();
+    if (python.empty()) {
+        result.message = L"未检测到 Python。请安装 Python，或设置 AIHUB_PYTHON 后重试。";
+        return result;
+    }
+    // 没有 ZCode 的用户目录就不创建，避免凭空生成一个空的配置目录。
+    const Path cliDirectory = Path(userProfileDirectory()) / L".zcode" / L"cli";
+    if (!directoryExists(cliDirectory.wstring())) {
+        result.message = L"未检测到 ZCode。请先安装并启动 ZCode CLI，再重试一键接入。";
+        return result;
+    }
+    std::wstring error;
+    const std::wstring source = (Path(resourceAdaptersDirectory()) / L"zcode").wstring();
+    const std::wstring target = zcodeAdapterDirectory();
+    if (!materializeDirectory(source, target, L"zcode_adapter.py", error)) {
+        result.message = error;
+        return result;
+    }
+    const std::wstring configPath = (cliDirectory / L"config.json").wstring();
+    jsonlite::Value root(jsonlite::Value::Object{});
+    if (fileExists(configPath)) {
+        std::string utf8;
+        if (!readUtf8(configPath, utf8)) {
+            result.message = L"无法读取 ZCode 配置：" + configPath;
+            return result;
+        }
+        std::string parseError;
+        if (!jsonlite::parseUtf8(utf8, root, parseError) || !root.isObject()) {
+            result.message = L"ZCode 的 config.json 解析失败，请先手工修复 JSON。";
+            return result;
+        }
+    }
+
+    const std::string original = jsonlite::stringifyUtf8(root);
+    auto &rootObject = std::get<jsonlite::Value::Object>(root.data);
+    auto hooksIt = rootObject.find(L"hooks");
+    if (hooksIt == rootObject.end()) hooksIt = rootObject.emplace(L"hooks", jsonlite::Value(jsonlite::Value::Object{})).first;
+    if (!hooksIt->second.isObject()) {
+        result.message = L"ZCode 的 hooks 字段不是对象，未修改配置。";
+        return result;
+    }
+    auto &hooks = std::get<jsonlite::Value::Object>(hooksIt->second.data);
+    // 钩子默认关闭；用户显式关闭时保留原值并提示，不擅自改写用户的选择。
+    // 注意：enabled 不存在时 enabledIt 是 end()，不能直接写 enabledIt->second。
+    bool hooksDisabledByUser = false;
+    auto enabledIt = hooks.find(L"enabled");
+    if (enabledIt != hooks.end() && enabledIt->second.isBool()) {
+        hooksDisabledByUser = !enabledIt->second.boolean();
+    }
+    if (!hooksDisabledByUser) {
+        if (enabledIt == hooks.end()) {
+            hooks.emplace(L"enabled", jsonlite::Value(true));
+        } else {
+            enabledIt->second = jsonlite::Value(true);
+        }
+    }
+    auto eventsIt = hooks.find(L"events");
+    if (eventsIt == hooks.end()) eventsIt = hooks.emplace(L"events", jsonlite::Value(jsonlite::Value::Object{})).first;
+    if (!eventsIt->second.isObject()) {
+        result.message = L"ZCode 的 hooks.events 字段不是对象，未修改配置。";
+        return result;
+    }
+    auto &events = std::get<jsonlite::Value::Object>(eventsIt->second.data);
+    const std::wstring script = (Path(target) / L"zcode_adapter.py").wstring();
+    for (const wchar_t *event : {L"UserPromptSubmit", L"PermissionRequest", L"Stop"}) {
+        auto eventIt = events.find(event);
+        if (eventIt == events.end()) eventIt = events.emplace(event, jsonlite::Value(jsonlite::Value::Array{})).first;
+        if (!eventIt->second.isArray()) {
+            result.message = L"ZCode 的 hooks.events." + std::wstring(event) + L" 不是数组，未修改配置。";
+            return result;
+        }
+        auto &entries = std::get<jsonlite::Value::Array>(eventIt->second.data);
+        if (refreshZcodeEventHooks(entries, python, script)) continue;
+        entries.push_back(makeZcodeEntry(python, script));
+    }
+
+    const std::string updated = jsonlite::stringifyUtf8(root);
+    if (original == updated) {
+        result.success = true;
+        result.message = hooksDisabledByUser
+            ? L"ZCode 钩子已登记，但 hooks.enabled 为 false，请在 ZCode 配置中手动开启。"
+            : L"ZCode 已接入，无需重复修改。";
+        return result;
+    }
+    if (!backupConfig(configPath, error) || !writeUtf8Atomic(configPath, updated + "\n", error)) {
+        result.message = error;
+        return result;
+    }
+    result.success = true;
+    result.changed = true;
+    result.message = hooksDisabledByUser
+        ? L"ZCode 钩子已写入，但 hooks.enabled 为 false，请在 ZCode 配置中手动开启：" + configPath
+        : L"ZCode 已接入：" + configPath;
+    return result;
+}
+
+IntegrationResult IntegrationManager::installMiniMaxCode() {
+    std::lock_guard<std::mutex> lock(writeMutex_);
+    IntegrationResult result;
+    const std::wstring python = findPython();
+    if (python.empty()) {
+        result.message = L"未检测到 Python。请安装 Python，或设置 AIHUB_PYTHON 后重试。";
+        return result;
+    }
+    const std::wstring dataDirectory = minimaxCodeDataDirectory();
+    if (!directoryExists(dataDirectory)) {
+        result.message = L"未检测到 MiniMax Code。请先安装并启动 MiniMax Code，再重试一键接入。";
+        return result;
+    }
+    const std::wstring pluginDirectory = minimaxCodePluginDirectory();
+    // 只往自己创建的插件目录里写文件，别人的插件目录一律不动。
+    if (directoryExists(pluginDirectory) &&
+        !fileExists((Path(pluginDirectory) / L".aihub-managed.json").wstring())) {
+        result.message = L"该目录不是 AI Task Hub 创建的插件，已跳过：" + pluginDirectory;
+        return result;
+    }
+    std::wstring error;
+    const std::wstring source = (Path(resourceAdaptersDirectory()) / L"minimax-code").wstring();
+    const std::wstring target = (Path(userDataDirectory()) / L"adapters" / L"minimax-code").wstring();
+    if (!materializeDirectory(source, target, L"minimax_adapter.py", error)) {
+        result.message = error;
+        return result;
+    }
+
+    bool changed = false;
+    std::string pluginManifest;
+    if (!readRaw((Path(source) / L"plugin.json").wstring(), pluginManifest)) {
+        result.message = L"无法读取 MiniMax Code 插件清单：" + (Path(source) / L"plugin.json").wstring();
+        return result;
+    }
+    std::string adapterScript;
+    if (!readRaw((Path(source) / L"minimax_adapter.py").wstring(), adapterScript)) {
+        result.message = L"无法读取 MiniMax Code 适配器脚本：" + (Path(source) / L"minimax_adapter.py").wstring();
+        return result;
+    }
+    std::string icon;
+    if (!readRaw((Path(source) / L"icon.png").wstring(), icon)) {
+        result.message = L"无法读取 MiniMax Code 图标：" + (Path(source) / L"icon.png").wstring();
+        return result;
+    }
+    std::string hooksTemplate;
+    if (!readUtf8((Path(source) / L"hooks.json").wstring(), hooksTemplate)) {
+        result.message = L"无法读取 MiniMax Code 钩子模板：" + (Path(source) / L"hooks.json").wstring();
+        return result;
+    }
+    const std::wstring scriptPath = (Path(pluginDirectory) / L"scripts" / L"minimax_adapter.py").wstring();
+    std::string hooksContent = replaceAllText(hooksTemplate, "{{PYTHON}}", escapeJsonText(python));
+    hooksContent = replaceAllText(hooksContent, "{{SCRIPT}}", escapeJsonText(scriptPath));
+
+    if (!writePluginFile((Path(pluginDirectory) / L".minimax-plugin" / L"plugin.json").wstring(),
+                         pluginManifest, changed, error) ||
+        !writePluginFile((Path(pluginDirectory) / L"hooks" / L"hooks.json").wstring(),
+                         hooksContent, changed, error) ||
+        !writePluginFile((Path(pluginDirectory) / L"scripts" / L"minimax_adapter.py").wstring(),
+                         adapterScript, changed, error) ||
+        !writePluginFile((Path(pluginDirectory) / L"icon.png").wstring(), icon, changed, error) ||
+        !writePluginFile((Path(pluginDirectory) / L".aihub-managed.json").wstring(),
+                         "{\"app\":\"ai-task-hub\",\"integration\":\"minimax-code\",\"managed\":true,\"version\":1}",
+                         changed, error)) {
+        result.message = error;
+        return result;
+    }
+    result.success = true;
+    result.changed = changed;
+    result.message = changed
+        ? L"MiniMax Code 已接入：" + pluginDirectory
+        : L"MiniMax Code 已接入，无需重复修改。";
+    return result;
+}
+
 IntegrationResult IntegrationManager::prepareChatGptExtension() {
     std::lock_guard<std::mutex> lock(writeMutex_);
     IntegrationResult result;
@@ -1127,5 +1464,11 @@ std::string IntegrationManager::statusJson() const {
            "},\"chatgpt\":{\"installed\":" + (info.chatgptOnline ? "true" : "false") +
            ",\"prepared\":" + (info.chatgptPrepared ? "true" : "false") +
            ",\"extensionDir\":\"" + jsonlite::escapeUtf8(info.chatgptExtensionDirectory) +
+           "\"},\"zcode\":{\"installed\":" + (info.zcodeInstalled ? "true" : "false") +
+           ",\"configPath\":\"" + jsonlite::escapeUtf8(info.zcodeConfigPath) +
+           "\",\"hooksEnabled\":" + (info.zcodeHooksEnabled ? "true" : "false") +
+           "},\"minimaxCode\":{\"installed\":" + (info.minimaxCodeInstalled ? "true" : "false") +
+           ",\"pluginPath\":\"" + jsonlite::escapeUtf8(info.minimaxCodePluginPath) +
+           "\",\"dataDir\":\"" + jsonlite::escapeUtf8(info.minimaxCodeDataDir) +
            "\"},\"backend\":{\"python\":\"" + jsonlite::escapeUtf8(info.pythonCommand) + "\"}}";
 }

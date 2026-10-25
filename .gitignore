@@ -46,6 +46,8 @@ adapters/codex/notify_debug.log
 adapters/codex/notify_debug.log.*
 adapters/claude-code/session_titles.json
 adapters/codex/forward_target.json
+adapters/zcode/session_titles.json
+adapters/minimax-code/session_titles.json
 
 # ========== 一次性工作产物（bug 扫描报告等，不入库） ==========
 bugs-scan-*.md

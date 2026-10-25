@@ -10,6 +10,8 @@ class TaskSource(str, Enum):
     CHATGPT = "CHATGPT"
     CLAUDE_CODE = "CLAUDE_CODE"
     CODEX = "CODEX"
+    ZCODE = "ZCODE"
+    MINIMAX_CODE = "MINIMAX_CODE"
     OTHER = "OTHER"
 
 

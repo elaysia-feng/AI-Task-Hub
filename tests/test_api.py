@@ -358,3 +358,26 @@ def test_tasks_snapshot_returns_counts_and_first_page_per_status(client):
     assert snapshot["buckets"]["VIEWED"]["tasks"][0]["id"] == completed
     assert snapshot["buckets"]["VIEWED"]["hasMore"] is False
     assert snapshot["buckets"]["IGNORED"] == {"tasks": [], "hasMore": False}
+
+
+def test_new_platform_sources_are_accepted(client):
+    """ZCode / MiniMax Code 的事件走统一协议入库；未登记的来源才应被拒。"""
+    created = {}
+    for source, external_id in (("ZCODE", "zcode-001"), ("MINIMAX_CODE", "mcode-001")):
+        res = client.post("/api/events", json={
+            "source": source,
+            "eventType": "TASK_STARTED",
+            "externalTaskId": external_id,
+            "title": f"{source} 任务",
+            "projectPath": "D:/projects/demo",
+        })
+        assert res.status_code == 201
+        created[source] = res.json()["taskId"]
+
+    queue = client.get("/api/tasks?view=queue").json()["tasks"]
+    sources = {task["source"] for task in queue}
+    assert {"ZCODE", "MINIMAX_CODE"} <= sources
+
+    detail = client.get(f"/api/tasks/{created['ZCODE']}").json()["task"]
+    assert detail["source"] == "ZCODE"
+    assert detail["status"] == "RUNNING"

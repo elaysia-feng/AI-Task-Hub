@@ -16,7 +16,7 @@
 & '.\native-win32\dist\AI Task Hub Win32.exe'
 ```
 
-程序主体不依赖 Qt DLL、QML、Chromium 或 Python；只有点击 Claude Code / Codex 的“一键接入”后，外部钩子才会调用系统 Python 运行适配器脚本。
+程序主体不依赖 Qt DLL、QML、Chromium 或 Python；只有点击 Claude Code / Codex / ZCode / MiniMax Code 的“一键接入”后，外部钩子才会调用系统 Python 运行适配器脚本。
 
 ## 视觉与透明效果
 
@@ -29,8 +29,8 @@
 
 - 默认使用 exe 所在目录的 `data.sqlite`，下载到哪里数据就跟随到哪里；也可在「设置 → 数据与通知」选择其他文件夹。切换时使用 SQLite 一致性备份复制现有数据，重启生效并保留旧数据库。
 - `127.0.0.1:17891` 提供 `/api/events`、任务快照、详情、事件流水、已读/忽略/清理等接口，适配器无需改协议。
-- 主窗口保留壁纸、头像、GPT 网页 / Claude Code / Codex / 其他来源分类、状态颜色、任务详情与生命周期事件时间线。
-- 设置页恢复三类真实接入：Claude Code 写入 `%USERPROFILE%\\.claude\\settings.json`，Codex 写入 `%USERPROFILE%\\.codex\\config.toml`，适配器脚本复制到 `%APPDATA%\\AI Task Hub\\adapters`；重复点击会更新到当前发布版路径，不会重复追加钩子。
+- 主窗口保留壁纸、头像、GPT 网页 / Claude Code / Codex / ZCode / MiniMax Code / 其他来源分类、状态颜色、任务详情与生命周期事件时间线。
+- 设置页恢复多类真实接入：Claude Code 写入 `%USERPROFILE%\\.claude\\settings.json`，Codex 写入 `%USERPROFILE%\\.codex\\config.toml`，ZCode 写入 `%USERPROFILE%\\.zcode\\cli\\config.json`，MiniMax Code 安装本地插件到 `%USERPROFILE%\\.minimax\\plugins\\ai-task-hub-bridge`；适配器脚本复制到 `%APPDATA%\\AI Task Hub\\adapters`；重复点击会更新到当前发布版路径，不会重复追加钩子。
 - ChatGPT 网页接入会准备 `%APPDATA%\\AI Task Hub\\chatgpt-extension` 并打开目录；浏览器安全策略不允许桌面程序静默安装扩展，需要在 `chrome://extensions` 开启开发者模式后“加载已解压的扩展程序”。
 - 最小化按钮和设置页“收起为悬浮球”都会进入圆形悬浮球；拖动超过 5px 才算拖拽，点击打开主窗口时自动放到悬浮球反侧。
 - 悬停悬浮球显示任务概览；离开面板后延迟收起，不会因为拖动误触打开主窗口。
@@ -38,7 +38,7 @@
 
 ## 本轮界面与交互完善
 
-- 设置分为「外观主题」「平台接入」「数据与通知」，切换后回到页首；主题选择在窄窗口自动调整列数，浅色面板保留壁纸透出。
+- 设置分为「外观主题」「平台接入」「数据与通知」「更新」，切换后回到页首；主题选择在窄窗口自动调整列数，浅色面板保留壁纸透出。
 - 来源与状态标签准确选择对应条件；搜索支持 `Ctrl+K` / `Ctrl+F`、粘贴和 `Esc` 清除，无匹配时提供清除筛选入口。
 - 卡片按钮绑定被点击的任务；历史和详情删除前二次确认；打开目标失败不标记已读。
 - 详情中的摘要、完整答复及事件列表独立滚动，底部操作固定；窄窗口改用单栏详情。
@@ -46,13 +46,25 @@
 - 系统通知和任务状态应用内提醒卡片与 Windows 登录后自动启动均可独立开关；开机启动只写入当前用户启动项，不要求管理员权限。
 - 深浅色和通知偏好保存在当前数据库目录，迁移数据库时一起复制。
 
+## 检查更新
+
+设置页「更新」页签展示**当前版本**（`src/app_version.h` 里的 `kAppVersion`，同时也是 `/api/health`、`/api/status` 返回的 version）与 **GitHub 最新发行版**，点「检查更新」后联网查询：
+
+- 数据源：`https://api.github.com/repos/elaysia-feng/AI-Task-Hub/releases`，仓库公开，无需 token。
+- 只认 `win32-v*` 标签：Electron 版的 `v*` 发行与便携版是两条独立发行流，`/releases/latest` 命中 Electron 标签时会自动改用列表接口按前缀过滤。
+- 跳过草稿与预发布；版本号按数字逐段比较（`0.3.10 > 0.3.9`，不做字符串比较）。
+- 网络层用系统 WinHTTP（`winhttp.lib`，系统证书库），不引入第三方依赖；请求在后台线程执行，不会卡住消息循环，超时或失败时在页签内显示中文原因。
+- 只查询不自动下载：便携版是绿色 ZIP，替换由用户决定；「打开发行页」用系统浏览器打开对应的 GitHub 发行页。
+
+版本号只在 `src/app_version.h` 维护一处，改版时同步更新该文件即可。
+
 ## 接入安全与限制
 
-Claude Code 的标准配置是 `.claude/settings.json`，不是 `.claudecode`。Codex 使用 `.codex/config.toml`。当前一键接入针对这两个用户目录默认位置，不自动改动自定义配置根目录。
+Claude Code 的标准配置是 `.claude/settings.json`，不是 `.claudecode`。Codex 使用 `.codex/config.toml`。ZCode 使用 `.zcode/cli/config.json`，其配置型钩子默认关闭，接入时会写入 `hooks.enabled=true`；用户显式关闭该开关时保留原值并在界面上提示。MiniMax Code 的钩子只能通过本地插件声明，接入会在插件目录写入 `.minimax-plugin/plugin.json`、`hooks/hooks.json` 与钩子脚本；目录已存在且不是 AI Task Hub 创建时拒绝修改。当前一键接入针对这些用户目录默认位置，不自动改动自定义配置根目录。
 
 配置变更前在原目录留下 `.aihub-*.bak` 备份；保留其他 hooks 和原有 Codex 通知转发。重复安装不会重复添加钩子。复杂或损坏的 TOML（例如根表多行字符串）会停止自动修改并提示手工处理，不猜测配置边界。安装操作只由原生设置按钮触发，不开放 HTTP 安装接口。
 
-「已配置」表示本地钩子已配置，不代表已经收到该工具的真实事件。ChatGPT 只有收到扩展心跳才显示在线；准备目录不能代替浏览器加载步骤。发布包不包含个人 `session_titles.json`，旧包内的缓存移到 `obj` 备份，运行期缓存不覆盖。
+「已配置」表示本地钩子已配置，不代表已经收到该工具的真实事件。ZCode 的「已配置」只说明三个事件都登记了适配器，全局 `hooks.enabled` 是否打开会单独显示。ChatGPT 只有收到扩展心跳才显示在线；准备目录不能代替浏览器加载步骤。发布包不包含个人 `session_titles.json`，旧包内的缓存移到 `obj` 备份，运行期缓存不覆盖。
 
 ## 回归验证
 

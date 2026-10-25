@@ -60,6 +60,8 @@
   --src-chatgpt: #10a37f;
   --src-claude: #d97757;
   --src-codex: #4f8ff7;
+  --src-zcode: #00b8d9;
+  --src-minimax: #ff7a45;
   --src-other: #8b5cf6;
 
   --st-input: #f59e0b;
@@ -819,6 +821,12 @@ html[data-wallpaper='on'] .content-header h1 {
 }
 .src-pill[data-source='CODEX'] {
   --src: var(--src-codex);
+}
+.src-pill[data-source='ZCODE'] {
+  --src: var(--src-zcode);
+}
+.src-pill[data-source='MINIMAX_CODE'] {
+  --src: var(--src-minimax);
 }
 .src-pill[data-source='OTHER'] {
   --src: var(--src-other);

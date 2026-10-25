@@ -445,6 +445,12 @@ int main(int argc, char *argv[]) {
             {QStringLiteral("chatgpt"), QJsonObject{{QStringLiteral("installed"), QFileInfo(extension).exists()},
                                                     {QStringLiteral("lastHeartbeat"), QJsonValue()}, {QStringLiteral("version"), QJsonValue()},
                                                     {QStringLiteral("extensionDir"), extension}}},
+            {QStringLiteral("zcode"), QJsonObject{{QStringLiteral("installed"), QFileInfo(QDir(home).filePath(".zcode/cli/config.json")).exists()},
+                                                  {QStringLiteral("configPath"), QDir(home).filePath(".zcode/cli/config.json")},
+                                                  {QStringLiteral("hooksEnabled"), false}}},
+            {QStringLiteral("minimaxCode"), QJsonObject{{QStringLiteral("installed"), QFileInfo(QDir(home).filePath(".minimax/plugins/ai-task-hub-bridge")).exists()},
+                                                        {QStringLiteral("pluginPath"), QDir(home).filePath(".minimax/plugins/ai-task-hub-bridge")},
+                                                        {QStringLiteral("dataDir"), QDir(home).filePath(".minimax")}}},
             {QStringLiteral("backend"), QJsonObject{{QStringLiteral("version"), "0.2.0-native"},
                                                     {QStringLiteral("runtime"), "C++/Qt"}}},
             {QStringLiteral("storage"), taskStore.databasePath()}});

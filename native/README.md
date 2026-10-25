@@ -6,7 +6,7 @@
 
 - 待处理、历史、搜索、来源/状态筛选和详情时间线
 - 任务幂等更新、状态机、批量已读、按范围清理和 SQLite 外键级联
-- ChatGPT / Claude Code / Codex / OTHER 事件来源与 `replyText` 保留
+- ChatGPT / Claude Code / Codex / ZCode / MiniMax Code / OTHER 事件来源与 `replyText` 保留
 - 打开浏览器对话、Windows Terminal 项目目录和数据目录
 - 本地 CORS、分页快照、任务详情、事件流水、AI 答复和集成状态 API
 - Windows 系统托盘、原生通知和悬浮球模式

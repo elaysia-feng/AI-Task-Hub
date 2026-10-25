@@ -17,6 +17,14 @@ struct IntegrationStatus {
     std::wstring codexHooksPath;
     std::wstring chatgptExtensionDirectory;
     std::wstring pythonCommand;
+    // ZCode 的配置钩子默认关闭，安装器要单独展示是否已开启。
+    bool zcodeInstalled = false;
+    bool zcodeHooksEnabled = false;
+    std::wstring zcodeConfigPath;
+    // MiniMax Code 通过插件目录接入，插件由 AI Task Hub 创建并带标记文件。
+    bool minimaxCodeInstalled = false;
+    std::wstring minimaxCodePluginPath;
+    std::wstring minimaxCodeDataDir;
 };
 
 struct IntegrationResult {
@@ -36,6 +44,8 @@ public:
     IntegrationStatus status() const;
     IntegrationResult installClaude();
     IntegrationResult installCodex();
+    IntegrationResult installZcode();
+    IntegrationResult installMiniMaxCode();
     IntegrationResult prepareChatGptExtension();
 
     // ChatGPT 扩展每 5 分钟调用一次；返回 false 表示请求载荷无效或无法落盘。
@@ -50,6 +60,9 @@ private:
     std::wstring resourceAdaptersDirectory() const;
     std::wstring claudeAdapterDirectory() const;
     std::wstring codexAdapterDirectory() const;
+    std::wstring zcodeAdapterDirectory() const;
+    std::wstring minimaxCodeDataDirectory() const;
+    std::wstring minimaxCodePluginDirectory() const;
     std::wstring chatgptExtensionDirectory() const;
     std::wstring heartbeatPath() const;
     std::wstring findPython() const;

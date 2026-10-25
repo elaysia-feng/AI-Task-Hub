@@ -20,7 +20,8 @@ foreach ($entry in @('anime-head.png','icon.ico','icon.png','tray.png','presets'
     Copy-Item -LiteralPath (Join-Path $root "desktop/resources/$entry") -Destination $resources -Recurse
 }
 $adapterFiles = @('claude-code/claude_adapter.py','codex/notify_chain.py','codex/event_converter.py','codex/prompt_hook.py',
-    'chatgpt-extension/background.js','chatgpt-extension/content.js','chatgpt-extension/manifest.json','chatgpt-extension/README.md')
+    'chatgpt-extension/background.js','chatgpt-extension/content.js','chatgpt-extension/manifest.json','chatgpt-extension/README.md',
+    'zcode/zcode_adapter.py','minimax-code/minimax_adapter.py','minimax-code/plugin.json','minimax-code/hooks.json','minimax-code/icon.png')
 foreach ($entry in $adapterFiles) {
     $destination = Join-Path $package "adapters/$entry"
     New-Item -ItemType Directory -Path (Split-Path $destination) -Force | Out-Null

@@ -1,0 +1,40 @@
+{
+  "hooks": {
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "\"{{PYTHON}}\" \"{{SCRIPT}}\"",
+            "commandWindows": "\"{{PYTHON}}\" \"{{SCRIPT}}\"",
+            "timeout": 3
+          }
+        ]
+      }
+    ],
+    "PermissionRequest": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "\"{{PYTHON}}\" \"{{SCRIPT}}\"",
+            "commandWindows": "\"{{PYTHON}}\" \"{{SCRIPT}}\"",
+            "timeout": 3
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "\"{{PYTHON}}\" \"{{SCRIPT}}\"",
+            "commandWindows": "\"{{PYTHON}}\" \"{{SCRIPT}}\"",
+            "timeout": 3
+          }
+        ]
+      }
+    ]
+  }
+}

@@ -415,7 +415,7 @@ std::wstring TaskStore::statusFor(const std::wstring &eventType) {
 }
 
 bool TaskStore::isAllowedSource(const std::wstring &source) {
-    return contains({L"CHATGPT", L"CLAUDE_CODE", L"CODEX", L"OTHER"}, source);
+    return contains({L"CHATGPT", L"CLAUDE_CODE", L"CODEX", L"ZCODE", L"MINIMAX_CODE", L"OTHER"}, source);
 }
 
 bool TaskStore::isAllowedEventType(const std::wstring &eventType) {

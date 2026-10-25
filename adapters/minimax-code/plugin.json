@@ -1,0 +1,15 @@
+{
+  "schemaVersion": 1,
+  "name": "ai-task-hub-bridge",
+  "displayName": "AI Task Hub",
+  "version": "1.0.0",
+  "description": "把 MiniMax Code 的会话事件上报到本地 AI Task Hub 收件箱。",
+  "author": "AI Task Hub",
+  "icon": "icon.png",
+  "category": "Code",
+  "exampleQueries": ["打开 AI Task Hub 查看 MiniMax Code 的任务状态。"],
+  "apps": [],
+  "mcpServers": [],
+  "skills": [],
+  "hooks": ["hooks/hooks.json"]
+}

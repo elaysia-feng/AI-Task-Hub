@@ -8,7 +8,7 @@
   "properties": {
     "source": {
       "type": "string",
-      "enum": ["CHATGPT", "CLAUDE_CODE", "CODEX", "OTHER"],
+      "enum": ["CHATGPT", "CLAUDE_CODE", "CODEX", "ZCODE", "MINIMAX_CODE", "OTHER"],
       "description": "事件来源平台"
     },
     "eventType": {

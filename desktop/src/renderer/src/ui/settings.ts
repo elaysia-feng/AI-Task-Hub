@@ -48,7 +48,7 @@ export function renderSettingsView(container: HTMLElement): void {
   const appearanceSection = makeAppearanceSection()
   const integrationsSection = h('section', 'settings-section', [
     h('h2', '', ['接入集成']),
-    h('div', 'settings-loading', ['正在检测三平台接入状态…']),
+    h('div', 'settings-loading', ['正在检测平台接入状态…']),
   ])
   const dbBackendSection = makeDbBackendSection()
   const updateSection = makeUpdateSection()
@@ -331,6 +331,8 @@ async function fillIntegrations(section: HTMLElement): Promise<void> {
     claudeCard(info),
     codexCard(info),
     chatgptCard(info),
+    zcodeCard(info),
+    minimaxCodeCard(info),
   ])
   section.append(grid)
 }
@@ -446,6 +448,62 @@ function chatgptCard(info: IntegrationsStatus): HTMLElement {
     )
   }
   rows.push(h('div', 'int-actions', [openDirBtn]))
+  return h('div', 'int-card', rows)
+}
+
+function zcodeCard(info: IntegrationsStatus): HTMLElement {
+  const installed = info.zcode.installed
+  const installBtn = h('button', 'btn primary', [installed ? '更新接入' : '一键接入'])
+  installBtn.onclick = async () => {
+    installBtn.disabled = true
+    const res = await window.aihub.installZcode()
+    if (res.success) {
+      invalidateIntegrationsCache()
+      showToast(res.changed ? 'ZCode 接入完成' : 'ZCode 已接入，无需变更', 'var(--st-done)')
+      refreshSettings()
+    } else {
+      showToast(res.error ?? '接入失败', 'var(--st-fail)')
+      installBtn.disabled = false
+    }
+  }
+
+  const rows: Array<Node | string> = [
+    h('div', 'int-card-head', [statusDot(installed), h('span', 'int-name', ['ZCode'])]),
+    h('div', 'int-desc', ['通过 UserPromptSubmit / PermissionRequest / Stop 钩子上报会话事件']),
+    h('div', 'int-path', [info.zcode.configPath]),
+    h('div', 'int-status', [installed ? '已接入' : '未接入']),
+  ]
+  if (installed && !info.zcode.hooksEnabled) {
+    rows.push(h('div', 'int-warn', ['ZCode 的全局 hooks 开关处于关闭状态，需在 ZCode 配置中开启']))
+  }
+  rows.push(h('div', 'int-actions', [installBtn]))
+  return h('div', 'int-card', rows)
+}
+
+function minimaxCodeCard(info: IntegrationsStatus): HTMLElement {
+  const installed = info.minimaxCode.installed
+  const installBtn = h('button', 'btn primary', [installed ? '更新接入' : '一键接入'])
+  installBtn.onclick = async () => {
+    installBtn.disabled = true
+    const res = await window.aihub.installMiniMaxCode()
+    if (res.success) {
+      invalidateIntegrationsCache()
+      showToast(res.changed ? 'MiniMax Code 接入完成' : 'MiniMax Code 已接入，无需变更', 'var(--st-done)')
+      refreshSettings()
+    } else {
+      showToast(res.error ?? '接入失败', 'var(--st-fail)')
+      installBtn.disabled = false
+    }
+  }
+
+  const rows: Array<Node | string> = [
+    h('div', 'int-card-head', [statusDot(installed), h('span', 'int-name', ['MiniMax Code'])]),
+    h('div', 'int-desc', ['通过本地插件钩子上报会话事件']),
+    h('div', 'int-path', [info.minimaxCode.pluginPath]),
+    h('div', 'int-status', [installed ? '已接入' : '未接入']),
+    h('div', 'int-warn', ['若插件未在 MiniMax Code 插件面板中启用，事件不会上报']),
+    h('div', 'int-actions', [installBtn]),
+  ]
   return h('div', 'int-card', rows)
 }
 
@@ -617,8 +675,19 @@ function makeUpdateSection(): HTMLElement {
   }
 
   const statusLine = h('div', 'int-status', [updateText()])
+  // 当前版本：与「已是最新版本 / 发现新版本 vX」一起构成完整的版本对照
+  const versionLine = h('div', 'int-status', ['当前版本：读取中…'])
+  void window.aihub
+    .getAppVersion()
+    .then((version) => {
+      versionLine.textContent = `当前版本：${version}`
+    })
+    .catch(() => {
+      versionLine.textContent = '当前版本：读取失败'
+    })
   const section = h('section', 'settings-section', [
     h('h2', '', ['应用更新 / 打包']),
+    h('div', 'update-row', [versionLine, h('div', 'int-actions', [])]),
     h('div', 'update-row', [statusLine, h('div', 'int-actions', [checkBtn])]),
     h('div', 'update-row', [
       h('div', '', [

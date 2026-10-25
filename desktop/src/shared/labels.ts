@@ -4,6 +4,8 @@ export const SOURCE_LABELS: Record<string, string> = {
   CHATGPT: 'ChatGPT',
   CLAUDE_CODE: 'Claude Code',
   CODEX: 'Codex',
+  ZCODE: 'ZCode',
+  MINIMAX_CODE: 'MiniMax Code',
   OTHER: '其他',
 }
 

@@ -111,6 +111,10 @@ export function registerIpcHandlers(
   })
   ipcMain.handle('integrations:install-claude', () => apiClient.installClaude())
   ipcMain.handle('integrations:install-codex', () => apiClient.installCodex())
+  ipcMain.handle('integrations:install-zcode', () => apiClient.installZcode())
+  ipcMain.handle('integrations:install-minimax-code', () => apiClient.installMiniMaxCode())
+  // 设置页「应用更新」展示当前版本
+  ipcMain.handle('app:version', () => app.getVersion())
   ipcMain.handle('tasks:events', (_event, taskId: number) => {
     const id = Number(taskId)
     // 返回 [] 而非 null：渲染层对 events.length 无空指针防护，且类型声明为数组（review LOW）

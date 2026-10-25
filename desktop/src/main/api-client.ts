@@ -106,4 +106,12 @@ export const apiClient = {
   installCodex(): Promise<InstallResult> {
     return request('/api/integrations/codex/install', { method: 'POST' })
   },
+
+  installZcode(): Promise<InstallResult> {
+    return request('/api/integrations/zcode/install', { method: 'POST' })
+  },
+
+  installMiniMaxCode(): Promise<InstallResult> {
+    return request('/api/integrations/minimax-code/install', { method: 'POST' })
+  },
 }

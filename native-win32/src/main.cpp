@@ -1,6 +1,8 @@
+#include "app_version.h"
 #include "http_server.h"
 #include "integration_manager.h"
 #include "task_store.h"
+#include "update_checker.h"
 
 #include <windows.h>
 #include <windowsx.h>
@@ -17,13 +19,16 @@
 
 #include <algorithm>
 #include <array>
+#include <atomic>
 #include <cmath>
 #include <cstdint>
 #include <cstring>
 #include <filesystem>
 #include <map>
 #include <memory>
+#include <mutex>
 #include <string>
+#include <thread>
 #include <utility>
 #include <vector>
 
@@ -36,6 +41,7 @@ constexpr wchar_t kNotificationClass[] = L"AI_TASK_HUB_WIN32_NOTIFICATION";
 constexpr UINT kRefreshMessage = WM_APP + 10;
 constexpr UINT kTrayMessage = WM_APP + 11;
 constexpr UINT kQuitMessage = WM_APP + 12;
+constexpr UINT kUpdateMessage = WM_APP + 13;
 constexpr UINT_PTR kCollapseTimer = 42;
 constexpr UINT_PTR kRefreshTimer = 43;
 constexpr UINT_PTR kStartupActivateTimer = 44;
@@ -53,6 +59,14 @@ constexpr int kPanelHeight = 644;
 constexpr wchar_t kApplicationRegistryKey[] = L"Software\\AI Task Hub";
 constexpr wchar_t kRunRegistryKey[] = L"Software\\Microsoft\\Windows\\CurrentVersion\\Run";
 constexpr wchar_t kRunValueName[] = L"AI Task Hub Win32";
+
+// 更新检查的结果放在文件级静态里：检查跑在后台线程上，
+// 静态对象活到进程结束，线程不会碰到已销毁的窗口状态。
+std::mutex g_updateMutex;
+std::shared_ptr<update_checker::UpdateResult> g_updateResult;
+// 退出时通知后台线程不要再回传消息，并等它收尾（最多 2 秒）。
+std::atomic<bool> g_updateStop{false};
+std::atomic<int> g_updateRunning{0};
 
 std::wstring modulePath() {
     std::vector<wchar_t> buffer(512);
@@ -289,13 +303,18 @@ enum HitId {
     HitIntegrationClaude = 38,
     HitIntegrationCodex = 39,
     HitIntegrationChatGpt = 40,
-    HitIntegrationOpenDir = 41,
-    HitResetFilters = 42,
-    HitNotifications = 43,
-    HitAutoStart = 44,
-    HitChangeDataDirectory = 45,
-    HitClearWallpaper = 46,
-    HitClearIcon = 47,
+    HitIntegrationZcode = 41,
+    HitIntegrationMiniMaxCode = 42,
+    HitIntegrationOpenDir = 43,
+    HitResetFilters = 44,
+    HitNotifications = 45,
+    HitAutoStart = 46,
+    HitChangeDataDirectory = 47,
+    HitClearWallpaper = 48,
+    HitClearIcon = 49,
+    // 设置页「更新」页签的操作按钮（50..53 是页签本身）
+    HitUpdateCheck = 54,
+    HitUpdateOpenRelease = 55,
     HitCleanupBackdrop = 60,
     HitCleanupQueue = 61,
     HitCleanupCompleted = 62,
@@ -303,8 +322,9 @@ enum HitId {
     HitCleanupSources = 64,
     HitCleanupAll = 65,
     HitCleanupSourceBase = 66,
-    HitCleanupConfirmYes = 70,
-    HitCleanupConfirmNo = 71,
+    // 按来源删除的条目占 66..71，确认按钮顺延避免与来源条目冲突。
+    HitCleanupConfirmYes = 72,
+    HitCleanupConfirmNo = 73,
     HitSettingsTabBase = 50,
     HitThemeBase = 100,
     HitIconBase = 200,
@@ -327,6 +347,8 @@ std::wstring sourceLabel(const std::wstring &source) {
     if (source == L"CHATGPT") return L"GPT 网页";
     if (source == L"CLAUDE_CODE") return L"Claude Code";
     if (source == L"CODEX") return L"Codex";
+    if (source == L"ZCODE") return L"ZCode";
+    if (source == L"MINIMAX_CODE") return L"MiniMax Code";
     return L"其他";
 }
 
@@ -334,6 +356,8 @@ D2D1_COLOR_F sourceColor(const std::wstring &source) {
     if (source == L"CHATGPT") return color(0x10a37f);
     if (source == L"CLAUDE_CODE") return color(0xd97757);
     if (source == L"CODEX") return color(0x4f8ff7);
+    if (source == L"ZCODE") return color(0x00b8d9);
+    if (source == L"MINIMAX_CODE") return color(0xff7a45);
     return color(0x8b5cf6);
 }
 
@@ -971,6 +995,49 @@ private:
         if (hwnd_) InvalidateRect(hwnd_, nullptr, FALSE);
     }
 
+    // 更新检查放到后台线程：GitHub 请求最长可能等十几秒，不能卡住消息循环。
+    void startUpdateCheck() {
+        if (updateChecking_) return;
+        updateChecking_ = true;
+        {
+            std::lock_guard<std::mutex> lock(g_updateMutex);
+            g_updateResult.reset();
+        }
+        if (hwnd_) InvalidateRect(hwnd_, nullptr, FALSE);
+        const HWND target = hwnd_;
+        g_updateRunning = 1;
+        std::thread([target]() {
+            update_checker::UpdateResult result = update_checker::fetchLatestRelease(kAppVersion);
+            {
+                std::lock_guard<std::mutex> lock(g_updateMutex);
+                g_updateResult = std::make_shared<update_checker::UpdateResult>(std::move(result));
+            }
+            g_updateRunning = 0;
+            // 窗口可能已经关闭：退出前会置位 g_updateStop，这里就不再回传。
+            if (target && !g_updateStop.load()) PostMessageW(target, kUpdateMessage, 0, 0);
+        }).detach();
+    }
+
+    // 后台线程回传：收尾并刷新界面
+    void onUpdateFinished() {
+        updateChecking_ = false;
+        if (hwnd_) InvalidateRect(hwnd_, nullptr, FALSE);
+    }
+
+    void openReleasePage() {
+        std::wstring url;
+        {
+            std::lock_guard<std::mutex> lock(g_updateMutex);
+            if (g_updateResult && g_updateResult->ok && !g_updateResult->releaseUrl.empty()) {
+                url = g_updateResult->releaseUrl;
+            }
+        }
+        if (url.empty()) {
+            url = std::wstring(L"https://github.com/") + kGitHubOwner + L"/" + kGitHubRepo + L"/releases";
+        }
+        ShellExecuteW(nullptr, L"open", url.c_str(), nullptr, nullptr, SW_SHOWNORMAL);
+    }
+
     const HubTask *previousTask(std::int64_t id) const {
         for (const auto &task : snapshot_.queue) if (task.id == id) return &task;
         for (const auto &task : snapshot_.history) if (task.id == id) return &task;
@@ -1381,7 +1448,7 @@ private:
         renderNavItem(135, HitHistory, L"历史", L"\u25F7", page_ == 1, snapshot_.counts.history, true);
         renderNavItem(180, HitSettings, L"设置", L"\u2699", page_ == 2, 0, false);
         // 底部 footer
-        const int footerTop = height - 110;
+        const int footerTop = height - 128;
         line(14, footerTop, 166, footerTop, 1.0f, p.border);
         const D2D1_COLOR_F serverDot = server_.running() ? p.success : p.danger;
         circle(20, static_cast<float>(footerTop + 16), 3, serverDot);
@@ -1394,8 +1461,9 @@ private:
         text(server_.running() ? L"事件驱动 · 本地运行" : L"正在初始化 SQLite",
              14, static_cast<float>(footerTop + 53), 166, static_cast<float>(footerTop + 70),
              10, p.muted);
-        text(L"Claude Code · Codex ·\nChatGPT",
-             14, static_cast<float>(footerTop + 76), 166, static_cast<float>(footerTop + 110),
+        // 平台清单新增 ZCode 与 MiniMax Code，三行排布才不会挤出侧栏底部。
+        text(L"Claude Code · Codex ·\nZCode · MiniMax Code ·\nChatGPT",
+             14, static_cast<float>(footerTop + 76), 166, static_cast<float>(footerTop + 126),
              11, p.muted, false, true);
     }
 
@@ -1608,13 +1676,15 @@ private:
             {L"CHATGPT", L"GPT 网页", color(0x10a37f)},
             {L"CLAUDE_CODE", L"Claude Code", color(0xd97757)},
             {L"CODEX", L"Codex", color(0x4f8ff7)},
+            {L"ZCODE", L"ZCode", color(0x00b8d9)},
+            {L"MINIMAX_CODE", L"MiniMax Code", color(0xff7a45)},
             {L"OTHER", L"其他", color(0x8b5cf6)},
         };
         const int srcY = top + 40;
         x = left;
         for (size_t i = 0; i < sources.size(); ++i) {
             const std::wstring label = std::wstring(sources[i].label);
-            const int chipW = (width - 7 * 4) / 5;
+            const int chipW = (width - 7 * (static_cast<int>(sources.size()) - 1)) / static_cast<int>(sources.size());
             const bool selected = (i == 0 && sourceFilter_.empty()) || sourceFilter_ == sources[i].id;
             fillRound(static_cast<float>(x), static_cast<float>(srcY),
                       static_cast<float>(x + chipW), static_cast<float>(srcY + 30), 15,
@@ -1921,6 +1991,103 @@ private:
         addHit(hitId, rectFrom(buttonLeft, buttonTop, buttonLeft + buttonWidth, buttonTop + 30));
     }
 
+    // 设置页「更新」页签：当前版本 + GitHub 最新 Win32 发行版。
+    // 只查询不下载：便携版是绿色 ZIP，替换与否由用户决定。
+    void renderUpdateSection(int left, int top, int right) {
+        const Palette &p = palette();
+        const int height = 260;
+        renderSettingsCard(left, top, right, top + height, L"应用更新", L"");
+
+        std::shared_ptr<update_checker::UpdateResult> result;
+        {
+            std::lock_guard<std::mutex> lock(g_updateMutex);
+            result = g_updateResult;
+        }
+
+        const int labelX = left + 20;
+        const int valueX = left + 116;
+        const int rowTop = top + 40;
+        const auto row = [&](int index, const wchar_t *label, const std::wstring &value,
+                             D2D1_COLOR_F valueColor) {
+            const int y = rowTop + index * 28;
+            text(label, static_cast<float>(labelX), static_cast<float>(y),
+                 static_cast<float>(valueX - 8), static_cast<float>(y + 20),
+                 11, p.textSecondary);
+            text(value, static_cast<float>(valueX), static_cast<float>(y),
+                 static_cast<float>(right - 20), static_cast<float>(y + 20),
+                 11.5f, valueColor, true);
+        };
+
+        row(0, L"当前版本", kAppVersion, p.textPrimary);
+
+        std::wstring latest = L"—";
+        std::wstring state = L"尚未检查";
+        D2D1_COLOR_F stateColor = p.muted;
+        if (updateChecking_) {
+            state = L"正在检查…";
+        } else if (result) {
+            if (!result->ok) {
+                state = L"检查失败：" + result->error;
+                stateColor = p.danger;
+            } else {
+                latest = result->latestTag;
+                if (!result->latestName.empty() && result->latestName != result->latestTag) {
+                    latest += L"  ·  " + result->latestName;
+                }
+                if (result->upToDate) {
+                    state = L"已是最新版本";
+                    stateColor = p.success;
+                } else {
+                    state = L"有新版本可用";
+                    stateColor = p.warning;
+                }
+            }
+        }
+        row(1, L"最新发行版", latest, p.textPrimary);
+        row(2, L"状态", state, stateColor);
+
+        // 操作按钮
+        const int buttonTop = top + 140;
+        const int buttonWidth = 96;
+        const int buttonLeft = labelX;
+        const bool checkHot = hotHit_ == HitUpdateCheck;
+        fillRound(static_cast<float>(buttonLeft), static_cast<float>(buttonTop),
+                  static_cast<float>(buttonLeft + buttonWidth), static_cast<float>(buttonTop + 30), 15,
+                  checkHot ? p.accentSoft : p.tab);
+        strokeRound(static_cast<float>(buttonLeft), static_cast<float>(buttonTop),
+                    static_cast<float>(buttonLeft + buttonWidth), static_cast<float>(buttonTop + 30), 15, 1,
+                    p.accentLine);
+        textCentered(updateChecking_ ? L"检查中…" : L"检查更新",
+                     static_cast<float>(buttonLeft), static_cast<float>(buttonTop),
+                     static_cast<float>(buttonLeft + buttonWidth), static_cast<float>(buttonTop + 30),
+                     10.5f, p.accent, true);
+        addHit(HitUpdateCheck, rectFrom(buttonLeft, buttonTop, buttonLeft + buttonWidth, buttonTop + 30));
+
+        const int openLeft = buttonLeft + buttonWidth + 10;
+        const bool openHot = hotHit_ == HitUpdateOpenRelease;
+        fillRound(static_cast<float>(openLeft), static_cast<float>(buttonTop),
+                  static_cast<float>(openLeft + buttonWidth), static_cast<float>(buttonTop + 30), 15,
+                  openHot ? p.cardHover : p.tab);
+        strokeRound(static_cast<float>(openLeft), static_cast<float>(buttonTop),
+                    static_cast<float>(openLeft + buttonWidth), static_cast<float>(buttonTop + 30), 15, 1,
+                    p.border);
+        textCentered(L"打开发行页", static_cast<float>(openLeft), static_cast<float>(buttonTop),
+                     static_cast<float>(openLeft + buttonWidth), static_cast<float>(buttonTop + 30),
+                     10.5f, p.textSecondary, true);
+        addHit(HitUpdateOpenRelease, rectFrom(openLeft, buttonTop, openLeft + buttonWidth, buttonTop + 30));
+
+        const std::wstring source = std::wstring(L"发行来源：GitHub · ") + kGitHubOwner + L"/" + kGitHubRepo +
+                                    L"（便携版 ZIP，下载后解压替换即可）";
+        text(source, static_cast<float>(labelX), static_cast<float>(top + 186),
+             static_cast<float>(right - 20), static_cast<float>(top + 206),
+             10, p.muted);
+        if (result && result->ok && !result->publishedAt.empty()) {
+            text(L"发布时间：" + result->publishedAt, static_cast<float>(labelX),
+                 static_cast<float>(top + 210), static_cast<float>(right - 20),
+                 static_cast<float>(top + 228), 10, p.muted);
+        }
+    }
+
     void renderSettings(int width, int height) {
         const Palette &p = palette();
         const int left = 200, right = width - 22;
@@ -1928,8 +2095,8 @@ private:
         text(L"设置", static_cast<float>(left), 78, static_cast<float>(right), 116,
              22, p.textPrimary, true);
         // 取消页头说明后，把卡片上移到标题下方，避免留下大块空白。
-        const wchar_t *tabs[] = {L"外观主题", L"平台接入", L"数据与通知"};
-        for (int i = 0; i < 3; ++i) {
+        const wchar_t *tabs[] = {L"外观主题", L"平台接入", L"数据与通知", L"更新"};
+        for (int i = 0; i < 4; ++i) {
             const int tabLeft = left + i * 132;
             const bool active = settingsTab_ == i;
             fillRound(tabLeft, 118, tabLeft + 124, 150, 12, active ? p.accentSoft : p.tab);
@@ -1944,7 +2111,8 @@ private:
         const int presetGridHeight = presetRows * 64 + (presetRows - 1) * 8;
         // 预留标题、网格与底部操作区，新增预设时不会与“恢复默认”按钮重叠。
         const int presetCardHeight = 70 + presetGridHeight + 34 + 60;
-        const int totalContentHeight = settingsTab_ == 0 ? presetCardHeight * 2 + 188 : (settingsTab_ == 1 ? 384 : 412);
+        const int totalContentHeight = settingsTab_ == 0 ? presetCardHeight * 2 + 188
+                                        : (settingsTab_ == 1 ? 596 : (settingsTab_ == 3 ? 300 : 412));
         const int maxScroll = std::max(0, totalContentHeight - (contentBottom - contentTop));
         scrollOffset_ = std::clamp(scrollOffset_, 0, maxScroll);
         target()->PushAxisAlignedClip(D2D1::RectF(0, static_cast<float>(contentTop),
@@ -1979,7 +2147,7 @@ private:
         }
         if (settingsTab_ == 1) {
         if (sectionTopVisible(y)) {
-            renderSettingsCard(left, y, right, y + 384, L"平台接入", L"");
+            renderSettingsCard(left, y, right, y + 580, L"平台接入", L"");
             text(L"连接你的 AI 工具，集中查看任务进展", static_cast<float>(left + 20), static_cast<float>(y + 44),
                  static_cast<float>(right - 100), static_cast<float>(y + 66), 13, p.textPrimary, true);
             // 统一协议 pill
@@ -2013,9 +2181,22 @@ private:
                                     integrationStatus_.chatgptOnline ? L"已在线" :
                                     (integrationStatus_.chatgptPrepared ? L"待浏览器加载" : L"未准备"),
                                     L"打开目录", HitIntegrationChatGpt, integrationStatus_.chatgptOnline);
+            const std::wstring zcodeState = integrationStatus_.zcodeInstalled
+                ? L"已配置"
+                : integrationStatus_.zcodeHooksEnabled ? L"已开启钩子，但缺少事件登记" : L"未配置";
+            renderIntegrationAction(actionLeft, actionTop + 288, actionWidth, L"ZCode",
+                                    L"%USERPROFILE%\\.zcode\\cli\\config.json",
+                                    zcodeState.c_str(),
+                                    integrationStatus_.zcodeInstalled ? L"更新接入" : L"一键接入",
+                                    HitIntegrationZcode, integrationStatus_.zcodeInstalled);
+            renderIntegrationAction(actionLeft, actionTop + 384, actionWidth, L"MiniMax Code",
+                                    L"%USERPROFILE%\\.minimax\\plugins\\ai-task-hub-bridge",
+                                    integrationStatus_.minimaxCodeInstalled ? L"已安装插件" : L"未安装",
+                                    integrationStatus_.minimaxCodeInstalled ? L"更新接入" : L"一键接入",
+                                    HitIntegrationMiniMaxCode, integrationStatus_.minimaxCodeInstalled);
             if (!integrationMessage_.empty()) {
-                text(integrationMessage_, static_cast<float>(left + 20), static_cast<float>(y + 362),
-                     static_cast<float>(right - 20), static_cast<float>(y + 380), 10.5f,
+                text(integrationMessage_, static_cast<float>(left + 20), static_cast<float>(y + 554),
+                     static_cast<float>(right - 20), static_cast<float>(y + 572), 10.5f,
                      integrationMessageIsError_ ? p.danger : p.muted, false, true);
             }
         }
@@ -2109,6 +2290,13 @@ private:
             drawToggleRow(y + 145, L"开机启动", L"登录 Windows 后自动启动并常驻悬浮球",
                           autoStartEnabled_, HitAutoStart);
         }
+        }
+        if (settingsTab_ == 3) {
+        // 更新：当前版本 + GitHub 最新 Win32 发行版
+        if (sectionTopVisible(y)) {
+            renderUpdateSection(left, y, right);
+        }
+        y += 282;
         }
         clearHitClip();
         target()->PopAxisAlignedClip();
@@ -2599,9 +2787,12 @@ private:
             InvalidateRect(hwnd_, nullptr, FALSE);
             return;
         }
-        if (id >= HitCleanupSourceBase && id < HitCleanupSourceBase + 4) {
-            static constexpr const wchar_t *sources[] = {L"CHATGPT", L"CLAUDE_CODE", L"CODEX", L"OTHER"};
-            static constexpr const wchar_t *labels[] = {L"个 GPT 网页任务", L"个 Claude Code 任务", L"个 Codex 任务", L"个其他来源任务"};
+        if (id >= HitCleanupSourceBase && id < HitCleanupSourceBase + 6) {
+            static constexpr const wchar_t *sources[] = {L"CHATGPT", L"CLAUDE_CODE", L"CODEX",
+                                                         L"ZCODE", L"MINIMAX_CODE", L"OTHER"};
+            static constexpr const wchar_t *labels[] = {L"个 GPT 网页任务", L"个 Claude Code 任务",
+                                                         L"个 Codex 任务", L"个 ZCode 任务",
+                                                         L"个 MiniMax Code 任务", L"个其他来源任务"};
             const int index = id - HitCleanupSourceBase;
             confirmClear(L"source:" + std::wstring(sources[index]), labels[index], countForSource(sources[index]));
             return;
@@ -2630,12 +2821,13 @@ private:
             reloadImages(true);
             return;
         }
-        if (id >= HitSettingsTabBase && id < HitSettingsTabBase + 3) {
+        if (id >= HitSettingsTabBase && id < HitSettingsTabBase + 4) {
             settingsTab_ = id - HitSettingsTabBase; scrollOffset_ = 0;
             refreshIntegrationStatus();
         }
-        else if (id >= HitSourceBase && id < HitSourceBase + 5) {
-            static constexpr const wchar_t *sources[] = {L"", L"CHATGPT", L"CLAUDE_CODE", L"CODEX", L"OTHER"};
+        else if (id >= HitSourceBase && id < HitSourceBase + 7) {
+            static constexpr const wchar_t *sources[] = {L"", L"CHATGPT", L"CLAUDE_CODE", L"CODEX",
+                                                        L"ZCODE", L"MINIMAX_CODE", L"OTHER"};
             sourceFilter_ = sources[id - HitSourceBase]; selectedId_ = 0; scrollOffset_ = 0;
         }
         else if (id >= HitStatusBase && id < HitStatusBase + 5) {
@@ -2656,6 +2848,8 @@ private:
             else MessageBoxW(hwnd_, error.c_str(), L"开机启动设置失败", MB_OK | MB_ICONWARNING);
         }
         else if (id == HitChangeDataDirectory) changeDataDirectory();
+        else if (id == HitUpdateCheck) startUpdateCheck();
+        else if (id == HitUpdateOpenRelease) openReleasePage();
         else if (id == HitResetFilters) { search_.clear(); sourceFilter_.clear(); statusFilter_.clear(); scrollOffset_ = 0; }
         else if (id == HitQueue) { page_ = 0; selectedId_ = 0; scrollOffset_ = 0; statusFilter_.clear(); }
         else if (id == HitHistory) { page_ = 1; selectedId_ = 0; scrollOffset_ = 0; statusFilter_.clear(); }
@@ -2686,7 +2880,8 @@ private:
             selectedId_ = 0;
         }
         else if (id == HitSourceChip) {
-            static constexpr const wchar_t *sourceIds[] = {L"", L"CHATGPT", L"CLAUDE_CODE", L"CODEX", L"OTHER"};
+            static constexpr const wchar_t *sourceIds[] = {L"", L"CHATGPT", L"CLAUDE_CODE", L"CODEX",
+                                                          L"ZCODE", L"MINIMAX_CODE", L"OTHER"};
             size_t index = 0;
             for (size_t i = 0; i < std::size(sourceIds); ++i) if (sourceFilter_ == sourceIds[i]) { index = i; break; }
             sourceFilter_ = sourceIds[(index + 1) % std::size(sourceIds)];
@@ -2735,6 +2930,20 @@ private:
                     integrationMessage_ = L"扩展目录已准备，但打开目录失败，请手动打开：" + info.chatgptExtensionDirectory;
                 }
             }
+            refreshIntegrationStatus();
+        }
+        else if (id == HitIntegrationZcode) {
+            const IntegrationResult result = integrations_.installZcode();
+            if (!result.success) MessageBoxW(hwnd_, result.message.c_str(), L"接入未完成", MB_OK | MB_ICONWARNING);
+            integrationMessageIsError_ = !result.success;
+            integrationMessage_ = shorten(result.message, 116);
+            refreshIntegrationStatus();
+        }
+        else if (id == HitIntegrationMiniMaxCode) {
+            const IntegrationResult result = integrations_.installMiniMaxCode();
+            if (!result.success) MessageBoxW(hwnd_, result.message.c_str(), L"接入未完成", MB_OK | MB_ICONWARNING);
+            integrationMessageIsError_ = !result.success;
+            integrationMessage_ = shorten(result.message, 116);
             refreshIntegrationStatus();
         }
         else if (id >= HitThemeBase && id < HitThemeBase + static_cast<int>(kThemes.size())) {
@@ -2989,7 +3198,7 @@ private:
             ? menuLeft - sourceW - 8
             : std::min(width - sourceW - 12, menuRight + 8);
         const int sourceRight = sourceLeft + sourceW;
-        const int sourceBottom = sourceTop + padding + 4 * rowH;
+        const int sourceBottom = sourceTop + padding + 6 * rowH;
         fillRound(static_cast<float>(sourceLeft + 7), static_cast<float>(sourceTop + 9),
                   static_cast<float>(sourceRight + 7), static_cast<float>(sourceBottom + 9), 14,
                   colorFromArgb(0x30000000u));
@@ -2999,7 +3208,8 @@ private:
         strokeRound(static_cast<float>(sourceLeft), static_cast<float>(sourceTop),
                     static_cast<float>(sourceRight), static_cast<float>(sourceBottom), 14, 1,
                     darkMode_ ? colorFromArgb(0x38ffffffu) : p.border);
-        const std::array<const wchar_t *, 4> sourceIds{{L"CHATGPT", L"CLAUDE_CODE", L"CODEX", L"OTHER"}};
+        const std::array<const wchar_t *, 6> sourceIds{{L"CHATGPT", L"CLAUDE_CODE", L"CODEX",
+                                                       L"ZCODE", L"MINIMAX_CODE", L"OTHER"}};
         for (size_t i = 0; i < sourceIds.size(); ++i) {
             const int count = countForSource(sourceIds[i]);
             const int y = sourceTop + padding + static_cast<int>(i) * rowH;
@@ -3282,6 +3492,10 @@ private:
         case kRefreshMessage:
             app->refreshSnapshot();
             return 0;
+        case kUpdateMessage:
+            // 后台线程完成更新检查
+            app->onUpdateFinished();
+            return 0;
         case kTrayMessage: {
             // NOTIFYICON_VERSION_4 将托盘事件放在 lParam 低字中，不能直接比较整个 LPARAM。
             const UINT trayEvent = LOWORD(static_cast<ULONG_PTR>(lParam));
@@ -3314,6 +3528,9 @@ private:
             app->removeTrayIcon();
             KillTimer(hwnd, kCollapseTimer);
             KillTimer(hwnd, kRefreshTimer);
+            // 更新检查还在跑时，等它收尾再退出（最多 2 秒），避免进程结束时线程还在 WinHTTP 里。
+            g_updateStop = true;
+            for (int i = 0; i < 40 && g_updateRunning.load() > 0; ++i) Sleep(50);
             PostQuitMessage(0);
             return 0;
         default:
@@ -3374,6 +3591,7 @@ private:
     int hotHit_ = HitNone;
     int pressedHit_ = HitNone;
     int settingsTab_ = 0;
+    bool updateChecking_ = false;
     std::int64_t hotTaskId_ = 0;
     std::int64_t clickedTaskId_ = 0;
     std::int64_t pressedTaskId_ = 0;

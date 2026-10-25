@@ -1,8 +1,10 @@
-"""接入集成 API：桌面端向导/体检读取三平台适配器状态，并执行一键接入。
+"""接入集成 API：桌面端向导/体检读取多平台适配器状态，并执行一键接入。
 
 - Claude Code：向 ~/.claude/settings.json 合并 UserPromptSubmit/Notification/Stop 钩子（幂等）
 - Codex：保留原 notify 转发，并通过 ~/.codex/hooks.json 在提问时上报运行状态
 - ChatGPT：接收 Chrome 扩展心跳（5min），判断扩展在线状态
+- ZCode：向 ~/.zcode/cli/config.json 合并 hooks.events.* 进程钩子（幂等）
+- MiniMax Code：向 <dataDir>/plugins/ai-task-hub-bridge/ 安装本地桥接插件（幂等）
 """
 
 import functools
@@ -47,6 +49,13 @@ _REPO_ROOT = Path(__file__).resolve().parent.parent.parent
 CLAUDE_SETTINGS = Path.home() / ".claude" / "settings.json"
 
 CODEX_CONFIG = Path.home() / ".codex" / "config.toml"
+
+# ZCode（智谱 Z.ai 编程代理）的运行配置：钩子登记在 hooks.events.* 下
+ZCODE_CONFIG = Path.home() / ".zcode" / "cli" / "config.json"
+
+# MiniMax Code 的本地插件目录名与所有权标记文件
+MINIMAX_PLUGIN_NAME = "ai-task-hub-bridge"
+MINIMAX_MARKER_FILE = ".aihub-managed.json"
 
 HEARTBEAT_FILE = log_dir() / "chatgpt_heartbeat.json"
 HEARTBEAT_TTL_SEC = 10 * 60
@@ -148,6 +157,70 @@ def _codex_forward_target() -> Path:
     if not getattr(sys, "frozen", False):
         return _REPO_ROOT / "adapters" / "codex" / "forward_target.json"
     return user_data_dir() / "adapters" / "codex" / "forward_target.json"
+
+
+def _zcode_adapter_path() -> Path:
+    """ZCode 适配器脚本的预期路径（只用于比对配置，不触发落盘）。"""
+    if not getattr(sys, "frozen", False):
+        return _REPO_ROOT / "adapters" / "zcode" / "zcode_adapter.py"
+    return user_data_dir() / "adapters" / "zcode" / "zcode_adapter.py"
+
+
+def _zcode_adapter() -> Path | None:
+    """ZCode 适配器脚本路径。打包态物化到用户目录，供 ~/.zcode/cli/config.json 引用。
+
+    脚本文件不存在时返回 None（物化源缺失/被打包遗漏），调用方在写入配置前报错，
+    避免把不存在的命令写进 ZCode 配置造成静默失败。
+    """
+    candidate = _zcode_adapter_path()
+    if getattr(sys, "frozen", False):
+        candidate = _materialize_bundled(
+            "adapters/zcode",
+            user_data_dir() / "adapters" / "zcode",
+            frozenset({"__pycache__", "session_titles.json"}),
+        ) / "zcode_adapter.py"
+    if not candidate.is_file():
+        logger.warning("[integrations] ZCode 适配器脚本缺失: %s", candidate)
+        return None
+    return candidate
+
+
+def _minimax_package_dir() -> Path | None:
+    """MiniMax Code 插件素材目录（钩子脚本 + 插件清单 + 钩子文档 + 图标）。
+
+    打包态整目录物化到用户目录；缺少任一素材时返回 None，调用方在写入前报错。
+    """
+    if not getattr(sys, "frozen", False):
+        candidate = _REPO_ROOT / "adapters" / "minimax-code"
+    else:
+        candidate = _materialize_bundled(
+            "adapters/minimax-code",
+            user_data_dir() / "adapters" / "minimax-code",
+            frozenset({"__pycache__", "session_titles.json"}),
+        )
+    missing = [
+        name
+        for name in ("minimax_adapter.py", "plugin.json", "hooks.json", "icon.png")
+        if not (candidate / name).is_file()
+    ]
+    if missing:
+        logger.warning("[integrations] MiniMax Code 插件素材缺失: %s", missing)
+        return None
+    return candidate
+
+
+def _minimax_data_dir() -> Path:
+    """MiniMax Code 数据目录：MINIMAX_DATA_DIR → MAVIS_DATA_DIR → ~/.minimax。"""
+    for key in ("MINIMAX_DATA_DIR", "MAVIS_DATA_DIR"):
+        value = os.environ.get(key, "").strip()
+        if value:
+            return Path(value)
+    return Path.home() / ".minimax"
+
+
+def _minimax_plugin_dir() -> Path:
+    """AI Task Hub 在 MiniMax Code 中的本地插件目录。"""
+    return _minimax_data_dir() / "plugins" / MINIMAX_PLUGIN_NAME
 
 
 _CLAUDE_HOOK_MARKER = "claude_adapter.py"
@@ -486,6 +559,24 @@ def _write_bytes_atomic(path: Path, content: bytes) -> None:
             pass
 
 
+def _backup_file(path: Path, original: bytes | None) -> Path | None:
+    """改动用户配置前留一份 .aihub-<时间戳>.bak 备份（同目录，不覆盖旧备份）。"""
+    if original is None:
+        return None
+    try:
+        stamp = time.strftime("%Y%m%d-%H%M%S")
+        backup = path.with_name(f"{path.name}.aihub-{stamp}.bak")
+        counter = 1
+        while backup.exists():
+            backup = path.with_name(f"{path.name}.aihub-{stamp}-{counter}.bak")
+            counter += 1
+        backup.write_bytes(original)
+        return backup
+    except OSError as exc:
+        logger.warning("[integrations] 备份配置失败 %s: %s", path, exc)
+        return None
+
+
 @router.post("/codex/install")
 @_serialized
 def install_codex() -> dict[str, Any]:
@@ -667,6 +758,297 @@ def codex_stale_check() -> dict[str, Any]:
     }
 
 
+# ---------- ZCode ----------
+
+# ZCode 配置型钩子支持的 7 个事件里，只有这三个能表达任务生命周期
+# （ZCode 没有 Notification，等待确认用 PermissionRequest 表达）
+_ZCODE_HOOK_EVENTS = ("UserPromptSubmit", "PermissionRequest", "Stop")
+_ZCODE_MARKER = "zcode_adapter.py"
+# ZCode 的 timeout 单位是秒，timeoutMs 才是毫秒；这里只写毫秒
+_ZCODE_HOOK_TIMEOUT_MS = 8000
+
+
+def _read_json_object(path: Path) -> dict[str, Any] | None:
+    """读取 JSON 对象；文件不存在或不是对象时返回 None。"""
+    if not path.exists():
+        return None
+    try:
+        loaded = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError):
+        return None
+    return loaded if isinstance(loaded, dict) else None
+
+
+def _zcode_hook_is_ours(hook: Any) -> bool:
+    """判断钩子对象是否由 AI Task Hub 写入（按脚本文件名识别）。"""
+    if not isinstance(hook, dict):
+        return False
+    if _ZCODE_MARKER in str(hook.get("command") or ""):
+        return True
+    args = hook.get("args")
+    return isinstance(args, list) and any(_ZCODE_MARKER in str(arg) for arg in args)
+
+
+def _zcode_entry_is_ours(entry: Any) -> bool:
+    """判断条目是否包含本应用的钩子。"""
+    if not isinstance(entry, dict):
+        return False
+    handlers = entry.get("hooks")
+    if isinstance(handlers, list) and any(_zcode_hook_is_ours(handler) for handler in handlers):
+        return True
+    return _zcode_hook_is_ours(entry)
+
+
+def _zcode_strip_ours(entries: list[Any]) -> list[Any]:
+    """移除本应用写入的钩子，保留第三方钩子与条目结构。"""
+    result: list[Any] = []
+    for entry in entries:
+        if isinstance(entry, dict) and isinstance(entry.get("hooks"), list):
+            handlers = [handler for handler in entry["hooks"] if not _zcode_hook_is_ours(handler)]
+            if len(handlers) == len(entry["hooks"]):
+                result.append(entry)
+            elif handlers:
+                # 同一条目里还有第三方钩子：只摘掉本应用的，条目本身保留
+                kept = dict(entry)
+                kept["hooks"] = handlers
+                result.append(kept)
+            # 整条都属于本应用：丢弃（ZCode 条目只允许 matcher/hooks 两个键）
+            continue
+        if _zcode_hook_is_ours(entry):
+            continue
+        result.append(entry)
+    return result
+
+
+def _zcode_registered(config: dict[str, Any], adapter: Path) -> bool:
+    """三个事件是否都已登记当前适配器路径。"""
+    hooks = config.get("hooks")
+    events = hooks.get("events") if isinstance(hooks, dict) else None
+    if not isinstance(events, dict):
+        return False
+    expected = _path_key(adapter)
+    for event in _ZCODE_HOOK_EVENTS:
+        entries = events.get(event)
+        if not isinstance(entries, list):
+            return False
+        found = False
+        for entry in entries:
+            if not _zcode_entry_is_ours(entry):
+                continue
+            handlers = entry.get("hooks") if isinstance(entry, dict) else None
+            for handler in handlers if isinstance(handlers, list) else []:
+                args = handler.get("args") if isinstance(handler, dict) else None
+                if not isinstance(args, list):
+                    continue
+                if any(isinstance(arg, str) and _path_key(arg) == expected for arg in args):
+                    found = True
+        if not found:
+            return False
+    return True
+
+
+def _zcode_hooks_enabled(config: dict[str, Any]) -> bool:
+    """ZCode 配置型钩子的全局开关。"""
+    hooks = config.get("hooks")
+    return isinstance(hooks, dict) and hooks.get("enabled") is True
+
+
+@router.post("/zcode/install")
+@_serialized
+def install_zcode() -> dict[str, Any]:
+    """把 AI Task Hub 的 ZCode 钩子合并进 ~/.zcode/cli/config.json。
+
+    ZCode 的配置型钩子默认关闭（hooks.enabled 必须为 true），
+    钩子条目只允许 matcher/hooks 两个键，钩子对象只允许
+    type/command/args/enabled/timeoutMs，多余键会让 ZCode 拒绝整份配置。
+    """
+    python = _adapter_python()
+    if python is None:
+        return {
+            "success": False,
+            "changed": False,
+            "error": "未检测到本机 Python，无法接入 ZCode（打包版需安装 Python，或设置 AIHUB_PYTHON 后重启）",
+        }
+    adapter = _zcode_adapter()
+    if adapter is None:
+        return {"success": False, "changed": False, "error": "未找到 ZCode 适配器脚本（应用资源缺失），请重新安装应用"}
+    if not ZCODE_CONFIG.parent.is_dir():
+        return {"success": False, "changed": False, "error": "未检测到 ZCode（未找到 ~/.zcode/cli 目录）"}
+
+    original_bytes: bytes | None = None
+    config: dict[str, Any] = {}
+    if ZCODE_CONFIG.exists():
+        try:
+            original_bytes = ZCODE_CONFIG.read_bytes()
+        except OSError as exc:
+            return {"success": False, "changed": False, "error": f"无法读取 ZCode 配置：{exc}"}
+        try:
+            loaded = json.loads(original_bytes.decode("utf-8"))
+        except (UnicodeDecodeError, json.JSONDecodeError):
+            return {"success": False, "changed": False, "error": "ZCode config.json 解析失败，请手工检查"}
+        if not isinstance(loaded, dict):
+            return {"success": False, "changed": False, "error": "ZCode config.json 顶层必须是对象，未修改配置"}
+        config = loaded
+
+    hooks = config.get("hooks")
+    if hooks is None:
+        hooks = {}
+        config["hooks"] = hooks
+    if not isinstance(hooks, dict):
+        return {"success": False, "changed": False, "error": "ZCode config.json 的 hooks 字段必须是对象，未修改配置"}
+
+    events = hooks.get("events")
+    if events is None:
+        events = {}
+        hooks["events"] = events
+    if not isinstance(events, dict):
+        return {"success": False, "changed": False, "error": "ZCode config.json 的 hooks.events 字段必须是对象，未修改配置"}
+
+    # 用户显式关闭时保留该设置（这是 ZCode 的全局开关，打开会连带启用其它第三方钩子）
+    if hooks.get("enabled") is not False:
+        hooks["enabled"] = True
+
+    desired_hook = {
+        "type": "process",
+        "command": python,
+        "args": [str(adapter)],
+        "timeoutMs": _ZCODE_HOOK_TIMEOUT_MS,
+    }
+    for event in _ZCODE_HOOK_EVENTS:
+        entries = events.get(event)
+        if entries is None:
+            entries = []
+            events[event] = entries
+        if not isinstance(entries, list):
+            return {
+                "success": False,
+                "changed": False,
+                "error": f"ZCode config.json 的 hooks.events.{event} 必须是数组，未修改配置",
+            }
+        # 幂等：先摘掉旧条目（含旧路径），再按当前解释器与脚本路径写回
+        events[event] = _zcode_strip_ours(entries) + [{"hooks": [desired_hook]}]
+
+    payload = (json.dumps(config, ensure_ascii=False, indent=2) + "\n").encode("utf-8")
+    if original_bytes is not None and payload == original_bytes:
+        return {"success": True, "changed": False}
+
+    try:
+        _backup_file(ZCODE_CONFIG, original_bytes)
+        _write_bytes_atomic(ZCODE_CONFIG, payload)
+    except OSError as exc:
+        return {"success": False, "changed": False, "error": f"写入 ZCode 配置失败：{exc}"}
+    logger.info("ZCode hook 已写入 %s", ZCODE_CONFIG)
+    return {"success": True, "changed": True}
+
+
+# ---------- MiniMax Code ----------
+
+def _json_escape(value: str) -> str:
+    """转义成 JSON 字符串内容（不含外层引号），用于拼进钩子命令。"""
+    return json.dumps(value, ensure_ascii=False)[1:-1]
+
+
+def _render_minimax_hooks(template: str, python: str, script: str) -> str:
+    """把钩子文档模板里的解释器与脚本路径占位符替换成实际路径。"""
+    return template.replace("{{PYTHON}}", _json_escape(python)).replace("{{SCRIPT}}", _json_escape(script))
+
+
+def _write_plugin_file(path: Path, data: bytes) -> bool:
+    """写入插件文件；内容一致返回 False（未变更），否则原子写入并返回 True。"""
+    if path.is_file():
+        try:
+            if path.read_bytes() == data:
+                return False
+        except OSError:
+            pass
+    path.parent.mkdir(parents=True, exist_ok=True)
+    _write_bytes_atomic(path, data)
+    return True
+
+
+def _minimax_installed() -> bool:
+    """插件文件是否齐全。"""
+    plugin_dir = _minimax_plugin_dir()
+    required = (
+        plugin_dir / ".minimax-plugin" / "plugin.json",
+        plugin_dir / "hooks" / "hooks.json",
+        plugin_dir / "scripts" / "minimax_adapter.py",
+        plugin_dir / "icon.png",
+    )
+    return all(path.is_file() for path in required)
+
+
+@router.post("/minimax-code/install")
+@_serialized
+def install_minimax_code() -> dict[str, Any]:
+    """把 AI Task Hub 桥接插件安装到 MiniMax Code 的本地插件目录。
+
+    MiniMax Code 的钩子只能通过本地插件声明，因此这里写入
+    <dataDir>/plugins/ai-task-hub-bridge/：插件清单、钩子文档、钩子脚本与图标。
+    目录已存在且不是本应用创建时拒绝修改，避免覆盖用户的其它插件。
+    """
+    python = _adapter_python()
+    if python is None:
+        return {
+            "success": False,
+            "changed": False,
+            "error": "未检测到本机 Python，无法接入 MiniMax Code（打包版需安装 Python，或设置 AIHUB_PYTHON 后重启）",
+        }
+    package = _minimax_package_dir()
+    if package is None:
+        return {"success": False, "changed": False, "error": "未找到 MiniMax Code 插件素材（应用资源缺失），请重新安装应用"}
+
+    data_dir = _minimax_data_dir()
+    if not data_dir.is_dir():
+        return {"success": False, "changed": False, "error": "未检测到 MiniMax Code（未找到数据目录）"}
+
+    plugin_dir = _minimax_plugin_dir()
+    marker = plugin_dir / MINIMAX_MARKER_FILE
+    if plugin_dir.exists() and not marker.is_file():
+        return {
+            "success": False,
+            "changed": False,
+            "error": f"{plugin_dir} 已存在且不是 AI Task Hub 创建的插件，未修改该目录",
+        }
+
+    script_path = plugin_dir / "scripts" / "minimax_adapter.py"
+    try:
+        script_bytes = (package / "minimax_adapter.py").read_bytes()
+        icon_bytes = (package / "icon.png").read_bytes()
+        manifest_bytes = (package / "plugin.json").read_bytes()
+        template = (package / "hooks.json").read_text(encoding="utf-8")
+    except OSError as exc:
+        return {"success": False, "changed": False, "error": f"读取 MiniMax Code 插件素材失败：{exc}"}
+
+    hooks_bytes = _render_minimax_hooks(template, python, str(script_path)).encode("utf-8")
+    marker_bytes = (
+        json.dumps(
+            {"app": "ai-task-hub", "integration": "minimax-code", "managed": True, "version": 1},
+            ensure_ascii=False,
+            indent=2,
+        )
+        + "\n"
+    ).encode("utf-8")
+
+    changed = False
+    try:
+        for target, data in (
+            (plugin_dir / ".minimax-plugin" / "plugin.json", manifest_bytes),
+            (plugin_dir / "hooks" / "hooks.json", hooks_bytes),
+            (script_path, script_bytes),
+            (plugin_dir / "icon.png", icon_bytes),
+            (marker, marker_bytes),
+        ):
+            if _write_plugin_file(target, data):
+                changed = True
+    except OSError as exc:
+        return {"success": False, "changed": False, "error": f"写入 MiniMax Code 插件失败：{exc}"}
+
+    if changed:
+        logger.info("MiniMax Code 插件已写入 %s", plugin_dir)
+    return {"success": True, "changed": changed}
+
+
 # ---------- ChatGPT 扩展心跳 ----------
 
 class Heartbeat(BaseModel):
@@ -705,6 +1087,7 @@ def _chatgpt_online() -> dict[str, Any]:
 @router.get("/status")
 def integrations_status() -> dict[str, Any]:
     codex = codex_stale_check()
+    zcode_config = _read_json_object(ZCODE_CONFIG) or {}
     return {
         "claudeCode": {
             "installed": _claude_installed(),
@@ -718,6 +1101,16 @@ def integrations_status() -> dict[str, Any]:
         "chatgpt": {
             **_chatgpt_online(),
             "extensionDir": str(_chatgpt_extension_dir()),
+        },
+        "zcode": {
+            "installed": _zcode_registered(zcode_config, _zcode_adapter_path()),
+            "configPath": str(ZCODE_CONFIG),
+            "hooksEnabled": _zcode_hooks_enabled(zcode_config),
+        },
+        "minimaxCode": {
+            "installed": _minimax_installed(),
+            "pluginPath": str(_minimax_plugin_dir()),
+            "dataDir": str(_minimax_data_dir()),
         },
         "backend": {"version": APP_VERSION, "python": _adapter_python() or ""},
     }

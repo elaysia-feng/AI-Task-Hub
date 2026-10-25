@@ -6,6 +6,8 @@
   取最后一条 assistant `output_text`，优先 `payload.phase == "final_answer"`。
 - CHATGPT：会话在浏览器、服务器无本地记录；从最近完成事件的 `payload.replyText` 取
   （由浏览器扩展在 TASK_COMPLETED 事件里随事件上报）。
+- ZCODE / MINIMAX_CODE：暂不解析本地会话文件，答复区显示 ERR_UNSUPPORTED；
+  任务摘要来自钩子事件里的 contentPreview。
 
 任何缺失 / 读取失败都返回 (None, 友好错误文案)，绝不抛异常——展示是尽力而为，
 不能因为会话记录不可读而阻塞任务详情。读取是阻塞 IO，但端点用 sync def 由 FastAPI

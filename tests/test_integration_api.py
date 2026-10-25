@@ -27,6 +27,25 @@ def codex_paths(monkeypatch, tmp_path):
     return config, forward
 
 
+@pytest.fixture
+def zcode_config(monkeypatch, tmp_path):
+    """ZCode 运行配置目录（安装要求 ~/.zcode/cli 已存在）。"""
+    config = tmp_path / "zcode" / "cli" / "config.json"
+    config.parent.mkdir(parents=True)
+    monkeypatch.setattr(integration_api, "ZCODE_CONFIG", config)
+    return config
+
+
+@pytest.fixture
+def minimax_data_dir(monkeypatch, tmp_path):
+    """MiniMax Code 数据目录（安装要求目录已存在）。"""
+    data_dir = tmp_path / "minimax-data"
+    data_dir.mkdir()
+    monkeypatch.setenv("MINIMAX_DATA_DIR", str(data_dir))
+    monkeypatch.delenv("MAVIS_DATA_DIR", raising=False)
+    return data_dir
+
+
 def test_claude_install_creates_and_idempotent(client, claude_settings):
     res = client.post("/api/integrations/claude-code/install")
     assert res.status_code == 200
@@ -150,10 +169,12 @@ def test_chatgpt_heartbeat_flow(client, monkeypatch, tmp_path):
 
 def test_integrations_status_shape(client):
     body = client.get("/api/integrations/status").json()
-    assert set(body) == {"claudeCode", "codex", "chatgpt", "backend"}
+    assert set(body) == {"claudeCode", "codex", "chatgpt", "zcode", "minimaxCode", "backend"}
     assert body["backend"]["version"]
     assert "installed" in body["claudeCode"]
     assert "stale" in body["codex"]
+    assert set(body["zcode"]) == {"installed", "configPath", "hooksEnabled"}
+    assert set(body["minimaxCode"]) == {"installed", "pluginPath", "dataDir"}
 
 
 def test_chatgpt_extension_dir_dev_points_to_repo(client, monkeypatch):
@@ -294,3 +315,146 @@ def test_frozen_install_missing_adapter_returns_error(client, claude_settings, m
     assert res["success"] is False
     assert "适配器" in res["error"]
     assert not claude_settings.exists()  # 未写入 settings.json
+
+
+# ---------- ZCode ----------
+
+def test_zcode_install_writes_hooks_and_is_idempotent(client, zcode_config):
+    res = client.post("/api/integrations/zcode/install").json()
+    assert res == {"success": True, "changed": True}
+
+    data = json.loads(zcode_config.read_text(encoding="utf-8"))
+    # ZCode 配置型钩子默认关闭，必须显式打开
+    assert data["hooks"]["enabled"] is True
+    for event_name in ("UserPromptSubmit", "PermissionRequest", "Stop"):
+        entries = data["hooks"]["events"][event_name]
+        assert len(entries) == 1
+        hook = entries[0]["hooks"][0]
+        assert hook["type"] == "process"
+        assert "zcode_adapter.py" in hook["args"][0]
+        # ZCode 的 schema 严格：条目只允许 matcher/hooks，钩子只允许这几个键
+        assert set(entries[0]) == {"hooks"}
+        assert set(hook) == {"type", "command", "args", "timeoutMs"}
+
+    again = client.post("/api/integrations/zcode/install").json()
+    assert again == {"success": True, "changed": False}
+
+
+def test_zcode_install_preserves_other_config_and_third_party_hooks(client, zcode_config):
+    zcode_config.write_text(json.dumps({
+        "ui": {"locale": "zh-CN"},
+        "hooks": {
+            "enabled": True,
+            "events": {
+                "PreToolUse": [{"hooks": [{"type": "process", "command": "guard", "args": ["guard.js"]}]}],
+                "UserPromptSubmit": [{"hooks": [{"type": "process", "command": "other", "args": ["other.js"]}]}],
+            },
+        },
+    }), encoding="utf-8")
+
+    assert client.post("/api/integrations/zcode/install").json()["success"] is True
+    data = json.loads(zcode_config.read_text(encoding="utf-8"))
+    assert data["ui"] == {"locale": "zh-CN"}
+    # 第三方钩子原样保留
+    assert data["hooks"]["events"]["PreToolUse"][0]["hooks"][0]["command"] == "guard"
+    assert data["hooks"]["events"]["UserPromptSubmit"][0]["hooks"][0]["command"] == "other"
+    # 本应用自己的条目追加在后，不覆盖第三方条目
+    ours = [e for e in data["hooks"]["events"]["UserPromptSubmit"] if "zcode_adapter.py" in json.dumps(e)]
+    assert len(ours) == 1
+
+
+def test_zcode_install_keeps_user_disabled_switch(client, zcode_config):
+    """用户显式关闭 hooks.enabled 时保留该设置（这是 ZCode 的全局开关）。"""
+    zcode_config.write_text(json.dumps({"hooks": {"enabled": False}}), encoding="utf-8")
+
+    assert client.post("/api/integrations/zcode/install").json()["success"] is True
+    data = json.loads(zcode_config.read_text(encoding="utf-8"))
+    assert data["hooks"]["enabled"] is False
+
+    status = client.get("/api/integrations/status").json()["zcode"]
+    assert status["hooksEnabled"] is False
+    assert status["installed"] is True  # 钩子已登记，等用户打开开关即可生效
+
+
+def test_zcode_install_refuses_broken_config(client, zcode_config):
+    zcode_config.write_text("{ broken", encoding="utf-8")
+    res = client.post("/api/integrations/zcode/install").json()
+    assert res["success"] is False
+    assert "解析失败" in res["error"]
+    assert zcode_config.read_text(encoding="utf-8") == "{ broken"  # 未修改
+
+
+def test_zcode_install_requires_zcode_directory(client, monkeypatch, tmp_path):
+    missing = tmp_path / "no-zcode" / "cli" / "config.json"
+    monkeypatch.setattr(integration_api, "ZCODE_CONFIG", missing)
+    res = client.post("/api/integrations/zcode/install").json()
+    assert res["success"] is False
+    assert "未检测到 ZCode" in res["error"]
+    assert not missing.exists()
+
+
+def test_zcode_status_reports_installed_after_install(client, zcode_config):
+    before = client.get("/api/integrations/status").json()["zcode"]
+    assert before["installed"] is False
+    assert before["hooksEnabled"] is False
+
+    client.post("/api/integrations/zcode/install")
+    after = client.get("/api/integrations/status").json()["zcode"]
+    assert after["installed"] is True
+    assert after["hooksEnabled"] is True
+
+
+# ---------- MiniMax Code ----------
+
+def test_minimax_install_creates_plugin_and_is_idempotent(client, minimax_data_dir):
+    res = client.post("/api/integrations/minimax-code/install").json()
+    assert res == {"success": True, "changed": True}
+
+    plugin_dir = minimax_data_dir / "plugins" / "ai-task-hub-bridge"
+    assert (plugin_dir / ".minimax-plugin" / "plugin.json").is_file()
+    assert (plugin_dir / "hooks" / "hooks.json").is_file()
+    assert (plugin_dir / "scripts" / "minimax_adapter.py").is_file()
+    assert (plugin_dir / "icon.png").is_file()
+    assert (plugin_dir / ".aihub-managed.json").is_file()
+
+    hooks = json.loads((plugin_dir / "hooks" / "hooks.json").read_text(encoding="utf-8"))
+    for event_name in ("UserPromptSubmit", "PermissionRequest", "Stop"):
+        handler = hooks["hooks"][event_name][0]["hooks"][0]
+        assert handler["type"] == "command"
+        assert 1 <= handler["timeout"] <= 10
+        assert "minimax_adapter.py" in handler["command"]
+        assert "minimax_adapter.py" in handler["commandWindows"]
+
+    again = client.post("/api/integrations/minimax-code/install").json()
+    assert again == {"success": True, "changed": False}
+
+
+def test_minimax_install_refuses_foreign_directory(client, minimax_data_dir):
+    plugin_dir = minimax_data_dir / "plugins" / "ai-task-hub-bridge"
+    plugin_dir.mkdir(parents=True)
+    (plugin_dir / "notes.txt").write_text("user content", encoding="utf-8")
+
+    res = client.post("/api/integrations/minimax-code/install").json()
+    assert res["success"] is False
+    assert "未修改" in res["error"]
+    assert not (plugin_dir / "hooks" / "hooks.json").exists()
+    assert (plugin_dir / "notes.txt").is_file()  # 用户内容未被删除
+
+
+def test_minimax_install_requires_data_dir(client, monkeypatch, tmp_path):
+    monkeypatch.setenv("MINIMAX_DATA_DIR", str(tmp_path / "missing"))
+    monkeypatch.delenv("MAVIS_DATA_DIR", raising=False)
+    res = client.post("/api/integrations/minimax-code/install").json()
+    assert res["success"] is False
+    assert "未检测到 MiniMax Code" in res["error"]
+
+
+def test_minimax_status_reports_installed_after_install(client, minimax_data_dir):
+    before = client.get("/api/integrations/status").json()["minimaxCode"]
+    assert before["installed"] is False
+
+    client.post("/api/integrations/minimax-code/install")
+    after = client.get("/api/integrations/status").json()["minimaxCode"]
+    assert after["installed"] is True
+    assert after["dataDir"] == str(minimax_data_dir)
+    assert after["pluginPath"].endswith("ai-task-hub-bridge")
