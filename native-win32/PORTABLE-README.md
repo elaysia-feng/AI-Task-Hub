@@ -1,4 +1,4 @@
-# AI Task Hub · Win32 便携版 0.3.6
+# AI Task Hub · Win32 便携版 0.3.7
 
 适用于 Windows 10 / 11 x64。使用 C++、Win32、Direct2D 和 SQLite，无需安装 Qt、Electron、Node.js 或 MinGW。
 
@@ -14,16 +14,22 @@
 
 数据保存在 exe 同目录的 `data.sqlite`，偏好保存在 `AI Task Hub.ini`。首次运行可能从旧 `%APPDATA%\AI Task Hub` 迁移数据。发布包不附带任何用户数据库或个人配置。
 
-更新前退出程序并备份数据文件；将新版程序、`resources` 和 `adapters` 覆盖到原目录，不删除原数据库和个人配置。卸载时关闭程序后删除解压目录即可；接入钩子、浏览器扩展和旧 AppData 数据需按需单独处理。
+更新前退出程序并备份数据文件；将新版程序、`resources` 和 `adapters` 覆盖到原目录，不删除原数据库和个人配置。卸载时关闭程序后删除解压目录即可；接入钩子、浏览器扩展和旧 AppData 数据需按需单独处理。安装版（Setup.exe）可从「设置 → 应用和功能」卸载，卸载会保留你的 `data.sqlite` 与个人配置。
 
 ## 平台接入
 
 - Claude Code：设置 → 平台接入 → 一键接入，默认配置为 `%USERPROFILE%\.claude\settings.json`。
 - Codex：默认配置为 `%USERPROFILE%\.codex\config.toml`，保留既有通知转发。
-- 两种 CLI 的适配器需要可用的 Python 3；程序主体不依赖 Python。如未能自动检测，可设置 `AIHUB_PYTHON` 为解释器完整路径。
+- ZCode：默认配置为 `%USERPROFILE%\.zcode\cli\config.json`。ZCode 的配置型钩子默认关闭，接入会写入 `hooks.enabled=true`；若你自己把它关掉了，程序会保留你的设置并提示。
+- MiniMax Code：接入会在 `%USERPROFILE%\.minimax\plugins\ai-task-hub-bridge` 安装一个本地插件（钩子只能通过插件声明）。目录里若已有别的同名插件，程序会拒绝修改。
+- 多种 CLI 的适配器需要可用的 Python 3；程序主体不依赖 Python。如未能自动检测，可设置 `AIHUB_PYTHON` 为解释器完整路径。
 - 修改配置前自动保留 `.aihub-*.bak` 备份。自定义配置根目录、复杂 TOML 可能需要手动配置。
 - ChatGPT 网页：点击“打开目录”，在 Chrome / Edge 的扩展管理中开启开发者模式，选择“加载已解压的扩展程序”，加载打开的目录，再刷新 ChatGPT 页面。
 - “已配置”不等于已经接收真实事件；浏览器扩展收到心跳后才显示在线。CLI 修改后建议重新启动对应工具。
+
+## 检查更新
+
+设置 → 更新 → 检查更新：显示当前版本和 GitHub 上的最新 Win32 发行版，有新版时会给出发行页与便携版 ZIP 的下载直链。程序只查询不自动下载。
 
 ## 注意
 

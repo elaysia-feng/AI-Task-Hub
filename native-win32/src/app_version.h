@@ -5,9 +5,9 @@
 // 更新检查的当前版本都用它，改版时不需要满仓库找常量。
 
 // 对外展示的完整版本（带平台后缀）
-constexpr wchar_t kAppVersion[] = L"0.3.6-win32";
-// 与发行标签一致的纯数字版本（0.3.6-win32 → 0.3.6）
-constexpr wchar_t kAppVersionNumber[] = L"0.3.6";
+constexpr wchar_t kAppVersion[] = L"0.3.7-win32";
+// 与发行标签一致的纯数字版本（0.3.7-win32 → 0.3.7）
+constexpr wchar_t kAppVersionNumber[] = L"0.3.7";
 
 // 发行源：GitHub 公开仓库，无需 token 即可查询
 constexpr wchar_t kGitHubOwner[] = L"elaysia-feng";
