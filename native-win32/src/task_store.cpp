@@ -6,7 +6,9 @@
 
 #include <algorithm>
 #include <cctype>
+#include <cerrno>
 #include <chrono>
+#include <cwchar>
 #include <filesystem>
 #include <iomanip>
 #include <sstream>
@@ -865,6 +867,60 @@ bool TaskStore::darkMode() const { return setting(L"darkMode") != L"false"; }
 bool TaskStore::notificationsEnabled() const { return setting(L"notificationsEnabled") != L"false"; }
 void TaskStore::setDarkMode(bool enabled) { writeSetting(L"darkMode", enabled ? L"true" : L"false"); }
 void TaskStore::setNotificationsEnabled(bool enabled) { writeSetting(L"notificationsEnabled", enabled ? L"true" : L"false"); }
+
+bool TaskStore::petPosition(int &x, int &y) const {
+    const std::wstring value = setting(L"petPosition");
+    const size_t comma = value.find(L',');
+    if (comma == std::wstring::npos) return false;
+    const std::wstring xs = value.substr(0, comma);
+    const std::wstring ys = value.substr(comma + 1);
+    if (xs.empty() || ys.empty()) return false;
+    wchar_t *endX = nullptr;
+    wchar_t *endY = nullptr;
+    errno = 0;
+    const long px = std::wcstol(xs.c_str(), &endX, 10);
+    if (errno == ERANGE || endX == xs.c_str() || *endX != L'\0') return false;
+    errno = 0;
+    const long py = std::wcstol(ys.c_str(), &endY, 10);
+    if (errno == ERANGE || endY == ys.c_str() || *endY != L'\0') return false;
+    x = static_cast<int>(px);
+    y = static_cast<int>(py);
+    return true;
+}
+
+void TaskStore::setPetPosition(int x, int y) {
+    // 桌宠拖拽落点只保存位置，不触发快照刷新事件，避免无谓重绘列表。
+    writeSetting(L"petPosition", std::to_wstring(x) + L"," + std::to_wstring(y));
+}
+
+bool TaskStore::petRoamEnabled() const { return setting(L"petRoam") != L"false"; }
+
+void TaskStore::setPetRoamEnabled(bool enabled) {
+    // 切换自由走动偏好不涉及任务数据变更，不触发快照刷新。
+    writeSetting(L"petRoam", enabled ? L"true" : L"false");
+}
+
+int TaskStore::petScalePercent() const {
+    const std::wstring value = setting(L"petScale");
+    if (value.empty()) return 100;
+    wchar_t *end = nullptr;
+    errno = 0;
+    const long pct = std::wcstol(value.c_str(), &end, 10);
+    if (errno == ERANGE || end == value.c_str() || *end != L'\0') return 100;
+    return std::clamp(static_cast<int>(pct), 60, 160);
+}
+
+void TaskStore::setPetScalePercent(int percent) {
+    const int clamped = std::clamp(percent, 60, 160);
+    writeSetting(L"petScale", std::to_wstring(clamped));
+}
+
+bool TaskStore::petGravityEnabled() const { return setting(L"petGravity") == L"true"; }
+
+void TaskStore::setPetGravityEnabled(bool enabled) {
+    // 切换重力落地开关不涉及任务数据变更，不触发快照刷新。
+    writeSetting(L"petGravity", enabled ? L"true" : L"false");
+}
 
 bool TaskStore::setTheme(const std::wstring &theme) {
     if (!contains({L"default", L"rei-ayanami", L"tomo-ebizuka", L"elaina", L"mutsumi-wakaba",

@@ -250,6 +250,23 @@ int wmain(int argc, wchar_t **argv) {
             check(store.setTheme(L"ayaka-kamisato") && store.themeId() == L"ayaka-kamisato", "new wallpaper preset persists");
             check(store.setUserIconPreset(L"shorekeeper") && store.userIconPreset() == L"shorekeeper",
                   "new icon preset persists");
+            int petX = 0, petY = 0;
+            check(!store.petPosition(petX, petY), "petPosition returns false before set");
+            store.setPetPosition(120, 340);
+            check(store.petPosition(petX, petY) && petX == 120 && petY == 340, "petPosition reads written coordinates");
+            check(store.petRoamEnabled(), "petRoamEnabled defaults to true");
+            store.setPetRoamEnabled(false);
+            check(!store.petRoamEnabled(), "petRoamEnabled reads false after set");
+            check(store.petScalePercent() == 100, "petScalePercent defaults to 100");
+            store.setPetScalePercent(30);
+            check(store.petScalePercent() == 60, "petScalePercent clamps lower bound to 60");
+            store.setPetScalePercent(200);
+            check(store.petScalePercent() == 160, "petScalePercent clamps upper bound to 160");
+            store.setPetScalePercent(125);
+            check(store.petScalePercent() == 125, "petScalePercent reads written value");
+            check(!store.petGravityEnabled(), "petGravityEnabled defaults to false");
+            store.setPetGravityEnabled(true);
+            check(store.petGravityEnabled(), "petGravityEnabled reads true after set");
             store.setDarkMode(false); store.setNotificationsEnabled(false);
             std::wstring migrationError;
             check(store.backupToDirectory(relocatedDatabase.wstring(), migrationError), "database snapshot migration");
@@ -261,6 +278,11 @@ int wmain(int argc, wchar_t **argv) {
         {
             TaskStore store(database.wstring());
             check(!store.darkMode() && !store.notificationsEnabled(), "settings persist");
+            int petX = 0, petY = 0;
+            check(store.petPosition(petX, petY) && petX == 120 && petY == 340, "petPosition persists across reopen");
+            check(!store.petRoamEnabled(), "petRoamEnabled persists across reopen");
+            check(store.petScalePercent() == 125, "petScalePercent persists across reopen");
+            check(store.petGravityEnabled(), "petGravityEnabled persists across reopen");
             check(store.snapshot().counts.ignored == 1, "task status persists");
         }
         {

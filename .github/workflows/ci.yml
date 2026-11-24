@@ -6,27 +6,9 @@ on:
   pull_request:
 
 jobs:
-  backend:
+  adapters:
     runs-on: ubuntu-latest
-    timeout-minutes: 15
-    services:
-      mysql:
-        image: mysql:8
-        env:
-          MYSQL_ROOT_PASSWORD: ci_ephemeral_pw
-        ports:
-          - 3306:3306
-        options: >-
-          --health-cmd "mysqladmin ping -h 127.0.0.1 -uroot -pci_ephemeral_pw"
-          --health-interval 10s
-          --health-timeout 5s
-          --health-retries 5
-    env:
-      AIHUB_MYSQL_HOST: 127.0.0.1
-      AIHUB_MYSQL_PORT: 3306
-      AIHUB_MYSQL_USER: root
-      AIHUB_MYSQL_PASSWORD: ci_ephemeral_pw
-      AIHUB_MYSQL_TEST_DB: ai_task_hub_test
+    timeout-minutes: 10
     steps:
       # actions/checkout@v4 → SHA pin（2026-08）。升级：git ls-remote https://github.com/actions/checkout.git refs/tags/v4
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
@@ -38,31 +20,5 @@ jobs:
           cache-dependency-path: requirements.txt
       - name: Install dependencies
         run: pip install -r requirements.txt
-      - name: Run backend tests (SQLite)
-        env:
-          AIHUB_DB_BACKEND: sqlite
+      - name: Run adapter tests
         run: pytest -q
-      - name: Run backend tests (MySQL)
-        env:
-          AIHUB_DB_BACKEND: mysql
-        run: pytest -q
-
-  desktop:
-    runs-on: windows-latest
-    timeout-minutes: 30
-    defaults:
-      run:
-        working-directory: desktop
-    steps:
-      # actions/checkout@v4 → SHA pin（2026-08）。升级：git ls-remote https://github.com/actions/checkout.git refs/tags/v4
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
-      # actions/setup-node@v4 → SHA pin（2026-08）
-      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
-        with:
-          node-version: '22'
-          cache: npm
-          cache-dependency-path: desktop/package-lock.json
-      - run: npm ci
-      - run: npm run typecheck
-      - run: npm test
-      - run: npm run build

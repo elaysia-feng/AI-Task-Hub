@@ -73,6 +73,14 @@ public:
     bool notificationsEnabled() const;
     void setDarkMode(bool enabled);
     void setNotificationsEnabled(bool enabled);
+    bool petPosition(int &x, int &y) const;
+    void setPetPosition(int x, int y);
+    bool petRoamEnabled() const;
+    void setPetRoamEnabled(bool enabled);
+    int petScalePercent() const;
+    void setPetScalePercent(int percent);
+    bool petGravityEnabled() const;
+    void setPetGravityEnabled(bool enabled);
 
     HubSnapshot snapshot(int limit = 200) const;
     std::vector<HubTask> tasks(const std::wstring &view, const std::wstring &status,

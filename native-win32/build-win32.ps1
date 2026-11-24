@@ -1,4 +1,4 @@
-param([switch]$StageOnly)
+﻿param([switch]$StageOnly)
 $ErrorActionPreference = 'Stop'
 
 $root = (Resolve-Path (Join-Path $PSScriptRoot '..')).Path
@@ -8,8 +8,19 @@ $dist = Join-Path $source 'dist'
 $compiler = (Get-Command g++.exe -ErrorAction SilentlyContinue).Source
 $cCompiler = (Get-Command gcc.exe -ErrorAction SilentlyContinue).Source
 if ([string]::IsNullOrWhiteSpace($compiler)) {
-    $compiler = 'F:\vscode_environment\c\MinGW\winlibs-x86_64-posix-seh-gcc-15.1.0-mingw-w64ucrt-13.0.0-r3\mingw64\bin\g++.exe'
-    $cCompiler = 'F:\vscode_environment\c\MinGW\winlibs-x86_64-posix-seh-gcc-15.1.0-mingw-w64ucrt-13.0.0-r3\mingw64\bin\gcc.exe'
+    foreach ($candidate in @(
+        'D:\develop\mingw64\bin\g++.exe',
+        'F:\vscode_environment\c\MinGW\winlibs-x86_64-posix-seh-gcc-15.1.0-mingw-w64ucrt-13.0.0-r3\mingw64\bin\g++.exe'
+    )) {
+        if (Test-Path -LiteralPath $candidate) {
+            $compiler = $candidate
+            $cCompiler = Join-Path (Split-Path $candidate) 'gcc.exe'
+            break
+        }
+    }
+}
+if ([string]::IsNullOrWhiteSpace($compiler) -or -not (Test-Path -LiteralPath $compiler)) {
+    throw '未找到可用的 g++.exe，请安装 MinGW-w64 并加入 PATH 或解压到 D:\develop\mingw64'
 }
 
 New-Item -ItemType Directory -Force -Path $obj, $dist | Out-Null
@@ -47,7 +58,7 @@ if (-not $StageOnly) {
 
 $resources = Join-Path $dist 'resources'
 New-Item -ItemType Directory -Force -Path $resources | Out-Null
-Copy-Item -Path (Join-Path $root 'desktop\resources\*') -Destination $resources -Recurse -Force
+Copy-Item -Path (Join-Path $root 'native-win32\resources\*') -Destination $resources -Recurse -Force
 Copy-Item -LiteralPath (Join-Path $root 'shared\event_schema.json') -Destination $dist -Force
 $adapterOutput = Join-Path $dist 'adapters'
 New-Item -ItemType Directory -Force -Path (Join-Path $adapterOutput 'claude-code'), (Join-Path $adapterOutput 'codex'), (Join-Path $adapterOutput 'chatgpt-extension'), (Join-Path $adapterOutput 'zcode'), (Join-Path $adapterOutput 'minimax-code') | Out-Null

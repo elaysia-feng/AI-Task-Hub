@@ -9,12 +9,10 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parent.parent
 # glob patterns for auto-discovery (no manual directory list needed)
 SCAN_PATTERNS = [
-    "app/**/*.py", "app/**/*.ts", "app/**/*.js", "app/**/*.json",
     "tests/**/*.py", "tests/**/*.ts", "tests/**/*.js",
     "adapters/**/*.py", "adapters/**/*.ts", "adapters/**/*.js",
     "shared/**/*.py", "shared/**/*.ts", "shared/**/*.js",
     "scripts/**/*.py", "scripts/**/*.ts", "scripts/**/*.js",
-    "desktop/src/**/*.ts", "desktop/src/**/*.js",
 ]
 SKIP_NAMES = {"session_titles.json", "forward_target.json"}
 MOJIBAKE_MARK = chr(63) * 3  # 连续三个问号：GBK 破坏中文后的典型残留

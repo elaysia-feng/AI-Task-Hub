@@ -1,4 +1,4 @@
-# Win32 发布包共用逻辑：整理待发布文件、定位 NSIS 编译器。
+﻿# Win32 发布包共用逻辑：整理待发布文件、定位 NSIS 编译器。
 # package-portable.ps1（便携版 ZIP）与 package-installer.ps1（NSIS 安装程序）共用，
 # 避免两条发布流打包出内容不一致的产物。
 
@@ -31,8 +31,8 @@ function New-Win32Payload {
 
     $resources = Join-Path $Target 'resources'
     New-Item -ItemType Directory -Path $resources -Force | Out-Null
-    foreach ($entry in @('anime-head.png', 'icon.ico', 'icon.png', 'tray.png', 'presets', 'themes')) {
-        Copy-Item -LiteralPath (Join-Path $Root "desktop/resources/$entry") -Destination $resources -Recurse
+    foreach ($entry in @('anime-head.png', 'icon.ico', 'icon.png', 'tray.png', 'pet', 'presets', 'themes')) {
+        Copy-Item -LiteralPath (Join-Path $Root "native-win32/resources/$entry") -Destination $resources -Recurse
     }
 
     foreach ($entry in $script:Win32AdapterFiles) {
@@ -45,7 +45,7 @@ function New-Win32Payload {
 
 function Get-NsisCompiler {
     <#
-      定位 makensis：先找 PATH，再找常见安装目录（与 desktop/scripts/ensure-nsis.mjs 同口径）。
+      定位 makensis：先找 PATH，再依次检查常见的用户级和系统级 NSIS 安装目录。
     #>
     $onPath = (Get-Command makensis.exe -ErrorAction SilentlyContinue).Source
     if ($onPath) { return $onPath }

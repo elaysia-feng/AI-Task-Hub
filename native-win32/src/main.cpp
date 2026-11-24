@@ -37,25 +37,28 @@ using Microsoft::WRL::ComPtr;
 namespace {
 
 constexpr wchar_t kWindowClass[] = L"AI_TASK_HUB_WIN32_WINDOW";
+constexpr wchar_t kPetClass[] = L"AI_TASK_HUB_WIN32_PET";
 constexpr wchar_t kNotificationClass[] = L"AI_TASK_HUB_WIN32_NOTIFICATION";
 constexpr UINT kRefreshMessage = WM_APP + 10;
 constexpr UINT kTrayMessage = WM_APP + 11;
 constexpr UINT kQuitMessage = WM_APP + 12;
 constexpr UINT kUpdateMessage = WM_APP + 13;
-constexpr UINT_PTR kCollapseTimer = 42;
 constexpr UINT_PTR kRefreshTimer = 43;
 constexpr UINT_PTR kStartupActivateTimer = 44;
 constexpr UINT_PTR kNotificationTimer = 45;
 constexpr UINT_PTR kTrayRetryTimer = 46;
-constexpr int kOrbSize = 52;
-constexpr int kOrbPanelWidth = 240;
-constexpr int kOrbPanelHeight = 360;
-constexpr int kOrbPanelInset = 10;
+constexpr UINT_PTR kPetAnimTimer = 47;
+constexpr int kPetBaseBoxW = 190;
+constexpr int kPetBaseBoxH = 310;
+constexpr int kPetMargin = 18;
+constexpr int kPetTop = 26;
+constexpr int kPetInfoHeight = 46;
+constexpr int kPetInfoGap = 6;
 constexpr int kNotificationWidth = 400;
 constexpr int kNotificationHeight = 116;
-// 与旧版截图的 1004×644 内容比例保持一致，启动时给用户一个稳定的宽屏工作区。
-constexpr int kPanelWidth = 1004;
-constexpr int kPanelHeight = 644;
+// 气泡式任务面板默认尺寸（可拖拽调整，最小 860×540）。
+constexpr int kPanelWidth = 900;
+constexpr int kPanelHeight = 600;
 constexpr wchar_t kApplicationRegistryKey[] = L"Software\\AI Task Hub";
 constexpr wchar_t kRunRegistryKey[] = L"Software\\Microsoft\\Windows\\CurrentVersion\\Run";
 constexpr wchar_t kRunValueName[] = L"AI Task Hub Win32";
@@ -411,11 +414,20 @@ public:
         darkMode_ = store_.darkMode();
         notificationsEnabled_ = store_.notificationsEnabled();
         autoStartEnabled_ = autoStartEnabled();
+        petRoamEnabled_ = store_.petRoamEnabled();
+        petGravityEnabled_ = store_.petGravityEnabled();
+        petScalePercent_ = store_.petScalePercent();
+        const ULONGLONG now = GetTickCount64();
+        petLastActiveAt_ = now;
+        petNextBlinkAt_ = now + 3000;
+        petNextActAt_ = now + kPetActionIntervalMs;
+        petRandState_ = static_cast<std::uint32_t>(now ^ 0x9e3779b9u);
     }
     ~Win32App() {
         hideNotificationPopup();
         removeTrayIcon();
         server_.stop();
+        destroyPetBacking();
         destroyBacking();
     }
 
@@ -438,18 +450,19 @@ public:
             showStartupError(L"创建主窗口失败");
             return 1;
         }
+        createPetWindow();
+        if (!petHwnd_) {
+            showStartupError(L"创建桌宠窗口失败");
+            return 1;
+        }
         initTray();
-        // 默认以轻量悬浮球常驻右上角；点击小球仍可打开完整任务中心。
-        enterOrbMode();
-        ShowWindow(hwnd_, SW_SHOWNORMAL);
-        UpdateWindow(hwnd_);
-        // UpdateLayeredWindow 窗口首次显示时可能不会收到有效的 WM_PAINT；启动阶段主动提交首帧，
-        // 避免窗口句柄可见但桌面仍透出到后面的 Terminal/Explorer。
-        render();
-        // 无边框悬浮窗口不一定会被系统自动激活；启动时显式置前，避免双击后“进程在但看不见”。
+        // 默认以透明置顶桌宠常驻桌面，主气泡面板保持隐藏，点击桌宠再弹出。
+        ShowWindow(petHwnd_, SW_SHOWNOACTIVATE);
+        renderPet();
+        // 无边框置顶窗口不一定会被系统自动激活；启动时显式置前，避免双击后“进程在但看不见”。
         activateAtStartup();
         // 从 Windows Terminal 启动时，首次 SetForegroundWindow 可能被前台锁定策略拒绝，
-        // 延迟一帧再提升一次，确保用户看到的是主界面而不是终端窗口。
+        // 延迟一帧再提升一次，确保桌宠稳定置顶显示。
         SetTimer(hwnd_, kStartupActivateTimer, 180, nullptr);
 
         MSG message{};
@@ -462,7 +475,7 @@ public:
 
 private:
     void activateAtStartup() {
-        if (!hwnd_) return;
+        if (!petHwnd_ || petHidden_) return;
         const HWND foreground = GetForegroundWindow();
         DWORD foregroundThread = 0;
         if (foreground) foregroundThread = GetWindowThreadProcessId(foreground, nullptr);
@@ -470,19 +483,14 @@ private:
         const bool attached = foregroundThread != 0 && foregroundThread != currentThread &&
                               AttachThreadInput(foregroundThread, currentThread, TRUE) != FALSE;
         RECT window{};
-        GetWindowRect(hwnd_, &window);
-        // 短暂置顶再恢复层级，解决前台锁定导致的 z-order 覆盖；悬浮球必须继续保持置顶。
-        SetWindowPos(hwnd_, HWND_TOPMOST, window.left, window.top,
+        GetWindowRect(petHwnd_, &window);
+        // 短暂置前确保桌宠在启动后稳定置于桌面最前层。
+        SetWindowPos(petHwnd_, HWND_TOPMOST, window.left, window.top,
                      window.right - window.left, window.bottom - window.top,
                      SWP_SHOWWINDOW);
-        BringWindowToTop(hwnd_);
-        if (!orbMode_) {
-            SetWindowPos(hwnd_, HWND_NOTOPMOST, window.left, window.top,
-                         window.right - window.left, window.bottom - window.top,
-                         SWP_NOACTIVATE | SWP_SHOWWINDOW);
-        }
-        SetForegroundWindow(hwnd_);
-        SetActiveWindow(hwnd_);
+        BringWindowToTop(petHwnd_);
+        SetForegroundWindow(petHwnd_);
+        SetActiveWindow(petHwnd_);
         if (attached) AttachThreadInput(foregroundThread, currentThread, FALSE);
     }
 
@@ -511,6 +519,18 @@ private:
         klass.hIconSm = loadAppIcon(16);
         if (RegisterClassExW(&klass) == 0 && GetLastError() != ERROR_CLASS_ALREADY_EXISTS) return false;
 
+        WNDCLASSEXW petClass{sizeof(WNDCLASSEXW)};
+        // 不设 CS_DBLCLKS，保证快速连续点击桌宠只被识别为左键单次切换气泡。
+        petClass.style = CS_HREDRAW | CS_VREDRAW;
+        petClass.lpfnWndProc = &Win32App::petProc;
+        petClass.hInstance = instance_;
+        petClass.hCursor = LoadCursorW(nullptr, IDC_HAND);
+        petClass.hbrBackground = nullptr;
+        petClass.lpszClassName = kPetClass;
+        petClass.hIcon = klass.hIcon;
+        petClass.hIconSm = klass.hIconSm;
+        if (RegisterClassExW(&petClass) == 0 && GetLastError() != ERROR_CLASS_ALREADY_EXISTS) return false;
+
         WNDCLASSEXW notificationClass{sizeof(WNDCLASSEXW)};
         notificationClass.style = CS_HREDRAW | CS_VREDRAW | CS_DROPSHADOW;
         notificationClass.lpfnWndProc = &Win32App::notificationProc;
@@ -538,14 +558,50 @@ private:
         const int x = work.left + (work.right - work.left - kPanelWidth) / 2;
         const int y = work.top + (work.bottom - work.top - kPanelHeight) / 2;
         // WS_EX_LAYERED + WS_EX_NOREDIRECTIONBITMAP 关闭 DWM 接管，使 UpdateLayeredWindow 生效。
+        // 气泡面板默认隐藏，仅接收托盘与后台刷新消息；点击桌宠后再定位并展示。
         hwnd_ = CreateWindowExW(WS_EX_LAYERED | WS_EX_NOREDIRECTIONBITMAP | WS_EX_TOOLWINDOW,
                                 kWindowClass, L"AI Task Hub",
                                 WS_POPUP | WS_THICKFRAME | WS_MAXIMIZEBOX, x, y, kPanelWidth, kPanelHeight,
                                 nullptr, nullptr, instance_, this);
         if (!hwnd_) return;
+        orbMode_ = true;
         SetWindowPos(hwnd_, HWND_TOP, x, y, kPanelWidth, kPanelHeight,
-                     SWP_SHOWWINDOW | SWP_FRAMECHANGED);
+                     SWP_NOACTIVATE | SWP_HIDEWINDOW | SWP_FRAMECHANGED);
         SetTimer(hwnd_, kRefreshTimer, 2500, nullptr);
+    }
+
+    int petBoxW() const { return std::max(114, kPetBaseBoxW * petScalePercent_ / 100); }
+    int petBoxH() const { return std::max(186, kPetBaseBoxH * petScalePercent_ / 100); }
+    int petWinW() const { return petBoxW() + 2 * kPetMargin; }
+    int petWinH() const { return kPetTop + petBoxH() + kPetInfoHeight; }
+
+    void createPetWindow() {
+        const int winW = petWinW();
+        const int winH = petWinH();
+        RECT work{};
+        SystemParametersInfoW(SPI_GETWORKAREA, 0, &work, 0);
+        int x = work.right - winW - 24;
+        int y = work.bottom - winH;
+        int savedX = 0, savedY = 0;
+        if (store_.petPosition(savedX, savedY)) {
+            const POINT testPoint{savedX + winW / 2, savedY + winH / 2};
+            HMONITOR monitor = MonitorFromPoint(testPoint, MONITOR_DEFAULTTONULL);
+            if (monitor != nullptr) {
+                MONITORINFO info{sizeof(info)};
+                if (GetMonitorInfoW(monitor, &info)) {
+                    x = std::clamp(savedX, static_cast<int>(info.rcWork.left),
+                                   static_cast<int>(info.rcWork.right - winW));
+                    y = std::clamp(savedY, static_cast<int>(info.rcWork.top),
+                                   static_cast<int>(info.rcWork.bottom - winH));
+                }
+            }
+        }
+        // 不设 owner，避免主面板隐藏或调整层级时牵连桌宠窗口。
+        petHwnd_ = CreateWindowExW(WS_EX_LAYERED | WS_EX_TOOLWINDOW | WS_EX_TOPMOST,
+                                   kPetClass, L"AI Task Hub 桌宠",
+                                   WS_POPUP, x, y, winW, winH,
+                                   nullptr, nullptr, instance_, this);
+        if (petHwnd_) SetTimer(petHwnd_, kPetAnimTimer, 33, nullptr);
     }
 
     void initTray() {
@@ -598,11 +654,10 @@ private:
         wchar_t module[MAX_PATH]{};
         GetModuleFileNameW(nullptr, module, MAX_PATH);
         const std::filesystem::path appDir(module);
-        const std::array<std::filesystem::path, 4> candidates{
+        const std::array<std::filesystem::path, 3> candidates{
             appDir.parent_path() / L"resources",
-            appDir.parent_path().parent_path() / L"desktop" / L"resources",
-            std::filesystem::current_path() / L"desktop" / L"resources",
-            std::filesystem::path(L"F:\\myInterestingProgram\\AI-Task-Hub\\desktop\\resources")};
+            appDir.parent_path().parent_path() / L"resources",
+            std::filesystem::current_path() / L"native-win32" / L"resources"};
         for (const auto &candidate : candidates) {
             if (GetFileAttributesW((candidate / L"presets" / L"default.png").wstring().c_str()) != INVALID_FILE_ATTRIBUTES)
                 return candidate.wstring();
@@ -635,10 +690,8 @@ private:
     }
 
     // 离屏 BGRA DIB：top-down、bitfields mask，alpha 通道由 ULW_ALPHA 透出。
-    bool rebuildBacking(int width, int height) {
+    bool createBacking(MemoryBacking &backing, int width, int height) {
         if (width <= 0 || height <= 0) return false;
-        if (backing_.dib && backing_.width == width && backing_.height == height && backing_.target) return true;
-        destroyBacking();
         BITMAPV5HEADER info{};
         info.bV5Size = sizeof(BITMAPV5HEADER);
         info.bV5Width = width;
@@ -652,48 +705,76 @@ private:
         info.bV5BlueMask = 0x000000FFu;
         info.bV5AlphaMask = 0xFF000000u;
         HDC screen = GetDC(nullptr);
-        backing_.dib = CreateDIBSection(screen, reinterpret_cast<BITMAPINFO *>(&info),
-                                        DIB_RGB_COLORS, &backing_.bits, nullptr, 0);
+        backing.dib = CreateDIBSection(screen, reinterpret_cast<BITMAPINFO *>(&info),
+                                       DIB_RGB_COLORS, &backing.bits, nullptr, 0);
         ReleaseDC(nullptr, screen);
-        if (!backing_.dib || !backing_.bits) return false;
-        backing_.width = width;
-        backing_.height = height;
-        backing_.memDC = CreateCompatibleDC(nullptr);
-        if (!backing_.memDC) { destroyBacking(); return false; }
-        backing_.oldBitmap = static_cast<HBITMAP>(SelectObject(backing_.memDC, backing_.dib));
+        if (!backing.dib || !backing.bits) {
+            releaseBacking(backing);
+            return false;
+        }
+        backing.width = width;
+        backing.height = height;
+        backing.memDC = CreateCompatibleDC(nullptr);
+        if (!backing.memDC) {
+            releaseBacking(backing);
+            return false;
+        }
+        backing.oldBitmap = static_cast<HBITMAP>(SelectObject(backing.memDC, backing.dib));
         const D2D1_RENDER_TARGET_PROPERTIES rtProps = D2D1::RenderTargetProperties(
             D2D1_RENDER_TARGET_TYPE_SOFTWARE,
             D2D1::PixelFormat(DXGI_FORMAT_B8G8R8A8_UNORM, D2D1_ALPHA_MODE_PREMULTIPLIED),
             96.0f, 96.0f);
-        if (FAILED(d2dFactory_->CreateDCRenderTarget(&rtProps, &backing_.target))) {
-            destroyBacking();
+        if (FAILED(d2dFactory_->CreateDCRenderTarget(&rtProps, &backing.target))) {
+            releaseBacking(backing);
             return false;
         }
         // DIB 是预乘 alpha，第一帧清空到全 0 让 UpdateLayeredWindow 透出桌面。
-        std::memset(backing_.bits, 0, static_cast<size_t>(info.bV5SizeImage));
+        std::memset(backing.bits, 0, static_cast<size_t>(info.bV5SizeImage));
         return true;
     }
 
+    static void releaseBacking(MemoryBacking &backing) {
+        if (backing.memDC) {
+            if (backing.oldBitmap) SelectObject(backing.memDC, backing.oldBitmap);
+            DeleteDC(backing.memDC);
+        }
+        backing.memDC = nullptr;
+        backing.oldBitmap = nullptr;
+        backing.target.Reset();
+        if (backing.dib) DeleteObject(backing.dib);
+        backing.dib = nullptr;
+        backing.bits = nullptr;
+        backing.width = 0;
+        backing.height = 0;
+    }
+
+    bool rebuildBacking(int width, int height) {
+        if (width <= 0 || height <= 0) return false;
+        if (backing_.dib && backing_.width == width && backing_.height == height && backing_.target) return true;
+        destroyBacking();
+        return createBacking(backing_, width, height);
+    }
+
     void destroyBacking() {
-        // 位图和画刷属于创建它们的渲染目标，窗口切换尺寸后必须一起重建。
+        // 位图和画刷属于创建它们的渲染目标，窗口切换尺寸或隐藏气泡时必须一起重建；
+        // 桌宠独立拥有 petBacking_，不能在此处释放。
         brush_.Reset();
         wallpaper_.Reset();
         avatar_.Reset();
         loadedWallpaper_.clear();
         loadedAvatar_.clear();
-        if (backing_.memDC) {
-            if (backing_.oldBitmap) SelectObject(backing_.memDC, backing_.oldBitmap);
-            DeleteDC(backing_.memDC);
-        }
-        backing_.memDC = nullptr;
-        backing_.oldBitmap = nullptr;
-        backing_.target.Reset();
-        if (backing_.dib) DeleteObject(backing_.dib);
-        backing_.dib = nullptr;
-        backing_.bits = nullptr;
-        backing_.width = 0;
-        backing_.height = 0;
+        releaseBacking(backing_);
         previewBitmaps_.clear();
+    }
+
+    void destroyPetBacking() {
+        petBrush_.Reset();
+        for (auto &sprite : petSprites_) sprite.Reset();
+        for (auto &clip : petClips_) {
+            for (auto &frame : clip) frame.Reset();
+        }
+        petSpritesLoaded_ = false;
+        releaseBacking(petBacking_);
     }
 
     bool bindBacking() {
@@ -702,8 +783,10 @@ private:
         return SUCCEEDED(backing_.target->BindDC(backing_.memDC, &rect));
     }
 
-    bool loadBitmap(const std::wstring &path, UINT maxSize, ComPtr<ID2D1Bitmap> &result) {
-        if (!wicFactory_ || !backing_.target ||
+    bool loadBitmap(const std::wstring &path, UINT maxSize, ComPtr<ID2D1Bitmap> &result,
+                    ID2D1RenderTarget *rt = nullptr) {
+        ID2D1RenderTarget *renderTarget = rt ? rt : backing_.target.Get();
+        if (!wicFactory_ || !renderTarget ||
             GetFileAttributesW(path.c_str()) == INVALID_FILE_ATTRIBUTES) return false;
         ComPtr<IWICBitmapDecoder> decoder;
         if (FAILED(wicFactory_->CreateDecoderFromFilename(path.c_str(), nullptr, GENERIC_READ,
@@ -713,7 +796,7 @@ private:
         UINT width = 0, height = 0;
         frame->GetSize(&width, &height);
         if (!width || !height) return false;
-        if (maxSize == 0) {
+        if (maxSize == 0 && backing_.width > 0 && backing_.height > 0) {
             // 壁纸仅解码到覆盖当前窗口所需的像素尺寸，不常驻整张大图。
             const double fit = std::min(1.0, std::max(static_cast<double>(backing_.width) / width,
                                                      static_cast<double>(backing_.height) / height));
@@ -737,7 +820,7 @@ private:
         // 不依赖任何 HWND 绑定的 RenderTarget。
         const D2D1_BITMAP_PROPERTIES props = D2D1::BitmapProperties(
             D2D1::PixelFormat(DXGI_FORMAT_B8G8R8A8_UNORM, D2D1_ALPHA_MODE_PREMULTIPLIED));
-        const HRESULT hr = backing_.target->CreateBitmap(D2D1::SizeU(width, height), props, &result);
+        const HRESULT hr = renderTarget->CreateBitmap(D2D1::SizeU(width, height), props, &result);
         if (FAILED(hr)) return false;
         std::vector<BYTE> pixels(static_cast<size_t>(width) * height * 4);
         if (FAILED(converter->CopyPixels(nullptr, width * 4, static_cast<UINT>(pixels.size()), pixels.data()))) {
@@ -745,6 +828,32 @@ private:
             return false;
         }
         return SUCCEEDED(result->CopyFromMemory(nullptr, pixels.data(), width * 4));
+    }
+
+    void ensurePetSprites() {
+        if (petSpritesLoaded_ || !petBacking_.target) return;
+        petSpritesLoaded_ = true;
+        static constexpr std::array<const wchar_t *, 8> kNames{
+            {L"idle", L"notice", L"happy", L"drag", L"idle_blink", L"walk", L"sit", L"sleep"}};
+        const std::wstring petDir = resourceDirectory() + L"\\pet\\";
+        for (size_t i = 0; i < kNames.size(); ++i) {
+            loadBitmap(petDir + kNames[i] + L".png", 640, petSprites_[i], petBacking_.target.Get());
+        }
+        static constexpr std::array<const wchar_t *, kFirstIdleGestureClip + kIdleGestureCount> kClipNames{{
+            L"walk", L"rest", L"react", L"blink", L"wave", L"yawn", L"bow", L"hair",
+            L"hug", L"peek", L"balance", L"curtsy", L"read", L"look", L"stretch",
+            L"nod", L"think", L"shush", L"inspect", L"tiptoe", L"shake"}};
+        for (size_t i = 0; i < kClipNames.size(); ++i) {
+            auto &clip = petClips_[i];
+            const UINT maxSize = i < kFirstIdleGestureClip ? 640 : 480;
+            for (size_t frame = 0; frame < clip.size(); ++frame) {
+                const auto path = petDir + kClipNames[i] + L"_" + std::to_wstring(frame + 1) + L".png";
+                if (!loadBitmap(path, maxSize, clip[frame], petBacking_.target.Get())) {
+                    for (auto &bitmap : clip) bitmap.Reset();
+                    break;
+                }
+            }
+        }
     }
 
     ID2D1Bitmap *previewBitmap(const std::wstring &path) {
@@ -962,6 +1071,7 @@ private:
         store_.setDarkMode(darkMode_);
         if (hwnd_) InvalidateRect(hwnd_, nullptr, FALSE);
         if (notificationHwnd_) InvalidateRect(notificationHwnd_, nullptr, FALSE);
+        if (petHwnd_ && !petHidden_) renderPet();
     }
 
     void refreshSnapshot() {
@@ -971,7 +1081,27 @@ private:
                 if (task.eventType != L"TASK_COMPLETED" && task.eventType != L"TASK_FAILED" &&
                     task.eventType != L"TASK_NEEDS_INPUT") continue;
                 const HubTask *previous = previousTask(task.id);
-                if (!previous || previous->eventType != task.eventType) notifyTaskChanged(task);
+                if (!previous || previous->eventType != task.eventType) {
+                    // 无论系统通知开关是否开启，状态变化时都唤醒桌宠并跳跃散发粒子提醒。
+                    const ULONGLONG now = GetTickCount64();
+                    wakePet(false);
+                    petLastActiveAt_ = now;
+                    startPetHop(now, 600);
+                    petBounceUntil_ = now + 380;
+                    if (task.eventType == L"TASK_COMPLETED") {
+                        petMoodUntil_ = now + 1800;
+                        petMoodLine_ = L"任务完成啦，辛苦了~";
+                        spawnPetParticles(6, 0, color(0xf472b6));
+                        spawnPetParticles(2, 1, color(0x60a5fa));
+                    } else if (task.eventType == L"TASK_NEEDS_INPUT") {
+                        petNoticeUntil_ = now + 2200;
+                        spawnPetParticles(5, 2, palette().warning);
+                    } else if (task.eventType == L"TASK_FAILED") {
+                        petNoticeUntil_ = now + 2200;
+                        spawnPetParticles(5, 2, palette().danger);
+                    }
+                    notifyTaskChanged(task);
+                }
             }
         }
         snapshot_ = std::move(next);
@@ -988,6 +1118,7 @@ private:
             detailReply_.clear();
         }
         if (hwnd_) InvalidateRect(hwnd_, nullptr, FALSE);
+        if (petHwnd_ && !petHidden_) renderPet();
     }
 
     void refreshIntegrationStatus() {
@@ -1093,23 +1224,65 @@ private:
             notificationHwnd_ = CreateWindowExW(
                 WS_EX_TOPMOST | WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE,
                 kNotificationClass, L"AI Task Hub 通知", WS_POPUP,
-                0, 0, kNotificationWidth, kNotificationHeight,
+                0, 0, kNotificationWidth, kNotificationHeight + 12,
                 hwnd_, nullptr, instance_, this);
             if (!notificationHwnd_) return;
-            SetWindowRgn(notificationHwnd_, CreateRoundRectRgn(0, 0, kNotificationWidth + 1,
-                                                               kNotificationHeight + 1, 36, 36), TRUE);
         }
 
-        RECT appRect{};
-        GetWindowRect(hwnd_, &appRect);
-        const HMONITOR monitor = MonitorFromWindow(hwnd_, MONITOR_DEFAULTTONEAREST);
-        MONITORINFO monitorInfo{sizeof(monitorInfo)};
-        GetMonitorInfoW(monitor, &monitorInfo);
-        const int x = monitorInfo.rcWork.right - kNotificationWidth - 22;
-        const int y = orbMode_
-            ? std::max(monitorInfo.rcWork.top + 18, appRect.bottom + 12)
-            : monitorInfo.rcWork.top + 18;
-        SetWindowPos(notificationHwnd_, HWND_TOPMOST, x, y, kNotificationWidth, kNotificationHeight,
+        const int w = kNotificationWidth;
+        int h = kNotificationHeight;
+        int x = 0;
+        int y = 0;
+        HRGN rgn = nullptr;
+        const bool petVisible = petHwnd_ && !petHidden_ && IsWindowVisible(petHwnd_);
+        if (petVisible) {
+            h = kNotificationHeight + 12;
+            RECT pet{};
+            GetWindowRect(petHwnd_, &pet);
+            const HMONITOR monitor = MonitorFromRect(&pet, MONITOR_DEFAULTTONEAREST);
+            MONITORINFO monitorInfo{sizeof(monitorInfo)};
+            GetMonitorInfoW(monitor, &monitorInfo);
+            const int petCenterX = (pet.left + pet.right) / 2;
+            x = std::clamp(petCenterX - w / 2,
+                           static_cast<int>(monitorInfo.rcWork.left + 8),
+                           static_cast<int>(monitorInfo.rcWork.right - w - 8));
+            y = pet.top + kPetTop - h + 6;
+            bool tailDown = true;
+            if (y < monitorInfo.rcWork.top) {
+                y = std::min(static_cast<int>(monitorInfo.rcWork.bottom - h - 8),
+                             static_cast<int>(pet.bottom - 6));
+                tailDown = false;
+            }
+            notificationHasTail_ = true;
+            notificationTailDown_ = tailDown;
+            notificationContentTopOffset_ = tailDown ? 0 : 12;
+            const int tipX = std::clamp(petCenterX - x, 28, w - 28);
+            if (tailDown) {
+                rgn = CreateRoundRectRgn(0, 0, w + 1, kNotificationHeight + 1, 36, 36);
+                POINT pts[3]{{tipX - 10, kNotificationHeight - 1}, {tipX + 10, kNotificationHeight - 1}, {tipX, h}};
+                HRGN tail = CreatePolygonRgn(pts, 3, WINDING);
+                if (rgn && tail) CombineRgn(rgn, rgn, tail, RGN_OR);
+                if (tail) DeleteObject(tail);
+            } else {
+                rgn = CreateRoundRectRgn(0, 12, w + 1, h + 1, 36, 36);
+                POINT pts[3]{{tipX - 10, 13}, {tipX + 10, 13}, {tipX, 0}};
+                HRGN tail = CreatePolygonRgn(pts, 3, WINDING);
+                if (rgn && tail) CombineRgn(rgn, rgn, tail, RGN_OR);
+                if (tail) DeleteObject(tail);
+            }
+        } else {
+            const HMONITOR monitor = MonitorFromWindow(hwnd_, MONITOR_DEFAULTTONEAREST);
+            MONITORINFO monitorInfo{sizeof(monitorInfo)};
+            GetMonitorInfoW(monitor, &monitorInfo);
+            x = monitorInfo.rcWork.right - w - 22;
+            y = monitorInfo.rcWork.top + 18;
+            notificationHasTail_ = false;
+            notificationTailDown_ = true;
+            notificationContentTopOffset_ = 0;
+            rgn = CreateRoundRectRgn(0, 0, w + 1, h + 1, 36, 36);
+        }
+        if (rgn && !SetWindowRgn(notificationHwnd_, rgn, TRUE)) DeleteObject(rgn);
+        SetWindowPos(notificationHwnd_, HWND_TOPMOST, x, y, w, h,
                      SWP_NOACTIVATE | SWP_SHOWWINDOW);
         SetTimer(notificationHwnd_, kNotificationTimer, 5000, nullptr);
         InvalidateRect(notificationHwnd_, nullptr, FALSE);
@@ -1142,6 +1315,7 @@ private:
             HDC dc = BeginPaint(hwnd, &paint);
             RECT client{};
             GetClientRect(hwnd, &client);
+            const int oy = app->notificationContentTopOffset_;
             const bool dark = app->darkMode_;
             // 通知卡片沿用主界面的石墨/雾白表面与珊瑚强调色，状态图标保留任务语义。
             const COLORREF background = dark ? RGB(24, 27, 29) : RGB(250, 251, 252);
@@ -1162,17 +1336,27 @@ private:
             HBRUSH backgroundBrush = CreateSolidBrush(background);
             FillRect(dc, &client, backgroundBrush);
             DeleteObject(backgroundBrush);
-            HPEN borderPen = CreatePen(PS_SOLID, 1, border);
-            HGDIOBJ oldPen = SelectObject(dc, borderPen);
-            HGDIOBJ oldBrush = SelectObject(dc, GetStockObject(HOLLOW_BRUSH));
-            RoundRect(dc, 0, 0, client.right - 1, client.bottom - 1, 36, 36);
-            SelectObject(dc, oldBrush);
-            SelectObject(dc, oldPen);
-            DeleteObject(borderPen);
+            if (app->notificationHasTail_) {
+                HRGN rgn = CreateRectRgn(0, 0, 0, 0);
+                if (rgn && GetWindowRgn(hwnd, rgn) != ERROR) {
+                    HBRUSH borderBrush = CreateSolidBrush(border);
+                    FrameRgn(dc, rgn, borderBrush, 1, 1);
+                    DeleteObject(borderBrush);
+                }
+                if (rgn) DeleteObject(rgn);
+            } else {
+                HPEN borderPen = CreatePen(PS_SOLID, 1, border);
+                HGDIOBJ oldPen = SelectObject(dc, borderPen);
+                HGDIOBJ oldBrush = SelectObject(dc, GetStockObject(HOLLOW_BRUSH));
+                RoundRect(dc, 0, 0, client.right - 1, client.bottom - 1, 36, 36);
+                SelectObject(dc, oldBrush);
+                SelectObject(dc, oldPen);
+                DeleteObject(borderPen);
+            }
 
             HBRUSH iconBrush = CreateSolidBrush(badgeBackground);
             HGDIOBJ previousBrush = SelectObject(dc, iconBrush);
-            Ellipse(dc, 18, 42, 50, 74);
+            Ellipse(dc, 18, 42 + oy, 50, 74 + oy);
             SelectObject(dc, previousBrush);
             DeleteObject(iconBrush);
 
@@ -1195,13 +1379,13 @@ private:
                                          DEFAULT_PITCH | FF_SWISS, L"Segoe UI Symbol");
             HGDIOBJ oldFont = SelectObject(dc, iconFont);
             SetTextColor(dc, iconColor);
-            RECT iconRect{18, 42, 50, 74};
+            RECT iconRect{18, 42 + oy, 50, 74 + oy};
             DrawTextW(dc, app->notificationIcon_.c_str(), -1, &iconRect,
                       DT_CENTER | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX);
 
             SelectObject(dc, headerFont);
             SetTextColor(dc, headerColor);
-            RECT headerRect{68, 15, client.right - 18, 35};
+            RECT headerRect{68, 15 + oy, client.right - 18, 35 + oy};
             DrawTextW(dc, app->notificationTitle_.c_str(), -1, &headerRect,
                       DT_SINGLELINE | DT_END_ELLIPSIS | DT_NOPREFIX);
 
@@ -1214,13 +1398,13 @@ private:
             }
             SelectObject(dc, titleFont);
             SetTextColor(dc, titleColor);
-            RECT taskRect{68, projectPath.empty() ? 48 : 42, client.right - 18, 68};
+            RECT taskRect{68, (projectPath.empty() ? 48 : 42) + oy, client.right - 18, 68 + oy};
             DrawTextW(dc, taskTitle.c_str(), -1, &taskRect,
                       DT_SINGLELINE | DT_END_ELLIPSIS | DT_NOPREFIX);
             if (!projectPath.empty()) {
                 SelectObject(dc, bodyFont);
                 SetTextColor(dc, bodyColor);
-                RECT pathRect{68, 73, client.right - 18, 95};
+                RECT pathRect{68, 73 + oy, client.right - 18, 95 + oy};
                 DrawTextW(dc, projectPath.c_str(), -1, &pathRect,
                           DT_SINGLELINE | DT_END_ELLIPSIS | DT_NOPREFIX);
             }
@@ -1303,6 +1487,7 @@ private:
     }
 
     void render() {
+        if (orbMode_) return; // 气泡面板隐藏时不绘制。
         if (!ensureFactory()) return;
         // 分层窗口提交的是整个窗口尺寸；若取客户区尺寸，WS_THICKFRAME 的边框会在每次
         // UpdateLayeredWindow 后被重复扣除，导致窗口每次重绘都变小。
@@ -1322,10 +1507,27 @@ private:
             backing_.target->SetTextAntialiasMode(D2D1_TEXT_ANTIALIAS_MODE_CLEARTYPE);
             backing_.target->SetAntialiasMode(D2D1_ANTIALIAS_MODE_PER_PRIMITIVE);
             backing_.target->BeginDraw();
-            // 悬浮球模式只绘制圆形区域，先清空上一帧的面板内容并保留透明外围。
             backing_.target->Clear(D2D1::ColorF(0.0f, 0.0f, 0.0f, 0.0f));
-            if (orbMode_) renderOrb(width, height);
-            else renderPanel(width, height);
+            ComPtr<ID2D1Layer> clipLayer;
+            ComPtr<ID2D1RoundedRectangleGeometry> clipGeom;
+            bool clipped = false;
+            if (!IsZoomed(hwnd_)) {
+                if (SUCCEEDED(d2dFactory_->CreateRoundedRectangleGeometry(
+                        D2D1::RoundedRect(D2D1::RectF(0.0f, 0.0f, static_cast<float>(width), static_cast<float>(height)),
+                                          18.0f, 18.0f),
+                        &clipGeom)) &&
+                    SUCCEEDED(backing_.target->CreateLayer(nullptr, &clipLayer))) {
+                    backing_.target->PushLayer(D2D1::LayerParameters(D2D1::InfiniteRect(), clipGeom.Get()),
+                                               clipLayer.Get());
+                    clipped = true;
+                }
+            }
+            renderPanel(width, height);
+            if (clipped) {
+                backing_.target->PopLayer();
+                strokeRound(0.5f, 0.5f, static_cast<float>(width) - 0.5f, static_cast<float>(height) - 0.5f,
+                            18.0f, 1.0f, palette().border);
+            }
             const HRESULT result = backing_.target->EndDraw();
             if (result == D2DERR_RECREATE_TARGET) {
                 brush_.Reset();
@@ -1516,7 +1718,7 @@ private:
             : (std::to_wstring(snapshot_.counts.queue) + L" 个任务需要你的注意");
         text(summary, static_cast<float>(left), 116, static_cast<float>(right - 350), 138,
              12, p.textSecondary);
-        // 右上角操作按钮：清理 + 一键已读 + 收起为悬浮球
+        // 右上角操作按钮：清理 + 一键已读 + 收起气泡
         const int btnY = 78, btnH = 34;
         const int clearX = right - 330;
         const bool hotClear = hotHit_ == HitCleanupMenu;
@@ -1547,7 +1749,7 @@ private:
                   hotOrb ? p.cardHover : p.tab);
         strokeRound(static_cast<float>(orbX), static_cast<float>(btnY),
                     static_cast<float>(orbX + 100), static_cast<float>(btnY + btnH), 17, 1, p.border);
-        text(L"收起为悬浮球", static_cast<float>(orbX + 10), static_cast<float>(btnY + 9),
+        text(L"收起气泡", static_cast<float>(orbX + 10), static_cast<float>(btnY + 9),
              static_cast<float>(orbX + 100 - 10), static_cast<float>(btnY + btnH - 8),
              12, p.textSecondary);
         addHit(HitOrb, rectFrom(orbX, btnY, orbX + 100, btnY + btnH));
@@ -2287,7 +2489,7 @@ private:
                           notificationsEnabled_, HitNotifications);
             fillRound(static_cast<float>(left + 20), static_cast<float>(y + 133),
                       static_cast<float>(right - 20), static_cast<float>(y + 134), 1, p.border);
-            drawToggleRow(y + 145, L"开机启动", L"登录 Windows 后自动启动并常驻悬浮球",
+            drawToggleRow(y + 145, L"开机启动", L"登录 Windows 后自动启动并常驻桌宠",
                           autoStartEnabled_, HitAutoStart);
         }
         }
@@ -2480,229 +2682,1162 @@ private:
              11, p.muted);
     }
 
-    void renderOrb(int width, int height) {
-        if (!orbExpanded_) {
-            // 收起态：圆球窗口
-            // 整窗口不画背景（alpha=0），靠 UpdateLayeredWindow 透出桌面
-            const Palette &p = palette();
-            const float cx = width / 2.0f;
-            const float cy = height / 2.0f;
-            const float radius = (std::min(width, height) / 2.0f) - 2.0f;
-            // tone glow（3 圈）
-            const D2D1_COLOR_F tone = palette().accent;
-            circleStroke(cx, cy, radius + 1.5f, 8, blend(tone, 0.10f));
-            circleStroke(cx, cy, radius + 0.5f, 4, blend(tone, 0.18f));
-            // 内圈球体（inset 3）
-            const float innerR = radius - 3.0f;
-            circle(cx, cy, innerR, palette().card);
-            drawBitmapCircle(avatar_.Get(), cx - innerR, cy - innerR, innerR * 2, 1.0f);
-            // 1.5px 描边（tone 50% + white 50%）
-            circleStroke(cx, cy, innerR, 1.5f, blend(blend(tone, 0.5f), 0.95f));
-            // 内高光
-            circleStroke(cx, cy - innerR * 0.55f, innerR * 0.7f, 1.0f, blend(color(0xffffff), 0.22f));
-            drawOrbBadge(width, height);
-            (void)p;
-            return;
+    enum PetState {
+        PetIdle = 0,
+        PetNotice = 1,
+        PetHappy = 2,
+        PetDrag = 3,
+        PetBlink = 4,
+        PetWalk = 5,
+        PetSit = 6,
+        PetSleep = 7,
+        PetWave,
+        PetYawn,
+        PetBow,
+        PetHair,
+        PetHug,
+        PetPeek,
+        PetBalance,
+        PetCurtsy,
+        PetRead,
+        PetLook,
+        PetStretch,
+        PetNod,
+        PetThink,
+        PetShush,
+        PetInspect,
+        PetTiptoe,
+        PetShake,
+    };
+
+    static constexpr size_t kFirstIdleGestureClip = 4;
+    static constexpr size_t kIdleGestureCount = PetShake - PetWave + 1;
+    static constexpr ULONGLONG kPetPoseTransitionMs = 190;
+    static constexpr ULONGLONG kIdleGestureFrameMs = 195;
+    static constexpr ULONGLONG kIdleGestureDurationMs = 8 * kIdleGestureFrameMs;
+    static constexpr ULONGLONG kPetActionIntervalMs = 60000;
+    static constexpr ULONGLONG kPetInteractionQuietMs = 12000;
+
+    static bool isIdleGesture(PetState state) {
+        return state >= PetWave && state <= PetShake;
+    }
+
+    static float petTransitionEase(ULONGLONG elapsed, ULONGLONG duration) {
+        const float progress = std::min(1.0f, static_cast<float>(elapsed) / duration);
+        return progress * progress * (3.0f - 2.0f * progress);
+    }
+
+    static size_t petRestFrame(PetState state, ULONGLONG elapsed) {
+        const size_t last = state == PetSit ? 4 : 7;
+        const auto motionTime = std::max(elapsed, kPetPoseTransitionMs) - kPetPoseTransitionMs;
+        return std::min<size_t>(motionTime / 105, last);
+    }
+
+    enum PetBehavior {
+        BehIdle = 0,
+        BehWalk = 1,
+        BehSit = 2,
+        BehSleep = 3,
+        BehFall = 4,
+    };
+
+    struct PetParticle {
+        float x = 0.0f;
+        float y = 0.0f;
+        float vx = 0.0f;
+        float vy = 0.0f;
+        float age = 0.0f;
+        float life = 1.0f;
+        float size = 6.0f;
+        D2D1_COLOR_F color{};
+        int kind = 0; // 0=四角星, 1=小爱心, 2=圆点, 3=Zzz
+    };
+
+    std::uint32_t nextPetRand() {
+        petRandState_ = petRandState_ * 1664525u + 1013904223u;
+        return petRandState_;
+    }
+
+    float randUnit() {
+        return static_cast<float>(nextPetRand() & 0xffffu) / 65535.0f;
+    }
+
+    PetState currentPetState(ULONGLONG now) const {
+        if (petDragging_ && petMoved_) return PetDrag;
+        if (snapshot_.counts.needsInput + snapshot_.counts.failedUnread > 0 || now < petNoticeUntil_) {
+            return PetNotice;
         }
-        // 展开态：240×360
-        const Palette &p = palette();
-        // 玻璃面板：#ee141a22 + 1px 白色 0.1 + 圆角 20
-        const D2D1_COLOR_F panelBg = darkMode_ ? colorFromArgb(0xee141a22u) : colorFromArgb(0xf4ffffffu);
-        fillRound(0, 0, static_cast<float>(width), static_cast<float>(height), 20, panelBg);
-        strokeRound(0, 0, static_cast<float>(width), static_cast<float>(height), 20, 1,
-                    blend(color(0xffffff), 0.10f));
-        // 球缩到右下角 36×36
-        const int ball = kOrbSize, bInset = 6;
-        const RECT ballRect = orbRectLocal();
-        circle(static_cast<float>(ballRect.left + ball / 2),
-               static_cast<float>(ballRect.top + ball / 2), ball / 2.0f, palette().card);
-        drawBitmapCircle(avatar_.Get(), static_cast<float>(ballRect.left + bInset),
-                         static_cast<float>(ballRect.top + bInset), ball - 2 * bInset, 1.0f);
-        circleStroke(static_cast<float>(ballRect.left + ball / 2),
-                     static_cast<float>(ballRect.top + ball / 2), ball / 2.0f, 1.0f, palette().border);
-        drawOrbBadge(ballRect.right, ballRect.top + ball);
-        // 头部
-        const int headingLeft = panelToLeft_ ? 16 : 76;
-        text(L"任务概览", headingLeft, 18, headingLeft + 136, 40, 14, p.textPrimary, true);
-        text(L"点击消息查看详情", headingLeft, 42, headingLeft + 136, 60, 10, p.muted);
-        // 状态 stats（4 pills，22px）
-        int sx = 12, sy = 74;
-        renderOrbStat(sx, sy, L"执行中", snapshot_.counts.running, color(0x38bdf8)); sx += 72;
-        renderOrbStat(sx, sy, L"待输入", snapshot_.counts.needsInput, color(0xf59e0b)); sx += 72;
-        renderOrbStat(sx, sy, L"已完成", snapshot_.counts.completedUnread, color(0x22c55e));
-        const int taskListTop = 104;
-        const int maxList = 4;
-        int shown = 0;
-        int y = taskListTop;
-        for (const auto &task : snapshot_.queue) {
-            if (shown++ >= maxList) break;
-            const int rowH = 46;
-            addHit(HitCardBase + static_cast<int>(task.id), rectFrom(12, y, width - 12, y + rowH), task.id);
-            fillRound(12, static_cast<float>(y), static_cast<float>(width - 12), static_cast<float>(y + rowH), 10, p.card);
-            strokeRound(12, static_cast<float>(y), static_cast<float>(width - 12), static_cast<float>(y + rowH), 10, 1, p.border);
-            // 状态色条 2.5px 居中
-            fillRound(16, static_cast<float>(y + 8), 18.5f, static_cast<float>(y + rowH - 8), 1.5f,
-                      statusColor(task.status));
-            text(sourceLabel(task.source), 26, static_cast<float>(y + 6), 110, static_cast<float>(y + 18),
-                 10, sourceColor(task.source), true);
-            text(statusLabel(task.status), 110, static_cast<float>(y + 6), static_cast<float>(width - 22),
-                 static_cast<float>(y + 18), 10, statusColor(task.status));
-            text(shorten(task.title.empty() ? L"未命名任务" : task.title, 30),
-                 26, static_cast<float>(y + 22), static_cast<float>(width - 22), static_cast<float>(y + 38),
-                 11, p.textPrimary);
-            y += rowH + 4;
+        if (petBehavior_ == BehWalk || petChasingMoving_) {
+            return PetWalk;
         }
-        if (snapshot_.queue.empty()) {
-            text(L"当前没有运行中或待查看的任务", 18, static_cast<float>(y + 8),
-                 static_cast<float>(width - 18), static_cast<float>(y + 24), 11, p.muted);
+        if (petBehavior_ == BehFall) return PetDrag;
+        if (petBehavior_ == BehSit) return PetSit;
+        if (petBehavior_ == BehSleep) return PetSleep;
+        if (now < petMoodUntil_) return PetHappy;
+        if (now < petGestureUntil_) return petGestureState_;
+        if (snapshot_.counts.completedUnread > 0) return PetHappy;
+        if (now < petBlinkUntil_) return PetBlink;
+        return PetIdle;
+    }
+
+    ID2D1Bitmap *resolvePetSprite(PetState state) const {
+        if (auto *bmp = petSprites_[state].Get()) return bmp;
+        if (state == PetDrag || state == PetWalk || state == PetHappy) {
+            if (auto *notice = petSprites_[PetNotice].Get()) return notice;
         }
-        // 底部按钮
-        const int btnY = height - 50;
-        const int openW = (width - 36) / 2;
-        fillRound(12, static_cast<float>(btnY), static_cast<float>(12 + openW), static_cast<float>(btnY + 32), 14,
-                  p.accentSoft);
-        strokeRound(12, static_cast<float>(btnY), static_cast<float>(12 + openW), static_cast<float>(btnY + 32), 14, 1, p.accentLine);
-        textCentered(L"打开面板", 12, static_cast<float>(btnY), static_cast<float>(12 + openW), static_cast<float>(btnY + 32),
-             12, p.accent, true);
-        addHit(HitOrb, rectFrom(12, btnY, 12 + openW, btnY + 32));
-        const int readX = 12 + openW + 8, readW = width - readX - 12;
-        fillRound(static_cast<float>(readX), static_cast<float>(btnY), static_cast<float>(readX + readW), static_cast<float>(btnY + 32), 14, p.tab);
-        strokeRound(static_cast<float>(readX), static_cast<float>(btnY), static_cast<float>(readX + readW), static_cast<float>(btnY + 32), 14, 1, p.border);
-        textCentered(L"一键已读", static_cast<float>(readX), static_cast<float>(btnY),
-             static_cast<float>(readX + readW), static_cast<float>(btnY + 32), 12, p.textSecondary);
-        addHit(HitMarkAll, rectFrom(readX, btnY, readX + readW, btnY + 32));
+        return petSprites_[PetIdle].Get();
     }
 
-    void renderOrbStat(int x, int y, const wchar_t *label, int value, D2D1_COLOR_F tint) {
-        const Palette &p = palette();
-        const int w = 70, h = 22;
-        fillRound(static_cast<float>(x), static_cast<float>(y),
-                  static_cast<float>(x + w), static_cast<float>(y + h), 11,
-                  darkMode_ ? colorFromArgb(0x14ffffffu) : colorFromArgb(0x26ffffffu));
-        strokeRound(static_cast<float>(x), static_cast<float>(y),
-                    static_cast<float>(x + w), static_cast<float>(y + h), 11, 1, p.border);
-        circle(static_cast<float>(x + 8), static_cast<float>(y + 11), 3, tint);
-        text(std::wstring(label) + L" " + std::to_wstring(value),
-             static_cast<float>(x + 16), static_cast<float>(y + 4),
-             static_cast<float>(x + w - 4), static_cast<float>(y + h - 2),
-             10, p.textPrimary);
+    ID2D1Bitmap *petAnimationFrame(PetState state, ULONGLONG elapsed) const {
+        if (isIdleGesture(state)) {
+            const auto &clip = petClips_[kFirstIdleGestureClip + state - PetWave];
+            const size_t frame = std::min<size_t>(elapsed / kIdleGestureFrameMs, clip.size() - 1);
+            if (clip[frame]) return clip[frame].Get();
+            return petAnimationFrame(PetIdle, 0);
+        }
+        if ((state == PetIdle || state == PetBlink) && petClips_[3][0]) {
+            return petClips_[3][0].Get();
+        }
+        if (state == PetWalk && petClips_[0][0]) {
+            const auto &clip = petClips_[0];
+            const auto frameMs = petChasingMoving_ ? 65 : 90;
+            return clip[(elapsed / frameMs) % clip.size()].Get();
+        }
+        if ((state == PetSit || state == PetSleep) && petClips_[1][0]) {
+            return petClips_[1][petRestFrame(state, elapsed)].Get();
+        }
+        if (state == PetHappy && petClips_[2][0]) {
+            const auto &clip = petClips_[2];
+            const ULONGLONG frame = elapsed < 660 ? std::min<ULONGLONG>(elapsed / 75, 3)
+                : 4 + (elapsed - 660) / 140;
+            const size_t last = snapshot_.counts.completedUnread > 0 ? 3 : clip.size() - 1;
+            return clip[std::min<size_t>(frame, last)].Get();
+        }
+        return resolvePetSprite(state);
     }
 
-    void drawOrbBadge(int right, int bottom) {
-        const Palette &p = palette();
-        const int count = snapshot_.counts.queue;
-        if (count <= 0) return;
-        const std::wstring value = count > 99 ? L"99+" : std::to_wstring(count);
-        const int badgeW = std::max(18, static_cast<int>(value.size() * 8) + 8);
-        const int badgeH = 16;
-        const int badgeX = right - badgeW - 6;
-        const int badgeY = bottom - kOrbSize + 6;
-        fillRound(static_cast<float>(badgeX), static_cast<float>(badgeY),
-                  static_cast<float>(badgeX + badgeW), static_cast<float>(badgeY + badgeH),
-                  static_cast<float>(badgeH) / 2, p.danger);
-        strokeRound(static_cast<float>(badgeX), static_cast<float>(badgeY),
-                    static_cast<float>(badgeX + badgeW), static_cast<float>(badgeY + badgeH),
-                    static_cast<float>(badgeH) / 2, 1, colorFromArgb(0xcc141a22u));
-        textCentered(value, static_cast<float>(badgeX), static_cast<float>(badgeY),
-                     static_cast<float>(badgeX + badgeW), static_cast<float>(badgeY + badgeH),
-                     9, color(0xffffff), true);
+    void startPetHop(ULONGLONG now, ULONGLONG duration) {
+        petHopSince_ = now;
+        petHopUntil_ = now + duration;
     }
 
-    RECT orbRectLocal() const {
-        if (!orbExpanded_) return rectFrom(0, 0, kOrbSize, kOrbSize);
-        const int left = panelToLeft_ ? kOrbPanelWidth - kOrbSize - kOrbPanelInset : kOrbPanelInset;
-        return rectFrom(left, kOrbPanelInset, left + kOrbSize, kOrbPanelInset + kOrbSize);
+    void spawnPetParticles(int count, int kind, D2D1_COLOR_F tint, bool atFeet = false) {
+        const float boxW = static_cast<float>(petBoxW());
+        const float boxH = static_cast<float>(petBoxH());
+        for (int i = 0; i < count; ++i) {
+            PetParticle p;
+            if (kind == 3) {
+                p.x = static_cast<float>(kPetMargin) + boxW * (0.60f + 0.12f * randUnit());
+                p.y = static_cast<float>(kPetTop) + boxH * (0.14f + 0.08f * randUnit());
+                p.vx = 0.35f + 0.25f * randUnit();
+                p.vy = -0.68f - 0.25f * randUnit();
+                p.life = 1.6f;
+                p.size = (i % 2 == 0) ? 12.0f : 9.5f;
+            } else if (atFeet) {
+                p.x = static_cast<float>(kPetMargin) + boxW * (0.30f + 0.40f * randUnit());
+                p.y = static_cast<float>(kPetTop) + boxH - 12.0f + (randUnit() - 0.5f) * 6.0f;
+                p.vx = (randUnit() - 0.5f) * 2.4f;
+                p.vy = -0.6f - 0.8f * randUnit();
+                p.life = 0.48f + 0.22f * randUnit();
+                p.size = 3.5f + 2.5f * randUnit();
+            } else {
+                p.x = static_cast<float>(kPetMargin) + boxW * (0.24f + 0.52f * randUnit());
+                p.y = static_cast<float>(kPetTop) + boxH * (0.12f + 0.28f * randUnit());
+                p.vx = (randUnit() - 0.5f) * 1.4f;
+                p.vy = -0.9f - 1.2f * randUnit();
+                p.life = 0.75f + 0.55f * randUnit();
+                p.size = 4.5f + 3.5f * randUnit();
+            }
+            p.age = 0.0f;
+            p.color = tint;
+            p.kind = kind;
+            petParticles_.push_back(p);
+        }
+        if (petParticles_.size() > 24) {
+            petParticles_.erase(petParticles_.begin(),
+                                petParticles_.begin() + static_cast<std::ptrdiff_t>(petParticles_.size() - 24));
+        }
     }
 
-    RECT orbRectScreen() const {
-        RECT window{};
-        GetWindowRect(hwnd_, &window);
-        const RECT local = orbRectLocal();
-        return rectFrom(window.left + local.left, window.top + local.top, window.left + local.right, window.top + local.bottom);
+    void applyPetScale(int percent) {
+        const int clamped = std::clamp(percent, 60, 160);
+        if (clamped == petScalePercent_) return;
+        RECT oldRect{};
+        if (petHwnd_) GetWindowRect(petHwnd_, &oldRect);
+        petScalePercent_ = clamped;
+        store_.setPetScalePercent(clamped);
+        petWalkDir_ = 0;
+        if (petBehavior_ == BehWalk) petBehavior_ = BehIdle;
+        if (!petHwnd_) return;
+
+        const int newW = petWinW();
+        const int newH = petWinH();
+        const int oldCenterX = (oldRect.left + oldRect.right) / 2;
+        const int oldBottom = oldRect.bottom;
+        int newX = oldCenterX - newW / 2;
+        int newY = oldBottom - newH;
+        const POINT anchor{oldCenterX, (oldRect.top + oldRect.bottom) / 2};
+        HMONITOR monitor = MonitorFromPoint(anchor, MONITOR_DEFAULTTONEAREST);
+        MONITORINFO info{sizeof(info)};
+        if (GetMonitorInfoW(monitor, &info)) {
+            newX = std::clamp(newX, static_cast<int>(info.rcWork.left),
+                              static_cast<int>(info.rcWork.right - newW));
+            newY = std::clamp(newY, static_cast<int>(info.rcWork.top),
+                              static_cast<int>(info.rcWork.bottom - newH));
+        }
+        destroyPetBacking();
+        SetWindowPos(petHwnd_, HWND_TOPMOST, newX, newY, newW, newH, SWP_NOACTIVATE);
+        if (!orbMode_) positionBubble();
+        renderPet();
     }
 
-    void expandOrb() {
-        if (!orbMode_ || orbExpanded_ || dragging_) return;
-        RECT old{};
-        GetWindowRect(hwnd_, &old);
-        const POINT center{(old.left + old.right) / 2, (old.top + old.bottom) / 2};
+    std::wstring timeGreetingLine() const {
+        SYSTEMTIME st{};
+        GetLocalTime(&st);
+        const int hour = static_cast<int>(st.wHour);
+        if (hour >= 5 && hour < 9) return L"早安呀，今天也要元气满满~";
+        if (hour >= 9 && hour < 12) return L"上午好，专心工作中~";
+        if (hour >= 12 && hour < 14) return L"中午好，记得休息一下~";
+        if (hour >= 14 && hour < 18) return L"下午茶时间，看看文档吧~";
+        if (hour >= 18 && hour < 23) return L"晚上好，今天辛苦啦~";
+        return L"夜深了，早点休息哦…";
+    }
+
+    void wakePet(bool startled) {
+        const ULONGLONG now = GetTickCount64();
+        petGestureUntil_ = 0;
+        petWalkDir_ = 0;
+        if (petBehavior_ == BehSleep || petBehavior_ == BehSit || petBehavior_ == BehWalk) {
+            petBehavior_ = BehIdle;
+            petBehaviorUntil_ = 0;
+        }
+        if (startled) {
+            petNoticeUntil_ = now + 700;
+            petBounceUntil_ = now + 300;
+            spawnPetParticles(3, 0, palette().accent);
+        }
+        petLastActiveAt_ = now;
+        petNextActAt_ = std::max(petNextActAt_, now + kPetActionIntervalMs);
+    }
+
+    void triggerHeadPat() {
+        const ULONGLONG now = GetTickCount64();
+        wakePet(false);
+        static constexpr std::array<const wchar_t *, 4> kLines{{
+            L"诶嘿，谢谢摸摸头~",
+            L"好舒服…再摸一下嘛~",
+            L"干劲恢复 100%！",
+            L"会一直帮主人盯紧任务的~",
+        }};
+        petMoodLine_ = kLines[petPatLineIdx_ % kLines.size()];
+        ++petPatLineIdx_;
+        petNoticeUntil_ = 0;
+        petMoodUntil_ = now + 2200;
+        startPetHop(now, 520);
+        petBounceUntil_ = now + 380;
+        spawnPetParticles(7, 1, color(0xf472b6));
+    }
+
+    void triggerPoke() {
+        const ULONGLONG now = GetTickCount64();
+        const bool wasSleeping = (petBehavior_ == BehSleep);
+        wakePet(false);
+        static constexpr std::array<const wchar_t *, 4> kLines{{
+            L"唔哇！突然戳人家干嘛~",
+            L"在的在的！收到任务立刻提醒你",
+            L"呜…被发现了！",
+            L"别戳啦，会分心的~",
+        }};
+        petMoodLine_ = wasSleeping ? L"呀！刚差点睡着了…" : kLines[petPokeLineIdx_ % kLines.size()];
+        ++petPokeLineIdx_;
+        petNoticeUntil_ = now + 750;
+        petMoodUntil_ = now + 2000;
+        startPetHop(now, 450);
+        petBounceUntil_ = now + 380;
+        spawnPetParticles(5, 0, color(0xfbbf24));
+    }
+
+    void startGravityFallIfNeeded() {
+        if (!petGravityEnabled_ || !petHwnd_ || petDragging_) return;
+        RECT curRect{};
+        GetWindowRect(petHwnd_, &curRect);
+        const int winW = petWinW();
+        const int winH = petWinH();
+        const POINT center{(curRect.left + curRect.right) / 2, (curRect.top + curRect.bottom) / 2};
         HMONITOR monitor = MonitorFromPoint(center, MONITOR_DEFAULTTONEAREST);
         MONITORINFO info{sizeof(info)};
-        GetMonitorInfoW(monitor, &info);
-        panelToLeft_ = center.x >= (info.rcWork.left + info.rcWork.right) / 2;
-        const int width = kOrbPanelWidth;
-        const int height = kOrbPanelHeight;
-        int x = panelToLeft_ ? old.left - (width - kOrbSize - kOrbPanelInset) : old.left - kOrbPanelInset;
-        // 小球固定在展开面板的上边缘，悬停位置与展开后的小球保持连续。
-        int y = old.top - kOrbPanelInset;
-        x = std::clamp(x, static_cast<int>(info.rcWork.left + 6), static_cast<int>(info.rcWork.right - width - 6));
-        y = std::clamp(y, static_cast<int>(info.rcWork.top + 6), static_cast<int>(info.rcWork.bottom - height - 6));
-        orbExpanded_ = true;
-        SetWindowRgn(hwnd_, nullptr, TRUE);
-        SetWindowPos(hwnd_, HWND_TOPMOST, x, y, width, height, SWP_NOACTIVATE | SWP_SHOWWINDOW);
-        SetTimer(hwnd_, kCollapseTimer, 180, nullptr);
-        InvalidateRect(hwnd_, nullptr, FALSE);
+        RECT work{};
+        if (GetMonitorInfoW(monitor, &info)) work = info.rcWork;
+        else SystemParametersInfoW(SPI_GETWORKAREA, 0, &work, 0);
+
+        const int minX = static_cast<int>(work.left + 8);
+        const int maxX = std::max(minX, static_cast<int>(work.right - winW - 8));
+        const int clampedX = std::clamp(static_cast<int>(curRect.left), minX, maxX);
+        const int floorY = static_cast<int>(work.bottom - winH);
+        if (curRect.top < floorY - 3) {
+            petWalkDir_ = 0;
+            petChasingMoving_ = false;
+            petBehavior_ = BehFall;
+            petBehaviorUntil_ = 0;
+            petFallY_ = static_cast<float>(curRect.top);
+            petFallVy_ = 1.5f;
+        } else if (curRect.top != floorY || curRect.left != clampedX) {
+            SetWindowPos(petHwnd_, HWND_TOPMOST, clampedX, floorY, winW, winH, SWP_NOACTIVATE);
+            if (!orbMode_) positionBubble();
+            store_.setPetPosition(clampedX, floorY);
+        }
     }
 
-    void collapseOrb() {
-        // 拖动展开态小球时也必须先切回 52×52 收起态，否则缩小后的窗口仍按
-        // 展开面板坐标绘制，整块窗口会变成透明，看起来像小球消失。
-        if (!orbMode_ || !orbExpanded_) return;
-        RECT current{};
-        GetWindowRect(hwnd_, &current);
-        const RECT ball = orbRectScreen();
-        orbExpanded_ = false;
-        const int x = ball.left;
-        const int y = ball.top;
-        SetWindowPos(hwnd_, HWND_TOPMOST, x, y, kOrbSize, kOrbSize, SWP_NOACTIVATE | SWP_SHOWWINDOW);
-        SetWindowRgn(hwnd_, CreateEllipticRgn(0, 0, kOrbSize, kOrbSize), TRUE);
-        KillTimer(hwnd_, kCollapseTimer);
-        InvalidateRect(hwnd_, nullptr, FALSE);
-        (void)current;
+    void stepPetSimulation() {
+        constexpr float kDt = 0.033f;
+        const ULONGLONG now = GetTickCount64();
+
+        // 1. 更新粒子
+        for (auto &p : petParticles_) {
+            p.x += p.vx;
+            p.y += p.vy;
+            if (p.kind != 3) p.vy -= 0.015f;
+            p.age += kDt;
+        }
+        petParticles_.erase(std::remove_if(petParticles_.begin(), petParticles_.end(),
+                                           [](const PetParticle &p) { return p.age >= p.life; }),
+                            petParticles_.end());
+
+        // 2. 更新拖拽物理弹簧角（拖拽中受瞬时水平冲量驱动，松手后阻尼回正）
+        const float springAcc = -140.0f * petDragAngle_ - 14.0f * petDragAngularVel_;
+        petDragAngularVel_ += springAcc * kDt;
+        petDragAngle_ = std::clamp(petDragAngle_ + petDragAngularVel_ * kDt, -18.0f, 18.0f);
+        if (!petDragging_ && std::abs(petDragAngle_) < 0.05f && std::abs(petDragAngularVel_) < 0.1f) {
+            petDragAngle_ = 0.0f;
+            petDragAngularVel_ = 0.0f;
+        }
+
+        // 3. 鼠标悬停微歪头平滑插值
+        const float targetTilt = (petHovered_ && !petDragging_) ? petTargetHoverTilt_ : 0.0f;
+        petHoverTilt_ += (targetTilt - petHoverTilt_) * 0.18f;
+
+        // 4. 自然随机眨眼（仅待机常态下生效）
+        if (!petDragging_ && petBehavior_ == BehIdle && !petChasingMoving_ &&
+            now >= petGestureUntil_ &&
+            now >= petMoodUntil_ && now >= petNoticeUntil_ &&
+            snapshot_.counts.needsInput + snapshot_.counts.failedUnread == 0 &&
+            snapshot_.counts.completedUnread == 0) {
+            if (now >= petNextBlinkAt_) {
+                petBlinkUntil_ = now + (petClips_[3][0] ? 264 : 140);
+                if (petPendingDoubleBlink_) {
+                    petPendingDoubleBlink_ = false;
+                    petNextBlinkAt_ = now + 2600 + (nextPetRand() % 2600);
+                } else if ((nextPetRand() % 100) < 25) {
+                    petPendingDoubleBlink_ = true;
+                    petNextBlinkAt_ = petBlinkUntil_ + 100;
+                } else {
+                    petNextBlinkAt_ = now + 2600 + (nextPetRand() % 2600);
+                }
+            }
+        }
+
+        // 5. 重力下落物理（开启重力落地后生效）
+        if (petBehavior_ == BehFall && petHwnd_ && !petDragging_) {
+            RECT curRect{};
+            GetWindowRect(petHwnd_, &curRect);
+            const int winW = petWinW();
+            const int winH = petWinH();
+            const POINT center{(curRect.left + curRect.right) / 2, (curRect.top + curRect.bottom) / 2};
+            HMONITOR monitor = MonitorFromPoint(center, MONITOR_DEFAULTTONEAREST);
+            MONITORINFO info{sizeof(info)};
+            RECT work{};
+            if (GetMonitorInfoW(monitor, &info)) work = info.rcWork;
+            else SystemParametersInfoW(SPI_GETWORKAREA, 0, &work, 0);
+
+            const int minX = static_cast<int>(work.left + 8);
+            const int maxX = std::max(minX, static_cast<int>(work.right - winW - 8));
+            const int clampedX = std::clamp(static_cast<int>(curRect.left), minX, maxX);
+            const int floorY = static_cast<int>(work.bottom - winH);
+            petFallVy_ = std::min(petFallVy_ + 1.4f, 26.0f);
+            petFallY_ += petFallVy_;
+            if (petFallY_ >= static_cast<float>(floorY)) {
+                SetWindowPos(petHwnd_, HWND_TOPMOST, clampedX, floorY, winW, winH, SWP_NOACTIVATE);
+                if (!orbMode_) positionBubble();
+                petBehavior_ = BehIdle;
+                petFallVy_ = 0.0f;
+                petBounceUntil_ = now + 380;
+                spawnPetParticles(4, 2, palette().accent, true);
+                store_.setPetPosition(clampedX, floorY);
+                petNextActAt_ = std::max(petNextActAt_, now + kPetActionIntervalMs);
+            } else {
+                SetWindowPos(petHwnd_, HWND_TOPMOST, clampedX, static_cast<int>(std::round(petFallY_)),
+                             winW, winH, SWP_NOACTIVATE);
+                if (!orbMode_) positionBubble();
+            }
+            return;
+        }
+
+        // 6. 自主活跃行为与追逐鼠标
+        const bool urgentAlert = (snapshot_.counts.needsInput + snapshot_.counts.failedUnread > 0) ||
+                                 now < petNoticeUntil_;
+        const bool canAct = orbMode_ && !petDragging_ && !petHidden_ && !urgentAlert;
+        if (!canAct) {
+            petGestureUntil_ = 0;
+            petNextActAt_ = std::max(petNextActAt_, now + kPetInteractionQuietMs);
+            petWalkDir_ = 0;
+            petChasingMoving_ = false;
+            if (petBehavior_ == BehWalk || (urgentAlert && (petBehavior_ == BehSleep || petBehavior_ == BehSit))) {
+                petBehavior_ = BehIdle;
+                petBehaviorUntil_ = 0;
+            }
+            return;
+        }
+
+        if (petChaseCursor_ && petHwnd_) {
+            petWalkDir_ = 0;
+            if (petBehavior_ != BehIdle) {
+                petBehavior_ = BehIdle;
+                petBehaviorUntil_ = 0;
+            }
+            POINT cursor{};
+            if (!GetCursorPos(&cursor)) {
+                petChasingMoving_ = false;
+                return;
+            }
+            RECT curRect{};
+            GetWindowRect(petHwnd_, &curRect);
+            const int winW = petWinW();
+            const int winH = petWinH();
+            HMONITOR monitor = MonitorFromPoint(cursor, MONITOR_DEFAULTTONEAREST);
+            MONITORINFO info{sizeof(info)};
+            RECT work{};
+            if (GetMonitorInfoW(monitor, &info)) work = info.rcWork;
+            else SystemParametersInfoW(SPI_GETWORKAREA, 0, &work, 0);
+
+            const int minX = static_cast<int>(work.left + 8);
+            const int maxX = std::max(minX, static_cast<int>(work.right - winW - 8));
+            const int petCenterX = static_cast<int>((curRect.left + curRect.right) / 2);
+            const int dx = static_cast<int>(cursor.x) - petCenterX;
+            if (std::abs(dx) > 75) {
+                const int dir = dx > 0 ? 1 : -1;
+                petFacingLeft_ = (dir < 0);
+                const float step = std::clamp(static_cast<float>(std::abs(dx) - 65) * 0.06f, 2.2f, 5.2f);
+                const int nextX = std::clamp(static_cast<int>(std::round(static_cast<float>(curRect.left) + dir * step)),
+                                             minX, maxX);
+                if (nextX != curRect.left) {
+                    petChasingMoving_ = true;
+                    SetWindowPos(petHwnd_, HWND_TOPMOST, nextX, curRect.top, winW, winH, SWP_NOACTIVATE);
+                } else {
+                    petChasingMoving_ = false;
+                }
+            } else {
+                if (petChasingMoving_) {
+                    petChasingMoving_ = false;
+                    petBounceUntil_ = now + 260;
+                    petMoodUntil_ = now + 1400;
+                    petMoodLine_ = L"抓到你的鼠标啦~";
+                    spawnPetParticles(3, 1, color(0xf472b6));
+                    store_.setPetPosition(curRect.left, curRect.top);
+                }
+            }
+            return;
+        }
+        petChasingMoving_ = false;
+
+        if (petHovered_) {
+            petWalkDir_ = 0;
+            if (petBehavior_ == BehWalk) petBehavior_ = BehIdle;
+            return;
+        }
+
+        if (petBehavior_ == BehWalk) {
+            if (!petRoamEnabled_ || petWalkDir_ == 0) {
+                petWalkDir_ = 0;
+                petBehavior_ = BehIdle;
+                return;
+            }
+            RECT curRect{};
+            GetWindowRect(petHwnd_, &curRect);
+            petWalkPosX_ += static_cast<float>(petWalkDir_) * 1.9f;
+            const int nextX = static_cast<int>(std::round(petWalkPosX_));
+            const bool arrived = (petWalkDir_ > 0 && nextX >= petWalkTargetX_) ||
+                                 (petWalkDir_ < 0 && nextX <= petWalkTargetX_);
+            if (arrived) {
+                SetWindowPos(petHwnd_, HWND_TOPMOST, petWalkTargetX_, curRect.top,
+                             petWinW(), petWinH(), SWP_NOACTIVATE);
+                petWalkDir_ = 0;
+                petBehavior_ = BehIdle;
+                petBounceUntil_ = now + 240;
+                petNextActAt_ = std::max(petNextActAt_, now + kPetActionIntervalMs);
+                store_.setPetPosition(petWalkTargetX_, curRect.top);
+            } else {
+                SetWindowPos(petHwnd_, HWND_TOPMOST, nextX, curRect.top,
+                             petWinW(), petWinH(), SWP_NOACTIVATE);
+            }
+            return;
+        }
+
+        if (petBehavior_ == BehSleep) {
+            if (now >= petBehaviorUntil_) {
+                petBehavior_ = BehIdle;
+                petBehaviorUntil_ = 0;
+                petBounceUntil_ = now + 260;
+            } else if ((petTick_ % 34) == 0) {
+                spawnPetParticles(1, 3, palette().accent);
+                if (!petParticles_.empty() && ((petTick_ / 34) % 2) == 1) {
+                    petParticles_.back().size = 9.5f;
+                }
+            }
+            return;
+        }
+
+        if (petBehavior_ == BehSit) {
+            if (now >= petBehaviorUntil_) {
+                petBehavior_ = BehIdle;
+                petBehaviorUntil_ = 0;
+                petBounceUntil_ = now + 240;
+            } else if (snapshot_.counts.running > 0 && (petTick_ % 75) == 0) {
+                spawnPetParticles(2, 0, color(0x60a5fa));
+            }
+            return;
+        }
+
+        // 站立小动作、散步、坐下和睡觉共用一个节拍，眨眼和手动互动不占用该节拍。
+        if (now >= petNextActAt_ && now >= petGestureUntil_ && now >= petBlinkUntil_ &&
+            now >= petMoodUntil_ && now - petLastActiveAt_ >= kPetInteractionQuietMs) {
+            petNextActAt_ = now + 55000 + (nextPetRand() % 10001);
+            SYSTEMTIME st{};
+            GetLocalTime(&st);
+            const bool lateNight = (st.wHour >= 23 || st.wHour < 5);
+            LASTINPUTINFO input{sizeof(input)};
+            const DWORD desktopIdleMs = GetLastInputInfo(&input) ? GetTickCount() - input.dwTime : 0;
+            const bool taskRunning = snapshot_.counts.running > 0;
+            const int roll = static_cast<int>(nextPetRand() % 100);
+            if (!taskRunning && desktopIdleMs >= (lateNight ? 90000u : 240000u) && roll < 35) {
+                petBehavior_ = BehSleep;
+                petBehaviorUntil_ = now + 14000 + (nextPetRand() % 8000);
+                petNextActAt_ += petBehaviorUntil_ - now;
+                petMoodUntil_ = now + 2400;
+                petMoodLine_ = L"好困…先小憩一会儿…Zzz";
+                spawnPetParticles(1, 3, palette().accent);
+                return;
+            }
+            if (!taskRunning && petRoamEnabled_ && desktopIdleMs >= 20000 && roll < 20) {
+                RECT curRect{};
+                GetWindowRect(petHwnd_, &curRect);
+                const int winW = petWinW();
+                const POINT center{(curRect.left + curRect.right) / 2, (curRect.top + curRect.bottom) / 2};
+                HMONITOR monitor = MonitorFromPoint(center, MONITOR_DEFAULTTONEAREST);
+                MONITORINFO info{sizeof(info)};
+                RECT work{};
+                if (GetMonitorInfoW(monitor, &info)) work = info.rcWork;
+                else SystemParametersInfoW(SPI_GETWORKAREA, 0, &work, 0);
+
+                const int minX = static_cast<int>(work.left + 8);
+                const int maxX = std::max(minX, static_cast<int>(work.right - winW - 8));
+                const int leftRoom = curRect.left - minX;
+                const int rightRoom = maxX - curRect.left;
+                const int dist = 70 + static_cast<int>(nextPetRand() % 111);
+                int dir = 0;
+                if (leftRoom >= 40 && rightRoom >= 40) dir = (nextPetRand() % 2 == 0) ? -1 : 1;
+                else if (leftRoom >= 40) dir = -1;
+                else if (rightRoom >= 40) dir = 1;
+
+                if (dir != 0) {
+                    petBehavior_ = BehWalk;
+                    petWalkDir_ = dir;
+                    petFacingLeft_ = (dir < 0);
+                    petWalkPosX_ = static_cast<float>(curRect.left);
+                    petWalkTargetX_ = std::clamp(static_cast<int>(curRect.left) + dir * dist, minX, maxX);
+                    return;
+                }
+            }
+            if (roll >= 20 && roll < (taskRunning ? 55 : 35)) {
+                petBehavior_ = BehSit;
+                petBehaviorUntil_ = now + 8000 + (nextPetRand() % 6000);
+                petNextActAt_ += petBehaviorUntil_ - now;
+                petBounceUntil_ = now + 240;
+                petMoodUntil_ = now + 2600;
+                petMoodLine_ = timeGreetingLine();
+                return;
+            }
+
+            // 按顺序挑下一段可用素材，避免同一个表情反复出现。
+            for (size_t i = 0; i < kIdleGestureCount; ++i) {
+                const size_t gesture = petNextGesture_;
+                petNextGesture_ = (gesture + 1) % kIdleGestureCount;
+                if (petClips_[kFirstIdleGestureClip + gesture][0]) {
+                    petGestureState_ = static_cast<PetState>(PetWave + gesture);
+                    petGestureUntil_ = now + kIdleGestureDurationMs;
+                    petNextActAt_ += kIdleGestureDurationMs;
+                    petNextBlinkAt_ = std::max(petNextBlinkAt_, petGestureUntil_ + 300);
+                    break;
+                }
+            }
+        }
     }
 
+    void drawPetParticle(ID2D1RenderTarget *pt, const PetParticle &p) {
+        const float alpha = std::clamp(1.0f - (p.age / std::max(p.life, 0.01f)), 0.0f, 1.0f);
+        if (alpha <= 0.01f) return;
+
+        if (p.kind == 3) {
+            petBrush_->SetColor(blend(p.color, alpha));
+            if (const auto fmt = textFormat(p.size, true, false, true)) {
+                const wchar_t ch = (p.size >= 11.0f) ? L'Z' : L'z';
+                pt->DrawText(&ch, 1, fmt.Get(),
+                             D2D1::RectF(p.x - 10.0f, p.y - 10.0f, p.x + 10.0f, p.y + 10.0f),
+                             petBrush_.Get());
+            }
+            return;
+        }
+
+        if (p.kind == 2) {
+            petBrush_->SetColor(blend(p.color, alpha * 0.35f));
+            pt->FillEllipse(D2D1::Ellipse(D2D1::Point2F(p.x, p.y), p.size * 0.9f, p.size * 0.9f), petBrush_.Get());
+            petBrush_->SetColor(blend(p.color, alpha));
+            pt->FillEllipse(D2D1::Ellipse(D2D1::Point2F(p.x, p.y), p.size * 0.45f, p.size * 0.45f), petBrush_.Get());
+            return;
+        }
+
+        ComPtr<ID2D1PathGeometry> geom;
+        if (FAILED(d2dFactory_->CreatePathGeometry(&geom))) return;
+        ComPtr<ID2D1GeometrySink> sink;
+        if (FAILED(geom->Open(&sink))) return;
+        const float s = p.size;
+        if (p.kind == 1) {
+            // 贝塞尔小爱心
+            sink->BeginFigure(D2D1::Point2F(p.x, p.y + s * 0.75f), D2D1_FIGURE_BEGIN_FILLED);
+            sink->AddBezier(D2D1::BezierSegment(
+                D2D1::Point2F(p.x - s * 1.1f, p.y + s * 0.15f),
+                D2D1::Point2F(p.x - s * 0.95f, p.y - s * 0.75f),
+                D2D1::Point2F(p.x, p.y - s * 0.25f)));
+            sink->AddBezier(D2D1::BezierSegment(
+                D2D1::Point2F(p.x + s * 0.95f, p.y - s * 0.75f),
+                D2D1::Point2F(p.x + s * 1.1f, p.y + s * 0.15f),
+                D2D1::Point2F(p.x, p.y + s * 0.75f)));
+        } else {
+            // 四角星光
+            const float inner = s * 0.36f;
+            sink->BeginFigure(D2D1::Point2F(p.x, p.y - s), D2D1_FIGURE_BEGIN_FILLED);
+            sink->AddLine(D2D1::Point2F(p.x + inner, p.y - inner));
+            sink->AddLine(D2D1::Point2F(p.x + s, p.y));
+            sink->AddLine(D2D1::Point2F(p.x + inner, p.y + inner));
+            sink->AddLine(D2D1::Point2F(p.x, p.y + s));
+            sink->AddLine(D2D1::Point2F(p.x - inner, p.y + inner));
+            sink->AddLine(D2D1::Point2F(p.x - s, p.y));
+            sink->AddLine(D2D1::Point2F(p.x - inner, p.y - inner));
+        }
+        sink->EndFigure(D2D1_FIGURE_END_CLOSED);
+        sink->Close();
+        petBrush_->SetColor(blend(p.color, alpha));
+        pt->FillGeometry(geom.Get(), petBrush_.Get());
+    }
+
+    const HubTask *pickPetHighlightTask() const {
+        static constexpr std::array<const wchar_t *, 4> kOrder{
+            {L"NEEDS_INPUT", L"FAILED_UNREAD", L"RUNNING", L"COMPLETED_UNREAD"}};
+        for (const wchar_t *status : kOrder) {
+            for (const auto &task : snapshot_.queue) {
+                if (task.status == status) return &task;
+            }
+        }
+        return snapshot_.queue.empty() ? nullptr : &snapshot_.queue.front();
+    }
+
+    void drawPetInfoCapsule(ID2D1RenderTarget *pt, int winW, int winH, int boxW, int boxH, ULONGLONG now) {
+        const Palette &p = palette();
+        const float infoTop = static_cast<float>(kPetTop + boxH + 4);
+        const float infoBottom = static_cast<float>(winH - 2);
+        const float infoW = static_cast<float>(std::clamp(std::max(176, boxW), 160, winW - 8));
+        const float infoLeft = (static_cast<float>(winW) - infoW) * 0.5f;
+        const float infoRight = infoLeft + infoW;
+
+        const D2D1_COLOR_F capsuleBg = darkMode_ ? colorFromArgb(0xdc14181eu) : colorFromArgb(0xeaf8fafcu);
+        const D2D1_ROUNDED_RECT rr = D2D1::RoundedRect(
+            D2D1::RectF(infoLeft, infoTop, infoRight, infoBottom), 12.0f, 12.0f);
+        petBrush_->SetColor(capsuleBg);
+        pt->FillRoundedRectangle(rr, petBrush_.Get());
+        petBrush_->SetColor(p.borderStrong);
+        pt->DrawRoundedRectangle(rr, petBrush_.Get(), 1.0f);
+
+        const HubTask *featured = pickPetHighlightTask();
+        D2D1_COLOR_F dotColor = server_.running() ? p.success : p.danger;
+        std::wstring line1 = server_.running() ? L"空闲待命中" : L"本地服务离线";
+        std::wstring line2 = snapshot_.counts.history > 0
+            ? (L"已处理 " + std::to_wstring(snapshot_.counts.history) + L" 条 · 点击展开")
+            : L"点击展开任务面板";
+
+        if (featured) {
+            dotColor = statusColor(featured->status);
+            line1 = statusLabel(featured->status) + L" · " + sourceLabel(featured->source);
+            if (snapshot_.counts.queue > 1) {
+                line1 += L" (共" + std::to_wstring(snapshot_.counts.queue) + L"条)";
+            }
+            line2 = featured->title.empty() ? L"未命名任务" : featured->title;
+        }
+        if (now < petMoodUntil_ && !petMoodLine_.empty()) {
+            line2 = petMoodLine_;
+        }
+
+        const size_t maxChars1 = std::max<size_t>(12, static_cast<size_t>((infoW - 32.0f) / 10.5f));
+        const size_t maxChars2 = std::max<size_t>(14, static_cast<size_t>((infoW - 20.0f) / 10.0f));
+        line1 = shorten(line1, maxChars1);
+        line2 = shorten(line2, maxChars2);
+
+        petBrush_->SetColor(dotColor);
+        pt->FillEllipse(D2D1::Ellipse(D2D1::Point2F(infoLeft + 12.0f, infoTop + 12.0f), 3.5f, 3.5f), petBrush_.Get());
+
+        petBrush_->SetColor(p.textPrimary);
+        if (const auto fmt1 = textFormat(10.5f, true, false)) {
+            pt->DrawText(line1.c_str(), static_cast<UINT32>(line1.size()), fmt1.Get(),
+                         D2D1::RectF(infoLeft + 21.0f, infoTop + 4.0f, infoRight - 8.0f, infoTop + 21.0f),
+                         petBrush_.Get());
+        }
+        petBrush_->SetColor(p.textSecondary);
+        if (const auto fmt2 = textFormat(10.0f, false, false)) {
+            pt->DrawText(line2.c_str(), static_cast<UINT32>(line2.size()), fmt2.Get(),
+                         D2D1::RectF(infoLeft + 10.0f, infoTop + 21.0f, infoRight - 8.0f, infoBottom - 3.0f),
+                         petBrush_.Get());
+        }
+    }
+
+    void renderPet() {
+        if (!petHwnd_ || petHidden_ || !ensureFactory()) return;
+        const int boxW = petBoxW();
+        const int boxH = petBoxH();
+        const int winW = petWinW();
+        const int winH = petWinH();
+        if (!petBacking_.target && !createBacking(petBacking_, winW, winH)) return;
+        const RECT bindRect{0, 0, winW, winH};
+        if (FAILED(petBacking_.target->BindDC(petBacking_.memDC, &bindRect))) return;
+        ensurePetSprites();
+        if (!petBrush_) {
+            petBacking_.target->CreateSolidColorBrush(D2D1::ColorF(D2D1::ColorF::White), petBrush_.GetAddressOf());
+        }
+        if (!petBrush_) return;
+
+        ID2D1RenderTarget *pt = petBacking_.target.Get();
+        pt->SetTextAntialiasMode(D2D1_TEXT_ANTIALIAS_MODE_CLEARTYPE);
+        pt->SetAntialiasMode(D2D1_ANTIALIAS_MODE_PER_PRIMITIVE);
+        pt->BeginDraw();
+        pt->Clear(D2D1::ColorF(0.0f, 0.0f, 0.0f, 0.0f));
+
+        // 1. 气泡尾巴（固定在左右边距处，不随角色翻转或呼吸缩放）
+        if (!orbMode_) {
+            const float ty = static_cast<float>(kPetTop + boxH / 3);
+            ComPtr<ID2D1PathGeometry> tailGeom;
+            if (SUCCEEDED(d2dFactory_->CreatePathGeometry(&tailGeom))) {
+                ComPtr<ID2D1GeometrySink> sink;
+                if (SUCCEEDED(tailGeom->Open(&sink))) {
+                    if (bubbleOnLeft_) {
+                        sink->BeginFigure(D2D1::Point2F(0.0f, ty - 10.0f), D2D1_FIGURE_BEGIN_FILLED);
+                        sink->AddLine(D2D1::Point2F(static_cast<float>(kPetMargin), ty));
+                        sink->AddLine(D2D1::Point2F(0.0f, ty + 10.0f));
+                    } else {
+                        const float rightEdge = static_cast<float>(winW);
+                        const float tipX = static_cast<float>(winW - kPetMargin);
+                        sink->BeginFigure(D2D1::Point2F(rightEdge, ty - 10.0f), D2D1_FIGURE_BEGIN_FILLED);
+                        sink->AddLine(D2D1::Point2F(tipX, ty));
+                        sink->AddLine(D2D1::Point2F(rightEdge, ty + 10.0f));
+                    }
+                    sink->EndFigure(D2D1_FIGURE_END_CLOSED);
+                    sink->Close();
+                    petBrush_->SetColor(palette().canvas);
+                    pt->FillGeometry(tailGeom.Get(), petBrush_.Get());
+                    petBrush_->SetColor(palette().border);
+                    pt->DrawGeometry(tailGeom.Get(), petBrush_.Get(), 1.0f);
+                }
+            }
+        }
+
+        // 2. 角色动画变换（呼吸 + Q弹回弹 + 跳跃/步态 + 摇摆/拖拽惯性 + 水平镜像）
+        const ULONGLONG now = GetTickCount64();
+        const PetState state = currentPetState(now);
+        if (state != petVisualState_) {
+            petPreviousState_ = petVisualState_;
+            petPreviousElapsed_ = now - petVisualSince_;
+            petVisualState_ = state;
+            petVisualSince_ = now;
+            if (state == PetIdle && (petPreviousState_ == PetSit || petPreviousState_ == PetSleep)) {
+                petNextBlinkAt_ = std::max(petNextBlinkAt_, now + 750);
+            }
+        }
+        const ULONGLONG elapsed = now - petVisualSince_;
+        const ULONGLONG transitionMs = state == PetNotice || state == PetDrag ? 100 : kPetPoseTransitionMs;
+        const float ease = petTransitionEase(elapsed, transitionMs);
+        const auto poseValue = [state, previous = petPreviousState_, ease](auto value) {
+            return value(previous) + (value(state) - value(previous)) * ease;
+        };
+        const bool isWalking = (state == PetWalk);
+        float dy = 0.0f;
+        if (now < petHopUntil_) {
+            const float progress = static_cast<float>(now - petHopSince_) / (petHopUntil_ - petHopSince_);
+            dy -= 56.0f * progress * (1.0f - progress);
+        }
+        if (isWalking && !petClips_[0][0]) {
+            dy -= static_cast<float>(3.0 * std::abs(std::sin(static_cast<double>(elapsed) * 0.014)));
+        }
+
+        const float breathAmpY = poseValue([](PetState pose) {
+            return pose == PetSleep ? 0.017f : (pose == PetSit ? 0.009f : 0.013f);
+        });
+        const float breathAmpX = breathAmpY * 0.46f;
+        const float breath = static_cast<float>(std::sin(static_cast<double>(petTick_) * 0.07));
+        float scaleY = 1.0f + breathAmpY * breath;
+        float scaleX = 1.0f - breathAmpX * breath;
+        if (now < petBounceUntil_) {
+            const float t = 1.0f - static_cast<float>(petBounceUntil_ - now) / 380.0f;
+            const float squash = 0.11f * std::exp(-t * 6.0f) * std::sin(t * 18.0f);
+            scaleY -= squash;
+            scaleX += squash * 0.82f;
+        }
+
+        ID2D1Bitmap *sprite = petAnimationFrame(state, elapsed);
+        // 坐下和入睡共用一组帧，回到待机时倒放，先睁眼再站起来。
+        const bool standingUp = state == PetIdle && petClips_[1][0] &&
+            (petPreviousState_ == PetSit || petPreviousState_ == PetSleep);
+        if (standingUp) {
+            const auto &clip = petClips_[1];
+            const size_t from = petRestFrame(petPreviousState_, petPreviousElapsed_);
+            const size_t step = elapsed / 90;
+            if (step <= from) {
+                sprite = clip[from - step].Get();
+            }
+        }
+
+        const float boxLeft = static_cast<float>(kPetMargin);
+        const float boxTop = static_cast<float>(kPetTop);
+        const float boxRight = static_cast<float>(kPetMargin + boxW);
+        const float boxBottom = static_cast<float>(kPetTop + boxH);
+        const float anchorX = boxLeft + static_cast<float>(boxW) * 0.5f;
+        const float anchorY = boxBottom;
+
+        D2D1::Matrix3x2F transform = D2D1::Matrix3x2F::Identity();
+        if (petFacingLeft_) {
+            transform = transform * D2D1::Matrix3x2F::Scale(-1.0f, 1.0f, D2D1::Point2F(anchorX, anchorY));
+        }
+        transform = transform * D2D1::Matrix3x2F::Scale(scaleX, scaleY, D2D1::Point2F(anchorX, anchorY));
+        if (state == PetDrag) {
+            transform = transform * D2D1::Matrix3x2F::Rotation(petDragAngle_, D2D1::Point2F(anchorX, boxTop));
+        } else {
+            const float baseSway = poseValue([](PetState pose) {
+                return pose == PetSleep ? 0.45f : (pose == PetSit ? 0.6f : 1.2f);
+            });
+            const float walkTilt = poseValue([](PetState pose) { return pose == PetWalk ? 3.0f : 0.0f; })
+                * (petFacingLeft_ ? -1.0f : 1.0f);
+            const float swayAngle = static_cast<float>(baseSway * std::sin(static_cast<double>(petTick_) * 0.055)) +
+                                    petHoverTilt_ + walkTilt;
+            transform = transform * D2D1::Matrix3x2F::Rotation(swayAngle, D2D1::Point2F(anchorX, anchorY));
+        }
+        pt->SetTransform(transform);
+
+        const auto drawSprite = [&](ID2D1Bitmap *bitmap, const D2D1_RECT_F *source = nullptr) {
+            const D2D1_SIZE_F sz = bitmap->GetSize();
+            if (sz.width > 0 && sz.height > 0) {
+                const float scale = std::min(static_cast<float>(boxW) / sz.width,
+                                             static_cast<float>(boxH) / sz.height);
+                const float dw = sz.width * scale;
+                const float dh = sz.height * scale;
+                const float dx = boxLeft + (static_cast<float>(boxW) - dw) * 0.5f;
+                const float drawTop = boxBottom - dh + dy;
+                auto dest = D2D1::RectF(dx, drawTop, dx + dw, drawTop + dh);
+                if (source) {
+                    dest = D2D1::RectF(dx + source->left * scale, drawTop + source->top * scale,
+                                       dx + source->right * scale, drawTop + source->bottom * scale);
+                }
+                pt->DrawBitmap(bitmap, &dest, 1.0f, D2D1_BITMAP_INTERPOLATION_MODE_LINEAR, source);
+            }
+        };
+        if (sprite) {
+            // 姿势逐帧替换。平滑过渡应用于上面的变换，避免两张全身图重叠。
+            drawSprite(sprite);
+            if (state == PetBlink && petClips_[3][0]) {
+                // 眨眼素材共用 376×640 画布，只替换眼部，保持站姿和发丝稳定。
+                const auto &clip = petClips_[3];
+                const size_t frame = std::min<size_t>(elapsed / 33, clip.size() - 1);
+                if (frame > 0 && frame + 1 < clip.size()) {
+                    constexpr D2D1_RECT_F eyes{154.0f, 98.0f, 222.0f, 122.0f};
+                    drawSprite(clip[frame].Get(), &eyes);
+                }
+            }
+        } else {
+            // 兜底图形：素材缺失时画强调色圆形徽章，保证程序可用。
+            const float cx = anchorX;
+            const float cy = boxTop + static_cast<float>(boxH) * 0.5f + dy;
+            const float r = 46.0f;
+            petBrush_->SetColor(palette().accent);
+            pt->FillEllipse(D2D1::Ellipse(D2D1::Point2F(cx, cy), r, r), petBrush_.Get());
+            petBrush_->SetColor(color(0xffffff));
+            if (const auto fmt = textFormat(24.0f, true, false, true)) {
+                pt->DrawText(L"AI", 2, fmt.Get(), D2D1::RectF(cx - r, cy - r, cx + r, cy + r), petBrush_.Get());
+            }
+        }
+        pt->SetTransform(D2D1::Matrix3x2F::Identity());
+
+        // 3. 粒子层（不随角色翻转）
+        for (const auto &particle : petParticles_) {
+            drawPetParticle(pt, particle);
+        }
+
+        // 4. 底部实时任务信息胶囊
+        drawPetInfoCapsule(pt, winW, winH, boxW, boxH, now);
+
+        // 5. 右上方未读角标
+        if (snapshot_.counts.queue > 0) {
+            const int count = snapshot_.counts.queue;
+            const std::wstring value = count > 99 ? L"99+" : std::to_wstring(count);
+            const float badgeW = static_cast<float>(std::max(20, static_cast<int>(value.size()) * 8 + 10));
+            const float badgeH = 18.0f;
+            const float badgeX = boxRight - 40.0f;
+            const float badgeY = static_cast<float>(kPetTop - 14);
+            const D2D1_ROUNDED_RECT rr = D2D1::RoundedRect(
+                D2D1::RectF(badgeX, badgeY, badgeX + badgeW, badgeY + badgeH),
+                badgeH * 0.5f, badgeH * 0.5f);
+            petBrush_->SetColor(palette().danger);
+            pt->FillRoundedRectangle(rr, petBrush_.Get());
+            petBrush_->SetColor(colorFromArgb(0xcc141a22u));
+            pt->DrawRoundedRectangle(rr, petBrush_.Get(), 1.0f);
+            petBrush_->SetColor(color(0xffffff));
+            if (const auto fmt = textFormat(9.0f, true, false, true)) {
+                pt->DrawText(value.c_str(), static_cast<UINT32>(value.size()), fmt.Get(),
+                             D2D1::RectF(badgeX, badgeY, badgeX + badgeW, badgeY + badgeH),
+                             petBrush_.Get());
+            }
+        }
+
+        const HRESULT endHr = pt->EndDraw();
+        if (endHr == D2DERR_RECREATE_TARGET) {
+            destroyPetBacking();
+            return;
+        }
+
+        HDC screenDC = GetDC(nullptr);
+        RECT window{};
+        GetWindowRect(petHwnd_, &window);
+        POINT ptSrc{0, 0};
+        SIZE sizeWnd{winW, winH};
+        POINT ptDst{window.left, window.top};
+        BLENDFUNCTION blend{};
+        blend.BlendOp = AC_SRC_OVER;
+        blend.BlendFlags = 0;
+        blend.SourceConstantAlpha = 255;
+        blend.AlphaFormat = AC_SRC_ALPHA;
+        UpdateLayeredWindow(petHwnd_, screenDC, &ptDst, &sizeWnd, petBacking_.memDC, &ptSrc, 0, &blend, ULW_ALPHA);
+        ReleaseDC(nullptr, screenDC);
+    }
+
+    void positionBubble() {
+        RECT panel{};
+        GetWindowRect(hwnd_, &panel);
+        int w = panel.right - panel.left;
+        int h = panel.bottom - panel.top;
+        if (w < 860 || h < 540) {
+            w = kPanelWidth;
+            h = kPanelHeight;
+        }
+        RECT work{};
+        SystemParametersInfoW(SPI_GETWORKAREA, 0, &work, 0);
+        if (petHwnd_ && !petHidden_) {
+            RECT pet{};
+            GetWindowRect(petHwnd_, &pet);
+            const POINT center{(pet.left + pet.right) / 2, (pet.top + pet.bottom) / 2};
+            HMONITOR monitor = MonitorFromPoint(center, MONITOR_DEFAULTTONEAREST);
+            MONITORINFO info{sizeof(info)};
+            if (GetMonitorInfoW(monitor, &info)) work = info.rcWork;
+            bubbleOnLeft_ = center.x >= (work.left + work.right) / 2;
+            int x = bubbleOnLeft_ ? (pet.left + 1 - w) : (pet.right - 1);
+            x = std::clamp(x, static_cast<int>(work.left + 8), static_cast<int>(work.right - w - 8));
+            const int y = std::clamp(static_cast<int>(pet.top + 40 - h / 3),
+                                     static_cast<int>(work.top + 8),
+                                     static_cast<int>(work.bottom - h - 8));
+            SetWindowPos(hwnd_, HWND_TOP, x, y, w, h, SWP_NOACTIVATE);
+        } else {
+            const int x = work.left + (work.right - work.left - w) / 2;
+            const int y = work.top + (work.bottom - work.top - h) / 2;
+            SetWindowPos(hwnd_, HWND_TOP, x, y, w, h, SWP_NOACTIVATE);
+        }
+    }
+
+    // 隐藏气泡面板并释放离屏图像缓存（原 enterOrbMode 职责）。
     void enterOrbMode() {
         if (orbMode_) return;
         GetWindowRect(hwnd_, &panelRect_);
         orbMode_ = true;
-        orbExpanded_ = false;
-        dragging_ = false;
-        orbHoverSuppressed_ = false;
-        RECT work{};
-        SystemParametersInfoW(SPI_GETWORKAREA, 0, &work, 0);
-        SetWindowLongPtrW(hwnd_, GWL_STYLE, WS_POPUP);
-        SetWindowLongPtrW(hwnd_, GWL_EXSTYLE, WS_EX_LAYERED | WS_EX_NOREDIRECTIONBITMAP | WS_EX_TOOLWINDOW | WS_EX_TOPMOST);
-        SetWindowPos(hwnd_, HWND_TOPMOST, work.right - kOrbSize - 22, work.top + 22,
-                     kOrbSize, kOrbSize, SWP_NOACTIVATE | SWP_SHOWWINDOW | SWP_FRAMECHANGED);
-        SetWindowRgn(hwnd_, CreateEllipticRgn(0, 0, kOrbSize, kOrbSize), TRUE);
-        InvalidateRect(hwnd_, nullptr, FALSE);
+        ShowWindow(hwnd_, SW_HIDE);
+        destroyBacking();
+        if (petHwnd_ && !petHidden_) renderPet();
     }
 
-    void enterPanelMode(bool oppositeSide) {
-        if (!orbMode_) return;
-        POINT center{0, 0};
-        RECT orb{};
-        GetWindowRect(hwnd_, &orb);
-        center.x = (orb.left + orb.right) / 2;
-        center.y = (orb.top + orb.bottom) / 2;
-        HMONITOR monitor = MonitorFromPoint(center, MONITOR_DEFAULTTONEAREST);
-        MONITORINFO info{sizeof(info)};
-        GetMonitorInfoW(monitor, &info);
-        int x = panelRect_.left;
-        int y = panelRect_.top;
-        if (oppositeSide) {
-            const bool onLeft = center.x < (info.rcWork.left + info.rcWork.right) / 2;
-            x = onLeft ? info.rcWork.right - kPanelWidth - 24 : info.rcWork.left + 24;
-            y = std::clamp(center.y - kPanelHeight / 2, info.rcWork.top + 12, info.rcWork.bottom - kPanelHeight - 12);
+    // 在桌宠身旁弹出对话气泡式任务面板（原 enterPanelMode 职责）。
+    void enterPanelMode(bool /*oppositeSide*/) {
+        wakePet(false);
+        petChasingMoving_ = false;
+        if (!orbMode_) {
+            ShowWindow(hwnd_, SW_SHOWNORMAL);
+            SetForegroundWindow(hwnd_);
+            return;
         }
         orbMode_ = false;
-        orbExpanded_ = false;
-        KillTimer(hwnd_, kCollapseTimer);
-        SetWindowRgn(hwnd_, nullptr, TRUE);
         SetWindowLongPtrW(hwnd_, GWL_STYLE, WS_POPUP | WS_THICKFRAME | WS_MAXIMIZEBOX);
         SetWindowLongPtrW(hwnd_, GWL_EXSTYLE, WS_EX_LAYERED | WS_EX_NOREDIRECTIONBITMAP | WS_EX_TOOLWINDOW);
-        SetWindowPos(hwnd_, HWND_NOTOPMOST, x, y, kPanelWidth, kPanelHeight, SWP_SHOWWINDOW | SWP_FRAMECHANGED);
-        InvalidateRect(hwnd_, nullptr, FALSE);
+        positionBubble();
+        ShowWindow(hwnd_, SW_SHOWNORMAL);
+        render();
+        SetForegroundWindow(hwnd_);
+        if (petHwnd_ && !petHidden_) renderPet();
+    }
+
+    void toggleBubble() {
+        if (orbMode_) enterPanelMode(true);
+        else enterOrbMode();
+    }
+
+    void showPetMenu() {
+        if (!petHwnd_) return;
+        POINT cursor{};
+        GetCursorPos(&cursor);
+        HMENU menu = CreatePopupMenu();
+        AppendMenuW(menu, MF_STRING, 1, L"打开收件箱");
+        AppendMenuW(menu, MF_STRING, 2, L"历史记录");
+        AppendMenuW(menu, MF_STRING, 3, L"设置");
+        AppendMenuW(menu, MF_STRING, 4, L"平台接入");
+        AppendMenuW(menu, MF_STRING, 5, L"检查更新");
+        AppendMenuW(menu, MF_SEPARATOR, 0, nullptr);
+        AppendMenuW(menu, MF_STRING, 6, L"一键已读");
+        AppendMenuW(menu, MF_STRING, 12, L"摸摸头");
+        AppendMenuW(menu, MF_STRING, 14, L"戳一戳");
+        AppendMenuW(menu, MF_STRING, 15, L"小憩打盹");
+        AppendMenuW(menu, MF_SEPARATOR, 0, nullptr);
+        AppendMenuW(menu, MF_STRING | (notificationsEnabled_ ? MF_CHECKED : MF_UNCHECKED), 7, L"系统通知");
+        AppendMenuW(menu, MF_STRING | (autoStartEnabled_ ? MF_CHECKED : MF_UNCHECKED), 8, L"开机启动");
+        AppendMenuW(menu, MF_STRING | (darkMode_ ? MF_CHECKED : MF_UNCHECKED), 9, L"深色模式");
+        AppendMenuW(menu, MF_STRING | (petRoamEnabled_ ? MF_CHECKED : MF_UNCHECKED), 13, L"自由走动");
+        AppendMenuW(menu, MF_STRING | (petChaseCursor_ ? MF_CHECKED : MF_UNCHECKED), 16, L"追逐鼠标");
+        AppendMenuW(menu, MF_STRING | (petGravityEnabled_ ? MF_CHECKED : MF_UNCHECKED), 17, L"重力落地");
+
+        HMENU sizeMenu = CreatePopupMenu();
+        AppendMenuW(sizeMenu, MF_STRING | (petScalePercent_ == 75 ? MF_CHECKED : MF_UNCHECKED), 20, L"小 (75%)");
+        AppendMenuW(sizeMenu, MF_STRING | (petScalePercent_ == 100 ? MF_CHECKED : MF_UNCHECKED), 21, L"标准 (100%)");
+        AppendMenuW(sizeMenu, MF_STRING | (petScalePercent_ == 125 ? MF_CHECKED : MF_UNCHECKED), 22, L"大 (125%)");
+        AppendMenuW(sizeMenu, MF_STRING | (petScalePercent_ == 150 ? MF_CHECKED : MF_UNCHECKED), 23, L"超大 (150%)");
+        AppendMenuW(menu, MF_POPUP, reinterpret_cast<UINT_PTR>(sizeMenu), L"桌宠大小");
+
+        AppendMenuW(menu, MF_SEPARATOR, 0, nullptr);
+        AppendMenuW(menu, MF_STRING, 10, L"隐藏桌宠");
+        AppendMenuW(menu, MF_STRING, 11, L"退出");
+        SetForegroundWindow(petHwnd_);
+        const int cmd = TrackPopupMenu(menu, TPM_RETURNCMD | TPM_NONOTIFY, cursor.x, cursor.y, 0, petHwnd_, nullptr);
+        DestroyMenu(menu);
+        const ULONGLONG now = GetTickCount64();
+        switch (cmd) {
+        case 1:
+            performHit(HitQueue);
+            enterPanelMode(true);
+            break;
+        case 2:
+            performHit(HitHistory);
+            enterPanelMode(true);
+            break;
+        case 3:
+            performHit(HitSettings);
+            enterPanelMode(true);
+            break;
+        case 4:
+            page_ = 2;
+            settingsTab_ = 1;
+            selectedId_ = 0;
+            scrollOffset_ = 0;
+            refreshIntegrationStatus();
+            enterPanelMode(true);
+            break;
+        case 5:
+            page_ = 2;
+            settingsTab_ = 3;
+            selectedId_ = 0;
+            scrollOffset_ = 0;
+            startUpdateCheck();
+            enterPanelMode(true);
+            break;
+        case 6:
+            performHit(HitMarkAll);
+            break;
+        case 12:
+            triggerHeadPat();
+            renderPet();
+            break;
+        case 14:
+            triggerPoke();
+            renderPet();
+            break;
+        case 15:
+            wakePet(false);
+            petWalkDir_ = 0;
+            petChaseCursor_ = false;
+            petChasingMoving_ = false;
+            petHovered_ = false;
+            petBehavior_ = BehSleep;
+            petBehaviorUntil_ = now + 15000;
+            petNextActAt_ = std::max(petNextActAt_, petBehaviorUntil_ + kPetActionIntervalMs);
+            petNoticeUntil_ = 0;
+            petMoodUntil_ = now + 2400;
+            petMoodLine_ = L"呼呼…有任务随时叫我…Zzz";
+            spawnPetParticles(1, 3, palette().accent);
+            renderPet();
+            break;
+        case 7:
+            performHit(HitNotifications);
+            break;
+        case 8:
+            performHit(HitAutoStart);
+            break;
+        case 9:
+            toggleDarkMode();
+            break;
+        case 13:
+            petRoamEnabled_ = !petRoamEnabled_;
+            store_.setPetRoamEnabled(petRoamEnabled_);
+            if (!petRoamEnabled_) {
+                petWalkDir_ = 0;
+                if (petBehavior_ == BehWalk) petBehavior_ = BehIdle;
+            }
+            renderPet();
+            break;
+        case 16:
+            petChaseCursor_ = !petChaseCursor_;
+            petChasingMoving_ = false;
+            if (petChaseCursor_) {
+                wakePet(false);
+                petMoodUntil_ = now + 1600;
+                petMoodLine_ = L"盯住你的鼠标啦~";
+            }
+            renderPet();
+            break;
+        case 17:
+            petGravityEnabled_ = !petGravityEnabled_;
+            store_.setPetGravityEnabled(petGravityEnabled_);
+            if (petGravityEnabled_) {
+                wakePet(false);
+                startGravityFallIfNeeded();
+            } else if (petBehavior_ == BehFall) {
+                petBehavior_ = BehIdle;
+                petFallVy_ = 0.0f;
+            }
+            renderPet();
+            break;
+        case 20: applyPetScale(75); break;
+        case 21: applyPetScale(100); break;
+        case 22: applyPetScale(125); break;
+        case 23: applyPetScale(150); break;
+        case 10:
+            petWalkDir_ = 0;
+            petChaseCursor_ = false;
+            petChasingMoving_ = false;
+            if (petBehavior_ == BehWalk) petBehavior_ = BehIdle;
+            petHidden_ = true;
+            if (petHwnd_) ShowWindow(petHwnd_, SW_HIDE);
+            break;
+        case 11:
+            PostMessageW(hwnd_, kQuitMessage, 0, 0);
+            break;
+        default:
+            break;
+        }
     }
 
     void openTask(std::int64_t id) {
@@ -2766,6 +3901,7 @@ private:
 
     void quitApplication() {
         removeTrayIcon();
+        if (petHwnd_) DestroyWindow(petHwnd_);
         if (hwnd_) DestroyWindow(hwnd_);
     }
 
@@ -2854,7 +3990,7 @@ private:
         else if (id == HitQueue) { page_ = 0; selectedId_ = 0; scrollOffset_ = 0; statusFilter_.clear(); }
         else if (id == HitHistory) { page_ = 1; selectedId_ = 0; scrollOffset_ = 0; statusFilter_.clear(); }
         else if (id == HitSettings) { page_ = 2; selectedId_ = 0; scrollOffset_ = 0; }
-        else if (id == HitOrb) { if (orbMode_) enterPanelMode(true); else enterOrbMode(); }
+        else if (id == HitOrb) toggleBubble();
         else if (id == HitMarkAll) store_.markAllViewed();
         else if (id == HitOpenSelected && selectedId_ > 0) openTask(selectedId_);
         else if (id == HitViewSelected && selectedId_ > 0) store_.setStatus(selectedId_, L"VIEWED");
@@ -2956,7 +4092,6 @@ private:
             const std::int64_t taskId = id - HitCardBase;
             selectedId_ = taskId;
             detailScrollOffset_ = 0;
-            if (orbMode_ && orbExpanded_) { page_ = 0; enterPanelMode(true); }
         }
         if (selectedId_ > 0) {
             detailEvents_ = store_.events(selectedId_);
@@ -2964,54 +4099,6 @@ private:
         }
         InvalidateRect(hwnd_, nullptr, FALSE);
     }
-
-    void beginOrbPointer(POINT screenPoint) {
-        // 防止悬停展开留下的收起计时器在拖动途中改写窗口尺寸或位置。
-        KillTimer(hwnd_, kCollapseTimer);
-        dragging_ = true;
-        dragMoved_ = false;
-        pressScreen_ = screenPoint;
-        if (orbExpanded_) pressWindow_ = orbRectScreen();
-        else GetWindowRect(hwnd_, &pressWindow_);
-        SetCapture(hwnd_);
-    }
-
-    void moveOrbPointer(POINT screenPoint) {
-        if (!dragging_) return;
-        const int dx = screenPoint.x - pressScreen_.x;
-        const int dy = screenPoint.y - pressScreen_.y;
-        if (!dragMoved_ && dx * dx + dy * dy >= 25) {
-            dragMoved_ = true;
-            if (orbExpanded_) collapseOrb();
-        }
-        if (!dragMoved_) return;
-        HMONITOR monitor = MonitorFromPoint(screenPoint, MONITOR_DEFAULTTONEAREST);
-        MONITORINFO info{sizeof(info)};
-        GetMonitorInfoW(monitor, &info);
-        const int width = kOrbSize;
-        const int height = kOrbSize;
-        const int x = std::clamp(pressWindow_.left + dx, info.rcWork.left + 2, info.rcWork.right - width - 2);
-        const int y = std::clamp(pressWindow_.top + dy, info.rcWork.top + 2, info.rcWork.bottom - height - 2);
-        SetWindowPos(hwnd_, HWND_TOPMOST, x, y, width, height, SWP_NOACTIVATE | SWP_SHOWWINDOW);
-        InvalidateRect(hwnd_, nullptr, FALSE);
-    }
-
-    void endOrbPointer() {
-        if (!dragging_) return;
-        const bool wasDrag = dragMoved_;
-        dragging_ = false;
-        dragMoved_ = false;
-        ReleaseCapture();
-        if (!wasDrag) {
-            openPanelFromOrb();
-        } else {
-            // 松开后鼠标仍停在小球上，暂时锁住悬停展开，避免拖动完成瞬间又展开到旁边。
-            orbHoverSuppressed_ = true;
-            InvalidateRect(hwnd_, nullptr, FALSE);
-        }
-    }
-
-    void openPanelFromOrb() { enterPanelMode(true); }
 
     int countForSource(const wchar_t *source) const {
         int count = 0;
@@ -3229,6 +4316,211 @@ private:
         }
     }
 
+    static LRESULT CALLBACK petProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam) {
+        Win32App *app = reinterpret_cast<Win32App *>(GetWindowLongPtrW(hwnd, GWLP_USERDATA));
+        if (message == WM_NCCREATE) {
+            const auto *create = reinterpret_cast<CREATESTRUCTW *>(lParam);
+            app = static_cast<Win32App *>(create->lpCreateParams);
+            SetWindowLongPtrW(hwnd, GWLP_USERDATA, reinterpret_cast<LONG_PTR>(app));
+            app->petHwnd_ = hwnd;
+        }
+        if (!app) return DefWindowProcW(hwnd, message, wParam, lParam);
+        switch (message) {
+        case WM_ERASEBKGND:
+            return 1;
+        case WM_PAINT: {
+            PAINTSTRUCT paint{};
+            BeginPaint(hwnd, &paint);
+            app->renderPet();
+            EndPaint(hwnd, &paint);
+            return 0;
+        }
+        case WM_LBUTTONDOWN: {
+            POINT screen{};
+            if (!GetCursorPos(&screen)) {
+                screen = POINT{GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam)};
+                ClientToScreen(hwnd, &screen);
+            }
+            app->petPressScreen_ = screen;
+            app->petPrevMoveX_ = screen.x;
+            GetWindowRect(hwnd, &app->petPressWindow_);
+            app->petWalkDir_ = 0;
+            app->petChasingMoving_ = false;
+            if (app->petBehavior_ == BehSleep || app->petBehavior_ == BehSit ||
+                app->petBehavior_ == BehWalk || app->petBehavior_ == BehFall) {
+                app->petBehavior_ = BehIdle;
+                app->petBehaviorUntil_ = 0;
+                app->petFallVy_ = 0.0f;
+            }
+            app->petLastActiveAt_ = GetTickCount64();
+            app->petDragging_ = true;
+            app->petMoved_ = false;
+            SetCapture(hwnd);
+            return 0;
+        }
+        case WM_MOUSEMOVE: {
+            if (app->petDragging_) {
+                POINT screen{};
+                if (!GetCursorPos(&screen)) {
+                    screen = POINT{GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam)};
+                    ClientToScreen(hwnd, &screen);
+                }
+                const int dx = screen.x - app->petPressScreen_.x;
+                const int dy = screen.y - app->petPressScreen_.y;
+                const int stepDx = screen.x - app->petPrevMoveX_;
+                app->petPrevMoveX_ = screen.x;
+                if (!app->petMoved_ && dx * dx + dy * dy >= 25) {
+                    app->petMoved_ = true;
+                    app->petWalkDir_ = 0;
+                }
+                if (app->petMoved_) {
+                    app->petDragAngularVel_ = std::clamp(
+                        app->petDragAngularVel_ + static_cast<float>(stepDx) * 1.4f, -220.0f, 220.0f);
+                    const int winW = app->petWinW();
+                    const int winH = app->petWinH();
+                    HMONITOR monitor = MonitorFromPoint(screen, MONITOR_DEFAULTTONEAREST);
+                    MONITORINFO info{sizeof(info)};
+                    GetMonitorInfoW(monitor, &info);
+                    const int x = std::clamp(static_cast<int>(app->petPressWindow_.left + dx),
+                                             static_cast<int>(info.rcWork.left),
+                                             static_cast<int>(info.rcWork.right - winW));
+                    const int y = std::clamp(static_cast<int>(app->petPressWindow_.top + dy),
+                                             static_cast<int>(info.rcWork.top),
+                                             static_cast<int>(info.rcWork.bottom - winH));
+                    SetWindowPos(hwnd, HWND_TOPMOST, x, y, winW, winH, SWP_NOACTIVATE | SWP_SHOWWINDOW);
+                    if (!app->orbMode_) app->positionBubble();
+                    app->renderPet();
+                }
+                return 0;
+            }
+            app->petWalkDir_ = 0;
+            const ULONGLONG now = GetTickCount64();
+            app->petLastActiveAt_ = now;
+            const bool wasSleeping = (app->petBehavior_ == BehSleep);
+            if (wasSleeping) {
+                app->wakePet(true);
+            }
+            if (!app->petHovered_) {
+                app->petHovered_ = true;
+                if (!wasSleeping) {
+                    app->petBounceUntil_ = now + 260;
+                    app->spawnPetParticles(2, 0, color(0x60a5fa));
+                }
+            }
+            const int lx = GET_X_LPARAM(lParam);
+            const int ly = GET_Y_LPARAM(lParam);
+            const float halfW = static_cast<float>(app->petWinW()) * 0.5f;
+            const float rel = std::clamp((static_cast<float>(lx) - halfW) / std::max(halfW, 1.0f), -1.0f, 1.0f);
+            app->petTargetHoverTilt_ = rel * 3.5f;
+
+            // 头顶区域来回轻抚触发摸摸头
+            const int headTop = kPetTop;
+            const int headBottom = kPetTop + static_cast<int>(static_cast<float>(app->petBoxH()) * 0.34f);
+            if (ly >= headTop && ly <= headBottom) {
+                if (now > app->petRubWindowStart_ + 1200) {
+                    app->petRubWindowStart_ = now;
+                    app->petRubTurns_ = 0;
+                    app->petRubLastDir_ = 0;
+                    app->petRubLastX_ = lx;
+                } else {
+                    const int dx = lx - app->petRubLastX_;
+                    if (std::abs(dx) >= 6) {
+                        const int dir = dx > 0 ? 1 : -1;
+                        if (app->petRubLastDir_ != 0 && dir != app->petRubLastDir_) {
+                            ++app->petRubTurns_;
+                        }
+                        app->petRubLastDir_ = dir;
+                        app->petRubLastX_ = lx;
+                        app->petRubWindowStart_ = now;
+                        if (app->petRubTurns_ >= 3 && now >= app->petLastPatAt_ + 2500) {
+                            app->petLastPatAt_ = now;
+                            app->petRubTurns_ = 0;
+                            app->triggerHeadPat();
+                            app->renderPet();
+                        }
+                    }
+                }
+            } else {
+                app->petRubTurns_ = 0;
+                app->petRubLastDir_ = 0;
+            }
+
+            TRACKMOUSEEVENT track{sizeof(track), TME_LEAVE, hwnd, 0};
+            TrackMouseEvent(&track);
+            return 0;
+        }
+        case WM_MOUSELEAVE:
+            app->petHovered_ = false;
+            app->petTargetHoverTilt_ = 0.0f;
+            app->petRubTurns_ = 0;
+            app->petRubLastDir_ = 0;
+            app->petRubWindowStart_ = 0;
+            return 0;
+        case WM_MBUTTONUP:
+            app->triggerPoke();
+            app->renderPet();
+            return 0;
+        case WM_LBUTTONUP: {
+            if (!app->petDragging_) return 0;
+            const bool wasMoved = app->petMoved_;
+            app->petDragging_ = false;
+            app->petMoved_ = false;
+            ReleaseCapture();
+            const ULONGLONG now = GetTickCount64();
+            app->petLastActiveAt_ = now;
+            if (!wasMoved) {
+                app->petBounceUntil_ = now + 320;
+                app->toggleBubble();
+            } else {
+                app->petBounceUntil_ = now + 380;
+                RECT rect{};
+                GetWindowRect(hwnd, &rect);
+                app->store_.setPetPosition(rect.left, rect.top);
+                if (app->petGravityEnabled_) {
+                    app->startGravityFallIfNeeded();
+                }
+                app->renderPet();
+            }
+            return 0;
+        }
+        case WM_MOUSEWHEEL: {
+            if ((GetKeyState(VK_CONTROL) & 0x8000) != 0) {
+                const int delta = GET_WHEEL_DELTA_WPARAM(wParam);
+                if (delta != 0) {
+                    app->applyPetScale(app->petScalePercent_ + (delta > 0 ? 10 : -10));
+                }
+            }
+            return 0;
+        }
+        case WM_CAPTURECHANGED:
+        case WM_CANCELMODE:
+            if (app->petDragging_) {
+                app->petDragging_ = false;
+                app->petMoved_ = false;
+                app->renderPet();
+            }
+            return 0;
+        case WM_RBUTTONUP:
+            app->showPetMenu();
+            return 0;
+        case WM_TIMER:
+            if (wParam == kPetAnimTimer && !app->petHidden_ && IsWindowVisible(hwnd)) {
+                ++app->petTick_;
+                app->stepPetSimulation();
+                app->renderPet();
+            }
+            return 0;
+        case WM_CLOSE:
+            return 0;
+        case WM_DESTROY:
+            KillTimer(hwnd, kPetAnimTimer);
+            if (app->petHwnd_ == hwnd) app->petHwnd_ = nullptr;
+            return 0;
+        default:
+            return DefWindowProcW(hwnd, message, wParam, lParam);
+        }
+    }
+
     static LRESULT CALLBACK windowProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam) {
         Win32App *app = reinterpret_cast<Win32App *>(GetWindowLongPtrW(hwnd, GWLP_USERDATA));
         if (message == WM_NCCREATE) {
@@ -3261,31 +4553,8 @@ private:
             InvalidateRect(hwnd, nullptr, FALSE);
             return 0;
         case WM_MOUSEMOVE: {
+            if (app->orbMode_) return 0;
             POINT point{GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam)};
-            if (app->orbMode_) {
-                TRACKMOUSEEVENT track{sizeof(track), TME_LEAVE, hwnd, 0};
-                TrackMouseEvent(&track);
-                if (app->dragging_) {
-                    // 窗口会在拖动过程中不断移动，WM_MOUSEMOVE 的 lParam 可能仍是旧窗口
-                    // 坐标；直接读取屏幕坐标可避免一次拖动被重复偏移到屏幕外。
-                    POINT screen{};
-                    GetCursorPos(&screen);
-                    app->moveOrbPointer(screen);
-                }
-                else {
-                    const RECT orb = app->orbRectLocal();
-                    if (PtInRect(&orb, point)) {
-                        if (app->orbHoverSuppressed_) return 0;
-                        KillTimer(hwnd, kCollapseTimer);
-                        app->expandOrb();
-                    }
-                    else {
-                        app->orbHoverSuppressed_ = false;
-                        if (app->orbExpanded_) SetTimer(hwnd, kCollapseTimer, 180, nullptr);
-                    }
-                }
-                return 0;
-            }
             const int hot = app->hitAt(point);
             const auto task = app->taskAt(point);
             if (hot != app->hotHit_ || task != app->hotTaskId_) {
@@ -3297,32 +4566,16 @@ private:
             return 0;
         }
         case WM_MOUSELEAVE:
-            if (app->orbMode_) {
-                app->orbHoverSuppressed_ = false;
-                if (app->orbExpanded_) SetTimer(hwnd, kCollapseTimer, 180, nullptr);
-            }
             app->hotHit_ = HitNone;
             app->hotTaskId_ = 0;
             InvalidateRect(hwnd, nullptr, FALSE);
             return 0;
         case WM_LBUTTONDOWN: {
+            if (app->orbMode_) return 0;
             POINT point{GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam)};
             app->pressedHit_ = app->hitAt(point);
             app->pressedTaskId_ = app->taskAt(point);
             app->searchFocus_ = app->pressedHit_ == HitSearch;
-            if (app->orbMode_) {
-                const RECT orb = app->orbRectLocal();
-                if (PtInRect(&orb, point)) {
-                    POINT screen{};
-                    if (!GetCursorPos(&screen)) {
-                        screen = point;
-                        ClientToScreen(hwnd, &screen);
-                    }
-                    app->beginOrbPointer(screen);
-                    return 0;
-                }
-                return 0;
-            }
             const int hit = app->hitAt(point);
             // 顶部拖动区：左侧 (0,0)..(width-280,46) 视为标题栏
             const int dragRight = app->clientWidth() - 280;
@@ -3334,10 +4587,7 @@ private:
             return 0;
         }
         case WM_LBUTTONUP: {
-            if (app->orbMode_ && app->dragging_) {
-                app->pressedHit_ = HitNone;
-                app->endOrbPointer(); return 0;
-            }
+            if (app->orbMode_) return 0;
             POINT point{GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam)};
             const int hit = app->hitAt(point);
             if (hit == app->pressedHit_ && app->taskAt(point) == app->pressedTaskId_) {
@@ -3349,7 +4599,6 @@ private:
         }
         case WM_CAPTURECHANGED:
         case WM_CANCELMODE:
-            app->dragging_ = false;
             app->pressedHit_ = HitNone;
             return 0;
         case WM_SETCURSOR:
@@ -3471,13 +4720,6 @@ private:
                 KillTimer(hwnd, kStartupActivateTimer);
                 app->activateAtStartup();
             }
-            else if (wParam == kCollapseTimer && app->orbMode_ && app->orbExpanded_ && !app->dragging_) {
-                POINT cursor{};
-                GetCursorPos(&cursor);
-                RECT window{};
-                GetWindowRect(hwnd, &window);
-                if (!PtInRect(&window, cursor)) app->collapseOrb();
-            }
             else if (wParam == kRefreshTimer) {
                 // 任务由事件消息刷新；只在可见的接入页检查扩展心跳。
                 if (!app->orbMode_ && app->page_ == 2 && app->settingsTab_ == 1) {
@@ -3499,21 +4741,32 @@ private:
         case kTrayMessage: {
             // NOTIFYICON_VERSION_4 将托盘事件放在 lParam 低字中，不能直接比较整个 LPARAM。
             const UINT trayEvent = LOWORD(static_cast<ULONG_PTR>(lParam));
-            if (trayEvent == WM_LBUTTONUP || trayEvent == WM_LBUTTONDBLCLK) app->enterPanelMode(false);
-            else if (trayEvent == NIN_BALLOONUSERCLICK) app->enterPanelMode(false);
+            if (trayEvent == WM_LBUTTONUP || trayEvent == WM_LBUTTONDBLCLK) app->toggleBubble();
+            else if (trayEvent == NIN_BALLOONUSERCLICK) app->enterPanelMode(true);
             else if (trayEvent == WM_RBUTTONUP || trayEvent == WM_CONTEXTMENU) {
                 POINT cursor{};
                 GetCursorPos(&cursor);
                 HMENU menu = CreatePopupMenu();
-                AppendMenuW(menu, MF_STRING, 1, L"打开任务中心");
-                AppendMenuW(menu, MF_STRING, 2, L"收起为悬浮球");
+                AppendMenuW(menu, MF_STRING, 1, L"打开任务面板");
+                AppendMenuW(menu, MF_STRING, 2, app->petHidden_ ? L"显示桌宠" : L"隐藏桌宠");
                 AppendMenuW(menu, MF_SEPARATOR, 0, nullptr);
-                AppendMenuW(menu, MF_STRING, 3, L"结束进程");
+                AppendMenuW(menu, MF_STRING, 3, L"退出");
                 SetForegroundWindow(hwnd);
                 const int command = TrackPopupMenu(menu, TPM_RETURNCMD | TPM_NONOTIFY, cursor.x, cursor.y, 0, hwnd, nullptr);
                 DestroyMenu(menu);
-                if (command == 1) app->enterPanelMode(false);
-                else if (command == 2) app->enterOrbMode();
+                if (command == 1) app->enterPanelMode(true);
+                else if (command == 2) {
+                    if (app->petHidden_) {
+                        app->petHidden_ = false;
+                        if (app->petHwnd_) {
+                            ShowWindow(app->petHwnd_, SW_SHOWNOACTIVATE);
+                            app->renderPet();
+                        }
+                    } else {
+                        app->petHidden_ = true;
+                        if (app->petHwnd_) ShowWindow(app->petHwnd_, SW_HIDE);
+                    }
+                }
                 else if (command == 3) PostMessageW(hwnd, kQuitMessage, 0, 0);
             }
             return 0;
@@ -3526,7 +4779,10 @@ private:
             return 0;
         case WM_DESTROY:
             app->removeTrayIcon();
-            KillTimer(hwnd, kCollapseTimer);
+            if (app->petHwnd_) {
+                KillTimer(app->petHwnd_, kPetAnimTimer);
+                DestroyWindow(app->petHwnd_);
+            }
             KillTimer(hwnd, kRefreshTimer);
             // 更新检查还在跑时，等它收尾再退出（最多 2 秒），避免进程结束时线程还在 WinHTTP 里。
             g_updateStop = true;
@@ -3548,6 +4804,7 @@ private:
 
     HINSTANCE instance_ = nullptr;
     HWND hwnd_ = nullptr;
+    HWND petHwnd_ = nullptr;
     HWND notificationHwnd_ = nullptr;
     UINT taskbarCreatedMessage_ = 0;
     NOTIFYICONDATAW tray_{};
@@ -3565,6 +4822,18 @@ private:
     std::map<std::wstring, ComPtr<ID2D1Bitmap>> previewBitmaps_;
     std::map<int, ComPtr<IDWriteTextFormat>> formats_;
     MemoryBacking backing_{};
+    MemoryBacking petBacking_{};
+    ComPtr<ID2D1SolidColorBrush> petBrush_;
+    std::array<ComPtr<ID2D1Bitmap>, 8> petSprites_;
+    std::array<std::array<ComPtr<ID2D1Bitmap>, 8>, kFirstIdleGestureClip + kIdleGestureCount> petClips_;
+    size_t petNextGesture_ = PetNod - PetWave;
+    PetState petGestureState_ = PetWave;
+    ULONGLONG petGestureUntil_ = 0;
+    PetState petVisualState_ = PetIdle;
+    PetState petPreviousState_ = PetIdle;
+    ULONGLONG petVisualSince_ = 0;
+    ULONGLONG petPreviousElapsed_ = 0;
+    bool petSpritesLoaded_ = false;
     std::wstring loadedWallpaper_;
     std::wstring loadedAvatar_;
     std::wstring serverWarning_;
@@ -3572,6 +4841,9 @@ private:
     std::wstring notificationBody_;
     std::wstring notificationIcon_ = L"✓";
     COLORREF notificationAccent_ = RGB(34, 197, 94);
+    bool notificationHasTail_ = false;
+    bool notificationTailDown_ = true;
+    int notificationContentTopOffset_ = 0;
     IntegrationStatus integrationStatus_{};
     std::wstring integrationMessage_;
     std::wstring sourceFilter_;
@@ -3584,8 +4856,8 @@ private:
     RECT detailViewport_{};
     RECT panelRect_{0, 0, kPanelWidth, kPanelHeight};
     bool snapshotInitialized_ = false;
-    POINT pressScreen_{};
-    RECT pressWindow_{};
+    POINT petPressScreen_{};
+    RECT petPressWindow_{};
     int page_ = 0;
     int selectedId_ = 0;
     int hotHit_ = HitNone;
@@ -3597,12 +4869,52 @@ private:
     std::int64_t pressedTaskId_ = 0;
     int scrollOffset_ = 0;
     int detailScrollOffset_ = 0;
-    bool orbMode_ = false;
-    bool orbExpanded_ = false;
-    bool panelToLeft_ = false;
-    bool orbHoverSuppressed_ = false;
-    bool dragging_ = false;
-    bool dragMoved_ = false;
+    // 气泡面板是否处于隐藏状态（保留成员名减少改动范围，true 表示仅显示桌宠）。
+    bool orbMode_ = true;
+    bool petHidden_ = false;
+    bool petDragging_ = false;
+    bool petMoved_ = false;
+    bool petRoamEnabled_ = true;
+    bool petGravityEnabled_ = false;
+    bool petChaseCursor_ = false;
+    bool petChasingMoving_ = false;
+    bool petHovered_ = false;
+    bool petFacingLeft_ = false;
+    bool petPendingDoubleBlink_ = false;
+    bool bubbleOnLeft_ = true;
+    PetBehavior petBehavior_ = BehIdle;
+    int petScalePercent_ = 100;
+    int petTick_ = 0;
+    int petPrevMoveX_ = 0;
+    int petWalkDir_ = 0;
+    int petWalkTargetX_ = 0;
+    int petRubLastX_ = 0;
+    int petRubLastDir_ = 0;
+    int petRubTurns_ = 0;
+    float petWalkPosX_ = 0.0f;
+    float petFallY_ = 0.0f;
+    float petFallVy_ = 0.0f;
+    float petDragAngle_ = 0.0f;
+    float petDragAngularVel_ = 0.0f;
+    float petHoverTilt_ = 0.0f;
+    float petTargetHoverTilt_ = 0.0f;
+    std::uint32_t petRandState_ = 0x12345678u;
+    ULONGLONG petHopSince_ = 0;
+    ULONGLONG petHopUntil_ = 0;
+    ULONGLONG petBounceUntil_ = 0;
+    ULONGLONG petMoodUntil_ = 0;
+    ULONGLONG petNoticeUntil_ = 0;
+    ULONGLONG petBlinkUntil_ = 0;
+    ULONGLONG petNextBlinkAt_ = 0;
+    ULONGLONG petNextActAt_ = 0;
+    ULONGLONG petBehaviorUntil_ = 0;
+    ULONGLONG petLastActiveAt_ = 0;
+    ULONGLONG petRubWindowStart_ = 0;
+    ULONGLONG petLastPatAt_ = 0;
+    std::size_t petPatLineIdx_ = 0;
+    std::size_t petPokeLineIdx_ = 0;
+    std::wstring petMoodLine_;
+    std::vector<PetParticle> petParticles_;
     bool searchFocus_ = false;
     bool darkMode_ = true;
     bool notificationsEnabled_ = true;

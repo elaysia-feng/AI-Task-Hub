@@ -1,4 +1,4 @@
-param(
+﻿param(
     [Parameter(Mandatory=$true)][string]$Executable,
     [Parameter(Mandatory=$true)][string]$OutputDirectory,
     [switch]$AppearanceOnly
@@ -21,6 +21,7 @@ public static class HubUiVerify {
     [DllImport("user32.dll")] public static extern bool SetForegroundWindow(IntPtr hwnd);
     [DllImport("user32.dll")] public static extern bool BringWindowToTop(IntPtr hwnd);
     [DllImport("user32.dll")] public static extern bool ShowWindow(IntPtr hwnd, int command);
+    [DllImport("user32.dll")] public static extern bool IsWindowVisible(IntPtr hwnd);
     [DllImport("user32.dll")] public static extern bool UpdateWindow(IntPtr hwnd);
     [DllImport("user32.dll")] public static extern bool PrintWindow(IntPtr hwnd, IntPtr hdcBlt, uint flags);
     [DllImport("user32.dll")] public static extern bool SetProcessDPIAware();
@@ -106,20 +107,28 @@ function Memory([string]$name) {
     Write-Output "$name private=$([math]::Round($process.PrivateMemorySize64/1MB,1)) MiB; workingSet=$([math]::Round($process.WorkingSet64/1MB,1)) MiB"
 }
 try {
+    $petWindow = [IntPtr]::Zero
     for ($i=0; $i -lt 30; $i++) {
         Start-Sleep -Milliseconds 200
-        $script:window = [HubUiVerify]::FindWindow('AI_TASK_HUB_WIN32_WINDOW', 'AI Task Hub')
-        if ($script:window -ne [IntPtr]::Zero) { break }
+        $petWindow = [HubUiVerify]::FindWindow('AI_TASK_HUB_WIN32_PET', 'AI Task Hub 桌宠')
+        if ($petWindow -ne [IntPtr]::Zero) { break }
     }
-    if ($script:window -eq [IntPtr]::Zero) { throw 'GUI 未出现' }
+    if ($petWindow -eq [IntPtr]::Zero) { throw '桌宠 GUI 未出现' }
+    $script:window = $petWindow
     Activate-Window
     Start-Sleep -Milliseconds 500
     $initial = Rect
-    if ($initial.Right-$initial.Left -ne 52) { throw '启动悬浮球尺寸异常' }
+    if (($initial.Right - $initial.Left) -ne 226 -or ($initial.Bottom - $initial.Top) -ne 382) {
+        throw "启动桌宠尺寸异常: $($initial.Right - $initial.Left)x$($initial.Bottom - $initial.Top)"
+    }
     if ($AppearanceOnly) {
-        Move-Pointer 26 26
+        Click-Local 113 191
         Start-Sleep -Milliseconds 250
-        Click 50 327
+        $panelWindow = [HubUiVerify]::FindWindow('AI_TASK_HUB_WIN32_WINDOW', 'AI Task Hub')
+        if ($panelWindow -eq [IntPtr]::Zero -or -not [HubUiVerify]::IsWindowVisible($panelWindow)) {
+            throw '点击桌宠未弹出气泡面板'
+        }
+        $script:window = $panelWindow
         Resize 1004 644
         Click 68 198
         $appearanceRect = Rect
@@ -155,8 +164,8 @@ try {
         Write-Output 'PASS appearance preset selection, scoped reset and image refresh'
         return
     }
-    Shot '01-orb'
-    Memory 'orb-start'
+    Shot '01-pet'
+    Memory 'pet-start'
     # 测试库由调用方准备；只向此隔离程序发送模拟事件。
     $status = Invoke-RestMethod 'http://127.0.0.1:17891/api/status'
     if (-not $status.db.database.StartsWith([IO.Path]::GetDirectoryName($Executable))) { throw '服务并非隔离进程，停止测试' }
@@ -180,17 +189,18 @@ try {
     foreach ($row in $rows) {
         Invoke-RestMethod 'http://127.0.0.1:17891/api/events' -Method Post -ContentType 'application/json; charset=utf-8' -Body ([Text.Encoding]::UTF8.GetBytes(($row | ConvertTo-Json -Compress))) | Out-Null
     }
-    Move-Pointer 26 26 20
-    $expandedOrb = Rect
-    if (($expandedOrb.Right - $expandedOrb.Left) -ne 240) { throw '悬浮球没有展开为概览面板' }
-    # 直接向展开态窗口发送按钮点击，避免自动化光标坐标在窗口重定位时触发收起计时器。
-    Click-Local 50 327
-    Start-Sleep -Milliseconds 220
+    Click-Local 113 191
+    Start-Sleep -Milliseconds 250
+    $panelWindow = [HubUiVerify]::FindWindow('AI_TASK_HUB_WIN32_WINDOW', 'AI Task Hub')
+    if ($panelWindow -eq [IntPtr]::Zero -or -not [HubUiVerify]::IsWindowVisible($panelWindow)) {
+        throw '点击桌宠没有弹出气泡面板'
+    }
+    $script:window = $panelWindow
     Shot '02-panel-opened'
     Resize 1004 644
     Shot '03-tasks'
     Memory 'panel'
-    Click 740 209
+    Click 588 209
     Shot '04-codex-filter'
     Click 300 350
     Shot '05-detail'
@@ -215,7 +225,7 @@ try {
     Shot '11-light'
     # 先筛选 GPT 网页，避免任务排序或两列换行让固定坐标误点到其他来源。
     Click 68 110
-    Click 430 209
+    Click 365 209
     # 卡片动作常显，直接点击右下角忽略按钮，不依赖真实鼠标 hover。
     Click-Local 484 417
     Start-Sleep -Milliseconds 220
@@ -230,28 +240,34 @@ try {
     Shot '12-small-appearance'
     Click 395 134
     Shot '13-small-integrations'
-    # 860 宽窗口的关闭按钮只应收起为悬浮球，不能销毁窗口或结束进程。
+    # 860 宽窗口的关闭按钮只应隐藏气泡面板，桌宠保持可见且不能销毁主窗口。
     Click 834 23
     Start-Sleep -Milliseconds 300
-    if ((Rect).Right-(Rect).Left -ne 52) { throw '标题栏关闭没有收起为悬浮球' }
-    Move-Pointer -10 -10
-    Start-Sleep -Milliseconds 350
-    Memory 'orb-after-panel'
-    $ball = Rect
-    if ($ball.Right-$ball.Left -ne 52) { throw '收起后不是圆球窗口' }
-    # 捕获后按屏幕坐标拖动，松开不应打开主窗口。
-    $point = (26 -shl 16) -bor 26
+    if ([HubUiVerify]::IsWindowVisible($panelWindow)) { throw '标题栏关闭没有隐藏气泡面板' }
+    if (-not [HubUiVerify]::IsWindowVisible($petWindow)) { throw '关闭气泡面板后桌宠消失' }
+    $script:window = $petWindow
+    Memory 'pet-after-panel'
+    $petBefore = Rect
+    # 捕获后按屏幕坐标拖动桌宠，松开不应打开气泡面板，且桌宠位置应当变化。
+    [HubUiVerify]::SetCursorPos($petBefore.Left + 113, $petBefore.Top + 191) | Out-Null
+    $point = (191 -shl 16) -bor 113
+    $dragPoint = (111 -shl 16) -bor 43
     Send 0x201 1 $point
-    [HubUiVerify]::SetCursorPos($ball.Left-70, $ball.Top+100) | Out-Null
-    Send 0x200 1 $point
-    Send 0x202 0 $point
+    [HubUiVerify]::SetCursorPos($petBefore.Left - 70, $petBefore.Top - 80) | Out-Null
+    Send 0x200 1 $dragPoint
+    Send 0x202 0 $dragPoint
     Start-Sleep -Milliseconds 300
-    if ((Rect).Right-(Rect).Left -ne 52) { throw '拖拽误触打开主窗口' }
-    Shot '14-orb-after-drag'
-    Write-Output 'PASS GUI screenshots, resize, hover, card action, detail scroll, drag-click separation and HTTP smoke'
+    if ([HubUiVerify]::IsWindowVisible($panelWindow)) { throw '拖拽桌宠误触打开了气泡面板' }
+    $petAfter = Rect
+    if ($petAfter.Left -eq $petBefore.Left -and $petAfter.Top -eq $petBefore.Top) { throw '拖拽桌宠后位置未变化' }
+    Shot '14-pet-after-drag'
+    Write-Output 'PASS GUI screenshots, resize, pet bubble toggle, card action, detail scroll, drag-click separation and HTTP smoke'
 } finally {
-    # 普通 WM_CLOSE 现在按产品契约收起为悬浮球；测试退出走托盘专用退出消息。
-    if ($script:window -ne [IntPtr]::Zero) { Send 0x800c }
+    # 普通 WM_CLOSE 仅收起气泡面板；测试退出向主窗口发送专用退出消息。
+    $quitTarget = [HubUiVerify]::FindWindow('AI_TASK_HUB_WIN32_WINDOW', 'AI Task Hub')
+    if ($quitTarget -ne [IntPtr]::Zero) {
+        [HubUiVerify]::SendMessage($quitTarget, 0x800c, [IntPtr]0, [IntPtr]0) | Out-Null
+    }
     [HubUiVerify]::SetCursorPos($cursor.X, $cursor.Y) | Out-Null
     $process.WaitForExit(5000) | Out-Null
 }

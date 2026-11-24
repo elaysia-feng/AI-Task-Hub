@@ -5,7 +5,7 @@
 ; 避免装进 Program Files 后程序无法在 exe 同目录写 data.sqlite。
 ;
 ; 编译参数（由 package-installer.ps1 传入）：
-;   /DVERSION=0.3.7        版本号
+;   /DVERSION=0.3.8        版本号
 ;   /DSTAGE=<payload 目录>  待安装文件的暂存目录
 
 Unicode true
@@ -49,8 +49,8 @@ VIAddVersionKey "ProductVersion" "${VERSION}"
 VIAddVersionKey "LegalCopyright" "${APP_PUBLISHER}"
 
 !define MUI_ABORTWARNING
-!define MUI_ICON "..\..\desktop\resources\icon.ico"
-!define MUI_UNICON "..\..\desktop\resources\icon.ico"
+!define MUI_ICON "..\resources\icon.ico"
+!define MUI_UNICON "..\resources\icon.ico"
 !define MUI_FINISHPAGE_RUN "$INSTDIR\${APP_EXE}"
 !define MUI_FINISHPAGE_RUN_TEXT "立即启动 ${APP_NAME}"
 
